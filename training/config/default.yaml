@@ -1,0 +1,63 @@
+# Orbit Wars RL Training Configuration
+
+model:
+  d_model: 128
+  planet_encoder_layers: 3
+  fleet_encoder_layers: 2
+  fusion_layers: 2
+  nhead: 4
+  mlp_ratio: 4
+  dropout: 0.1
+  use_opponent_head: true
+  use_autoregressive_refine: false
+  activation: "gelu"
+
+training:
+  framework: "pytorch"
+  tracker: "swanlab"
+  swanlab_project: "orbit-wars"
+  swanlab_experiment: "ppo-self-play"
+  learning_rate: 3.0e-4
+  lr_scheduler: "cosine"
+  gamma: 0.99
+  gae_lambda: 0.95
+  ppo_clip: 0.2
+  ppo_epochs: 4
+  entropy_coef: 0.01
+  value_coef: 0.5
+  opponent_pred_coef: 0.1
+  intermediate_reward_weight: 0.2
+  max_grad_norm: 0.5
+  batch_size: 2048
+  num_parallel_games: 128
+  save_interval: 50
+  max_iterations: 10000
+  warmup_steps: 100
+
+self_play:
+  pool_size: 20
+  sample_latest_ratio: 0.4
+  sample_random_ratio: 0.3
+  sample_best_ratio: 0.2
+  sample_heuristic_ratio: 0.1
+  two_player_prob: 0.3
+  add_to_pool_win_rate: 0.45
+  diversity_threshold: 0.3
+
+reward:
+  terminal_weight: 1.0
+  intermediate_weight: 0.2
+  capture_reward_weight: 0.3
+  loss_penalty_weight: 0.2
+  defense_reward_weight: 0.15
+  transit_cost_weight: 0.1
+  production_advantage_weight: 0.15
+  comet_roi_weight: 0.1
+
+environment:
+  episode_steps: 500
+  act_timeout: 1.0
+  ship_speed: 6.0
+  sun_radius: 10.0
+  board_size: 100.0
+  comet_speed: 4.0

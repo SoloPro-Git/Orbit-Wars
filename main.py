@@ -1,24 +1,31 @@
-import math
-from kaggle_environments.envs.orbit_wars.orbit_wars import Planet, Fleet
+"""Kaggle submission entry point for Orbit Wars."""
+from inference.predictor import OrbitWarsPredictor
+
+# Global predictor instance (loaded once, reused every step)
+_predictor = None
 
 
 def agent(obs):
-    moves = []
-    player = obs.get("player", 0) if isinstance(obs, dict) else obs.player
-    raw_planets = obs.get("planets", []) if isinstance(obs, dict) else obs.planets
-    planets = [Planet(*p) for p in raw_planets]
+    """Kaggle agent function.
 
-    my_planets = [p for p in planets if p.owner == player]
-    targets = [p for p in planets if p.owner != player]
+    Args:
+        obs: observation dict from kaggle_environments.
+    Returns:
+        list of actions: [[from_planet_id, angle, num_ships], ...]
+    """
+    global _predictor
 
-    if not targets:
-        return moves
+    if _predictor is None:
+        _predictor = OrbitWarsPredictor(
+            checkpoint_path="model.pt",
+            device="cpu",
+        )
 
-    for mine in my_planets:
-        nearest = min(targets, key=lambda t: math.hypot(mine.x - t.x, mine.y - t.y))
-        ships_needed = nearest.ships + 1
-        if mine.ships >= ships_needed:
-            angle = math.atan2(nearest.y - mine.y, nearest.x - mine.x)
-            moves.append([mine.id, angle, ships_needed])
+    player_id = obs.get("player", 0) if isinstance(obs, dict) else obs.player
 
-    return moves
+    try:
+        actions = _predictor.predict(obs, player_id)
+    except Exception:
+        actions = []
+
+    return actions
