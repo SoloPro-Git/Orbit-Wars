@@ -407,3 +407,31 @@ def agent(obs):
 | `sunRadius` | 10.0 | Radius of the sun |
 | `boardSize` | 100.0 | Board dimensions |
 | `cometSpeed` | 4.0 | Comet speed (units/turn) |
+
+## Typical Workflow
+
+```bash
+# Test locally
+python -c "
+from kaggle_environments import make
+env = make('orbit_wars', debug=True)
+env.run(['main.py', 'random'])
+print([(i, s.reward) for i, s in enumerate(env.steps[-1])])
+"
+
+# Submit
+kaggle competitions submit orbit-wars -f main.py -m "v1"
+
+# Check status
+kaggle competitions submissions orbit-wars
+
+# Review episodes
+kaggle competitions episodes <SUBMISSION_ID>
+
+# Download replay and logs
+kaggle competitions replay <EPISODE_ID>
+kaggle competitions logs <EPISODE_ID> 0
+
+# Check leaderboard
+kaggle competitions leaderboard orbit-wars -s
+```
