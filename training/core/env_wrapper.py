@@ -200,6 +200,27 @@ class OrbitWarsEnv:
 
         return observations
 
+    def _env_done(self) -> bool:
+        """检查kaggle环境是否已经结束。
+
+        Returns:
+            True 如果环境已结束，False 否则。
+        """
+        if self._env is None:
+            return False
+
+        # 检查最后一步的状态
+        if len(self._env.steps) == 0:
+            return False
+
+        last_step = self._env.steps[-1]
+        # 如果所有玩家都不活跃，则环境已结束
+        for pid in range(self.num_players):
+            status = last_step[pid].get("status", "ACTIVE")
+            if status == "ACTIVE":
+                return False
+        return True
+
     def step(
         self,
         actions: dict[int, list],
@@ -232,6 +253,11 @@ class OrbitWarsEnv:
             action = actions.get(pid, [])
             # action 本身就是 [[from_planet_id, angle, num_ships], ...]
             step_actions.append(action)
+
+        # 检查环境是否已经结束（避免在done后继续step）
+        if self._env_done():
+            # 环境已结束，返回空的观测和done=True
+            return {}, {}, {pid: True for pid in range(self.num_players)}, {}
 
         # 调用 kaggle env.step
         self._env.step(step_actions)

@@ -10,8 +10,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 
-from training.core.config import ModelConfig, TrainingConfig
-from training.core.model import OrbitWarsModel
+from core.config import ModelConfig, TrainingConfig
+from core.model import OrbitWarsModel
 
 
 class PPOBuffer:
@@ -134,7 +134,7 @@ class PPOTrainer:
         self.optimizer = torch.optim.Adam(
             model.parameters(), lr=config.learning_rate, eps=1e-5
         )
-        self.scheduler = torch.optim.lr_scheduler.CosineLR(
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             self.optimizer, T_max=config.max_iterations
         )
 
@@ -300,6 +300,46 @@ class PPOTrainer:
             "opp_loss": opp_loss.item(),
             "total_loss": total_loss.item(),
         }
+
+    def compute_buffer_stats(self, buffer: PPOBuffer) -> dict:
+        """计算buffer的统计信息，用于监控训练进度。
+
+        Args:
+            buffer: PPOBuffer经验数据
+
+        Returns:
+            统计信息dict，包含各种reward和性能指标
+        """
+        if len(buffer) == 0:
+            return {}
+
+        rewards = np.array(buffer.rewards)
+
+        # 基础统计
+        stats = {
+            "mean_reward": float(np.mean(rewards)),
+            "std_reward": float(np.std(rewards)),
+            "min_reward": float(np.min(rewards)),
+            "max_reward": float(np.max(rewards)),
+            "total_reward": float(np.sum(rewards)),
+            "num_steps": len(rewards),
+        }
+
+        # 分位数统计
+        stats["median_reward"] = float(np.median(rewards))
+        stats["percentile_25_reward"] = float(np.percentile(rewards, 25))
+        stats["percentile_75_reward"] = float(np.percentile(rewards, 75))
+
+        # 正奖励比例
+        stats["positive_reward_ratio"] = float(np.mean(rewards > 0))
+
+        # 大奖励比例（假设reward > 1.0为好表现）
+        stats["high_reward_ratio"] = float(np.mean(rewards > 1.0))
+
+        # 负奖励比例
+        stats["negative_reward_ratio"] = float(np.mean(rewards < 0))
+
+        return stats
 
     def _compute_log_probs(
         self,

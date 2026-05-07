@@ -27,6 +27,7 @@ class TrainingConfig:
     tracker: str = "swanlab"
     swanlab_project: str = "orbit-wars"
     swanlab_experiment: str = "ppo-self-play"
+    swanlab_mode: str = "cloud"  # cloud 或 local
     learning_rate: float = 3e-4
     lr_scheduler: str = "cosine"
     gamma: float = 0.99
@@ -43,6 +44,10 @@ class TrainingConfig:
     save_interval: int = 50
     max_iterations: int = 10000
     warmup_steps: int = 100
+    max_checkpoints: int = 5
+    keep_best_n: int = 2
+    resume_from_checkpoint: bool = True  # 默认加载最新checkpoint
+    output_dir: str = "checkpoints"         # checkpoint输出目录
 
 
 @dataclass
