@@ -1,12 +1,14 @@
 [project]
 name = "orbit-wars"
 version = "0.1.0"
-description = "Add your description here"
+description = "Orbit Wars 强化学习训练系统"
 requires-python = ">=3.12"
 dependencies = [
     "kaggle-environments>=1.28.0",
     "numpy>=2.4.4",
     "pyyaml>=6.0.3",
     "swanlab>=0.7.17",
-    "torch>=2.11.0",
+    # PyTorch with CUDA 12.1 support
+    # 安装时使用: uv pip install "torch>=2.5.0,<2.6" --index-url https://download.pytorch.org/whl/cu121
+    "torch>=2.5.0,<2.6",
 ]
