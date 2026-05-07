@@ -13,7 +13,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from training.core.config import ModelConfig
+from core.config import ModelConfig
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +365,7 @@ class OrbitWarsModel(nn.Module):
         self.d_model = config.d_model
 
         # Input projection (match feature_engineering dimensions)
-        from training.core.feature_engineering import D_PLANET, D_FLEET, D_GLOBAL
+        from core.feature_engineering import D_PLANET, D_FLEET, D_GLOBAL
         self.input_proj = InputProjection(
             d_model=config.d_model, d_planet=D_PLANET, d_fleet=D_FLEET, d_global=D_GLOBAL
         )
