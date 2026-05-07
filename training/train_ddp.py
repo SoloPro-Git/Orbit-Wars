@@ -472,11 +472,14 @@ def train(
         if iteration % 10 == 0 and rank == 0:
             elapsed = time.time() - t0
             iter_time = rollout_time + (time.time() - t0 - rollout_time)
+            samples_per_sec = len(buffer) / iter_time if iter_time > 0 else 0
+
             print(f"[Iter {iteration}/{config.training.max_iterations}] "
                   f"loss={metrics.get('total_loss', 0):.4f}, "
                   f"reward={metrics.get('mean_reward', 0):.4f}, "
                   f"buffer={len(buffer)}, "
-                  f"time={iter_time:.2f}s")
+                  f"time={iter_time:.2f}s, "
+                  f"throughput={samples_per_sec:.0f} samples/s")
 
             # 单卡模式：打印更详细的GPU信息
             if world_size == 1 and iteration % 50 == 0:
