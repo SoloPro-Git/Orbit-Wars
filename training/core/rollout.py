@@ -68,8 +68,7 @@ class RolloutWorker:
             pid_list = list(range(env.num_players))
 
             # 使用线程池并行提取特征
-            def extract_features(args):
-                obs, pid = args
+            def extract_features(obs, pid):
                 pf, ff, gf, _ = self.feature_engineer.compute(obs, pid)
                 return pf, ff, gf, obs.get("planets", []), pid
 
