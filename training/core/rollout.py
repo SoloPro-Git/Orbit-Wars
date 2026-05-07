@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 from typing import Optional
+from multiprocessing.pool import ThreadPool
 
 import numpy as np
 import torch
@@ -17,7 +18,10 @@ from core.ppo import PPOBuffer
 
 
 class RolloutWorker:
-    """跑自我博弈并收集训练数据。"""
+    """跑自我博弈并收集训练数据。
+
+    支持多进程特征工程以充分利用多核CPU。
+    """
 
     def __init__(
         self,
@@ -25,11 +29,37 @@ class RolloutWorker:
         feature_engineer: FeatureEngineer,
         reward_calculator: RewardCalculator,
         device: str = "cuda",
+        use_mp_features: bool = True,
+        num_feature_workers: int = None,
     ):
         self.model = model
-        self.feature_engineer = feature_engineer
-        self.reward_calculator = reward_calculator
         self.device = device
+
+        # 决定使用普通还是多进程特征工程
+        if use_mp_features:
+            # 使用多进程特征工程（充分利用128核CPU）
+            self.mp_feature_engineer = MultiProcessFeatureEngineer(
+                board_size=feature_engineer.board_size,
+                sun_radius=feature_engineer.sun_radius,
+                max_speed=feature_engineer.max_speed,
+                max_turns=feature_engineer.max_turns,
+                num_workers=num_feature_workers or 16,
+            )
+            self.feature_engineer = feature_engineer  # 保留用于单玩家回退
+            self.use_mp = True
+            print(f"[RolloutWorker] 使用多进程特征工程（{self.mp_feature_engineer.num_workers}线程）")
+        else:
+            self.mp_feature_engineer = None
+            self.feature_engineer = feature_engineer
+            self.use_mp = False
+
+        self.reward_calculator = reward_calculator
+
+        # 创建线程池用于并行特征提取
+        import multiprocessing
+        self.num_feature_workers = max(4, multiprocessing.cpu_count() // 8)
+        self.feature_pool = ThreadPool(processes=self.num_feature_workers)
+        print(f"[RolloutWorker] 使用 {self.num_feature_workers} 线程并行提取特征")
 
     def rollout_game(
         self,
@@ -53,14 +83,22 @@ class RolloutWorker:
                 break
 
             # ========== 批量推理优化 ==========
-            # 第一阶段：批量提取所有玩家特征（CPU）
+            # 第一阶段：批量提取所有玩家特征（CPU，并行处理）
+            obs_list = [env.get_raw_observation(pid) for pid in range(env.num_players)]
+            pid_list = list(range(env.num_players))
+
+            # 使用线程池并行提取特征
+            def extract_features(args):
+                obs, pid = args
+                pf, ff, gf, _ = self.feature_engineer.compute(obs, pid)
+                return pf, ff, gf, obs.get("planets", []), pid
+
+            results = self.feature_pool.starmap(extract_features, zip(obs_list, pid_list))
+            results = list(results)  # 等待所有线程完成
+
+            # 组装特征
             all_features = []
-            for pid in range(env.num_players):
-                obs_dict = env.get_raw_observation(pid)
-                planet_feat, fleet_feat, global_feat, metadata = (
-                    self.feature_engineer.compute(obs_dict, pid)
-                )
-                raw_planets = obs_dict.get("planets", [])
+            for planet_feat, fleet_feat, global_feat, raw_planets, pid in results:
                 all_features.append({
                     "planet_feat": planet_feat,
                     "fleet_feat": fleet_feat,

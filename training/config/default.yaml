@@ -60,7 +60,7 @@ reward:
   comet_roi_weight: 0.1
 
 environment:
-  episode_steps: 200  # 减少步数，加快训练速度
+  episode_steps: 500
   act_timeout: 1.0
   ship_speed: 6.0
   sun_radius: 10.0
