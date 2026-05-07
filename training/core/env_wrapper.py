@@ -248,19 +248,26 @@ class OrbitWarsEnv:
 
         # 将 actions 格式化为 env.step 需要的列表形式。
         # kaggle env.step 接收每个 agent 的 action (JSON 可序列化)。
+        # 检查环境是否已经结束（避免在done后继续step）
+        if self._env_done():
+            # 环境已结束，返回空的观测和done=True
+            return {}, {}, {pid: True for pid in range(self.num_players)}, {}
+
         step_actions: list[list] = []
         for pid in range(self.num_players):
             action = actions.get(pid, [])
             # action 本身就是 [[from_planet_id, angle, num_ships], ...]
             step_actions.append(action)
 
-        # 检查环境是否已经结束（避免在done后继续step）
-        if self._env_done():
-            # 环境已结束，返回空的观测和done=True
-            return {}, {}, {pid: True for pid in range(self.num_players)}, {}
-
         # 调用 kaggle env.step
-        self._env.step(step_actions)
+        try:
+            self._env.step(step_actions)
+        except Exception as e:
+            # 如果环境已结束，捕获异常并返回done状态
+            if "Environment done" in str(e):
+                self._done = True
+                return {}, {}, {pid: True for pid in range(self.num_players)}, {}
+            raise
         self._step_count += 1
 
         # 读取最新状态
