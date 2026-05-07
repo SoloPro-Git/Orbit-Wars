@@ -20,7 +20,7 @@ from core.ppo import PPOBuffer
 class RolloutWorker:
     """跑自我博弈并收集训练数据。
 
-    支持多进程特征工程以充分利用多核CPU。
+    使用线程池并行提取特征，充分利用多核CPU。
     """
 
     def __init__(
@@ -29,31 +29,11 @@ class RolloutWorker:
         feature_engineer: FeatureEngineer,
         reward_calculator: RewardCalculator,
         device: str = "cuda",
-        use_mp_features: bool = True,
-        num_feature_workers: int = None,
     ):
         self.model = model
-        self.device = device
-
-        # 决定使用普通还是多进程特征工程
-        if use_mp_features:
-            # 使用多进程特征工程（充分利用128核CPU）
-            self.mp_feature_engineer = MultiProcessFeatureEngineer(
-                board_size=feature_engineer.board_size,
-                sun_radius=feature_engineer.sun_radius,
-                max_speed=feature_engineer.max_speed,
-                max_turns=feature_engineer.max_turns,
-                num_workers=num_feature_workers or 16,
-            )
-            self.feature_engineer = feature_engineer  # 保留用于单玩家回退
-            self.use_mp = True
-            print(f"[RolloutWorker] 使用多进程特征工程（{self.mp_feature_engineer.num_workers}线程）")
-        else:
-            self.mp_feature_engineer = None
-            self.feature_engineer = feature_engineer
-            self.use_mp = False
-
+        self.feature_engineer = feature_engineer
         self.reward_calculator = reward_calculator
+        self.device = device
 
         # 创建线程池用于并行特征提取
         import multiprocessing
