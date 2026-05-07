@@ -207,25 +207,21 @@ def train(
     device = f"cuda:{local_rank}"
     print(f"[Rank {rank}] device={device}")
 
-    # SwanLab (只在 rank 0 初始化，多进程模式下禁用)
+    # SwanLab (只在 rank 0 初始化)
     swanlab = None
-    # 检查是否在多进程模式下（通过环境变量判断）
-    is_multiprocess = os.environ.get('SWANLAB_LOGGING') == 'false'
-
-    if rank == 0 and not is_multiprocess:
+    if rank == 0:
         swanlab = _try_swanlab()
         if swanlab:
-            api_key = _load_swanlab_key()
-            if not api_key:
-                print("[Rank 0] 警告: 未找到SwanLab API key，将尝试使用环境变量")
+            # API key 已通过环境变量 SWANLAB_API_KEY 传递
+            if 'SWANLAB_API_KEY' in os.environ:
+                print(f"[Rank 0] 已加载SwanLab API key (通过环境变量)")
             else:
-                print(f"[Rank 0] 已加载SwanLab API key")
+                print("[Rank 0] 警告: 未设置SWANLAB_API_KEY环境变量")
 
             init_kwargs = {
                 "project": config.training.swanlab_project,
                 "experiment_name": f"{config.training.swanlab_experiment}_8gpu",
-                "mode": "cloud",  # 使用云端模式
-                "api_key": api_key,  # 直接传入 API key
+                "mode": "cloud",  # 使用云端模式（API key通过环境变量传递）
                 "config": {
                     "model": vars(config.model),
                     "training": vars(config.training),

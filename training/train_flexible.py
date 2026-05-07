@@ -64,10 +64,16 @@ def start_worker_process(gpu_id: int, worker_id: int, config_path: str, output_f
 
     # 设置环境变量
     env = os.environ.copy()
-    env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
-    # 禁用 SwanLab 交互模式
-    env['SWANLAB_LOGGING'] = 'false'  # 禁用交互式日志
-    env['PYTHONUNBUFFERED'] = '1'     # 禁用输出缓冲
+    # ⚠️ 不要覆盖 CUDA_VISIBLE_DEVICES！
+    # 让父进程的环境变量传递给子进程
+    # env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)  # ❌ 删除这行
+
+    # 设置 SwanLab API key（避免交互式提示）
+    swanlab_key_file = Path(__file__).parent / "config" / "swanlab_key.txt"
+    if swanlab_key_file.exists():
+        env['SWANLAB_API_KEY'] = swanlab_key_file.read_text().strip()
+
+    env['PYTHONUNBUFFERED'] = '1'  # 禁用输出缓冲
 
     # 打开输出文件
     output = open(output_file, 'w', buffering=1)
