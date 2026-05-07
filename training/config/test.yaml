@@ -1,4 +1,4 @@
-# Orbit Wars RL Training Configuration
+# 测试配置 - 快速验证训练流程
 
 model:
   d_model: 128
@@ -16,8 +16,8 @@ training:
   framework: "pytorch"
   tracker: "swanlab"
   swanlab_project: "orbit-wars"
-  swanlab_experiment: "ppo-self-play"
-  swanlab_mode: "cloud"  # 使用云端模式（需要API key）
+  swanlab_experiment: "ppo-test"
+  swanlab_mode: "local"  # 使用本地模式测试
   learning_rate: 3.0e-4
   lr_scheduler: "cosine"
   gamma: 0.99
@@ -29,22 +29,21 @@ training:
   opponent_pred_coef: 0.1
   intermediate_reward_weight: 0.2
   max_grad_norm: 0.5
-  batch_size: 2048
-  num_parallel_games: 128
-  save_interval: 50
-  max_iterations: 10000
-  warmup_steps: 100
-  # Checkpoint管理
-  max_checkpoints: 5  # 最多保留5个checkpoint
-  keep_best_n: 2      # 保留最好的2个模型（按胜率）
+  batch_size: 512              # 减小以便快速测试
+  num_parallel_games: 16       # 减少以便快速测试
+  save_interval: 10            # 更频繁保存
+  max_iterations: 20           # 只运行20次迭代
+  warmup_steps: 5
+  max_checkpoints: 3
+  keep_best_n: 1
 
 self_play:
-  pool_size: 20
+  pool_size: 5                 # 小型对手池
   sample_latest_ratio: 0.4
   sample_random_ratio: 0.3
   sample_best_ratio: 0.2
   sample_heuristic_ratio: 0.1
-  two_player_prob: 0.3
+  two_player_prob: 0.5
   add_to_pool_win_rate: 0.45
   diversity_threshold: 0.3
 
@@ -59,7 +58,7 @@ reward:
   comet_roi_weight: 0.1
 
 environment:
-  episode_steps: 500
+  episode_steps: 200           # 缩短游戏长度
   act_timeout: 1.0
   ship_speed: 6.0
   sun_radius: 10.0
