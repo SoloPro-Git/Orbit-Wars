@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import copy
 from typing import Optional
-from multiprocessing import Pool, cpu_count
+from multiprocessing import Pool, cpu_count, get_context
 from functools import partial
 
 import numpy as np
@@ -41,8 +41,8 @@ def _rollout_single_game_worker(args):
     game_id, num_players, temperature, max_steps, player_id, \
     model_state_dict, feature_engineer_config, reward_config = args
 
-    # 初始化子进程的模型和环境
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # 子进程使用CPU（避免CUDA初始化问题）
+    device = "cpu"
 
     # 重建模型
     from core.config import ModelConfig
@@ -257,7 +257,11 @@ def _indices_to_kaggle_actions(
 
 
 class MultiProcessRolloutWorker:
-    """多进程并行 Rollout Worker - 充分利用多核CPU。"""
+    """多进程并行 Rollout Worker - 充分利用多核CPU。
+
+    子进程使用CPU运行模型，避免CUDA初始化问题。
+    主进程GPU用于PPO训练。
+    """
 
     def __init__(
         self,
@@ -277,7 +281,7 @@ class MultiProcessRolloutWorker:
             num_workers = max(1, cpu_count() // 2)
 
         self.num_workers = num_workers
-        print(f"[MultiProcessRolloutWorker] 使用 {num_workers} 个worker进程")
+        print(f"[MultiProcessRolloutWorker] 使用 {num_workers} 个worker进程（CPU模式）")
 
     def rollout_self_play(
         self,
@@ -296,8 +300,8 @@ class MultiProcessRolloutWorker:
         # 准备参数
         player_id = 0  # 训练player 0
 
-        # 获取模型状态字典（用于传递给子进程）
-        model_state_dict = self.model.state_dict()
+        # 获取模型状态字典（移到CPU以传递给子进程）
+        model_state_dict = {k: v.cpu() for k, v in self.model.state_dict().items()}
 
         # 特征工程配置
         feature_engineer_config = {
@@ -318,8 +322,9 @@ class MultiProcessRolloutWorker:
             for game_id in range(num_games)
         ]
 
-        # 使用进程池并行运行
-        with Pool(processes=self.num_workers) as pool:
+        # 使用spawn方法启动进程池（避免CUDA fork问题）
+        ctx = get_context('spawn')
+        with ctx.Pool(processes=self.num_workers) as pool:
             results = pool.map(_rollout_single_game_worker, all_args)
 
         # 合并所有buffer
