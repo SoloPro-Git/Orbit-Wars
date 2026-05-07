@@ -207,9 +207,12 @@ def train(
     device = f"cuda:{local_rank}"
     print(f"[Rank {rank}] device={device}")
 
-    # SwanLab (只在 rank 0 初始化)
+    # SwanLab (只在 rank 0 初始化，多进程模式下禁用)
     swanlab = None
-    if rank == 0:
+    # 检查是否在多进程模式下（通过环境变量判断）
+    is_multiprocess = os.environ.get('SWANLAB_LOGGING') == 'false'
+
+    if rank == 0 and not is_multiprocess:
         swanlab = _try_swanlab()
         if swanlab:
             api_key = _load_swanlab_key()
