@@ -71,6 +71,10 @@ class RolloutWorker:
 
             # 第二阶段：批量传输到GPU
             max_planets = max(len(f["planet_feat"]) for f in all_features)
+            max_fleets = max(
+                len(f["fleet_feat"]) if f["fleet_feat"].size > 0 else 0
+                for f in all_features
+            )
             num_players = env.num_players
 
             batch_planet_feats = []
@@ -90,7 +94,7 @@ class RolloutWorker:
                 planet_padded[:len(feat["planet_feat"])] = feat["planet_feat"]
 
                 fleet_dim = feat["fleet_feat"].shape[1] if feat["fleet_feat"].size > 0 else 11
-                fleet_padded = np.zeros((max_planets, fleet_dim), dtype=np.float32)
+                fleet_padded = np.zeros((max_fleets, fleet_dim), dtype=np.float32)
                 if feat["fleet_feat"].size > 0:
                     fleet_padded[:len(feat["fleet_feat"])] = feat["fleet_feat"]
 
