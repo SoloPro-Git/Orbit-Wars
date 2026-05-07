@@ -7,13 +7,13 @@ from typing import Optional
 import numpy as np
 import torch
 
-from training.core.config import ModelConfig, EnvironmentConfig
-from training.core.env_wrapper import OrbitWarsEnv
-from training.core.feature_engineering import FeatureEngineer
-from training.core.model import OrbitWarsModel
-from training.core.action import decode_actions, sample_actions
-from training.core.reward import RewardCalculator
-from training.core.ppo import PPOBuffer
+from core.config import ModelConfig, EnvironmentConfig
+from core.env_wrapper import OrbitWarsEnv
+from core.feature_engineering import FeatureEngineer
+from core.model import OrbitWarsModel
+from core.action import decode_actions, sample_actions
+from core.reward import RewardCalculator
+from core.ppo import PPOBuffer
 
 
 class RolloutWorker:

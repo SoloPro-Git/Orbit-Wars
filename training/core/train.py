@@ -8,13 +8,13 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from training.core.config import AppConfig
-from training.core.model import OrbitWarsModel
-from training.core.feature_engineering import FeatureEngineer
-from training.core.reward import RewardCalculator, RewardConfig
-from training.core.ppo import PPOTrainer
-from training.core.rollout import RolloutWorker, parallel_rollout
-from training.core.opponent_pool import OpponentPool, OpponentPoolConfig
+from core.config import AppConfig
+from core.model import OrbitWarsModel
+from core.feature_engineering import FeatureEngineer
+from core.reward import RewardCalculator, RewardConfig
+from core.ppo import PPOTrainer
+from core.rollout import RolloutWorker, parallel_rollout
+from core.opponent_pool import OpponentPool, OpponentPoolConfig
 
 
 def _try_swanlab():
@@ -34,8 +34,8 @@ def evaluate(
     num_players: int = 4,
 ) -> float:
     """评估当前策略 vs 自身（self-play），返回 player 0 胜率。"""
-    from training.core.env_wrapper import OrbitWarsEnv
-    from training.core.action import decode_actions
+    from core.env_wrapper import OrbitWarsEnv
+    from core.action import decode_actions
 
     model.eval()
     wins = 0
