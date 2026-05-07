@@ -18,7 +18,6 @@ from core.feature_engineering import FeatureEngineer
 from core.reward import RewardCalculator, RewardConfig
 from core.ppo import PPOTrainer
 from core.rollout import RolloutWorker, parallel_rollout
-from core.rollout_mp import MultiProcessRolloutWorker, parallel_rollout_mp
 from core.opponent_pool import OpponentPool, OpponentPoolConfig
 from core.monitoring import TrainingMonitor
 from core.checkpoint_manager import CheckpointManager
@@ -280,20 +279,9 @@ def train(
     # 训练器（使用DDP模型）
     trainer = PPOTrainer(model, config.training, device=device)
 
-    # Rollout worker - 使用多进程版本充分利用CPU核心
-    if world_size == 1:
-        # 单GPU模式：使用多进程worker（充分利用128个CPU核心）
-        worker = MultiProcessRolloutWorker(
-            model, feature_engineer, reward_calculator, device=device,
-            num_workers=64  # 使用64个worker进程
-        )
-        use_mp_rollout = True
-        if rank == 0:
-            print(f"[Rank 0] 使用多进程Rollout Worker（64个进程）")
-    else:
-        # 多GPU模式：使用普通worker（避免进程过多）
-        worker = RolloutWorker(model, feature_engineer, reward_calculator, device=device)
-        use_mp_rollout = False
+    # Rollout worker - 使用单进程版本（避免CUDA多进程问题）
+    worker = RolloutWorker(model, feature_engineer, reward_calculator, device=device)
+    use_mp_rollout = False
 
     # 对手池（只在 rank 0 管理）
     pool = None
@@ -397,22 +385,12 @@ def train(
         # 2. 并行 rollout（每个进程独立采集）
         # 将总游戏数分配到各个进程
         games_per_rank = max(1, config.training.num_parallel_games // world_size)
-
-        # 使用多进程rollout（单GPU模式）
-        if use_mp_rollout:
-            buffer = parallel_rollout_mp(
-                worker,
-                num_games=games_per_rank,
-                num_players=num_players,
-                temperature=max(1.0 - iteration * 0.001, 0.3),
-            )
-        else:
-            buffer = parallel_rollout(
-                worker,
-                num_games=games_per_rank,
-                num_players=num_players,
-                temperature=max(1.0 - iteration * 0.001, 0.3),
-            )
+        buffer = parallel_rollout(
+            worker,
+            num_games=games_per_rank,
+            num_players=num_players,
+            temperature=max(1.0 - iteration * 0.001, 0.3),
+        )
 
         rollout_time = time.time() - t0
 
