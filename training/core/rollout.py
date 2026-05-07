@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import copy
+import time
 from typing import Optional
-from multiprocessing.pool import ThreadPool
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from tqdm import tqdm
+import multiprocessing
 
 import numpy as np
 import torch
@@ -15,6 +18,26 @@ from core.model import OrbitWarsModel
 from core.action import decode_actions, sample_actions
 from core.reward import RewardCalculator
 from core.ppo import PPOBuffer
+
+
+def _extract_features_worker(args):
+    """工作进程中执行的特征提取函数（必须是模块级函数）。
+
+    注意：这个函数在独立的子进程中运行，不能访问 CUDA。
+    """
+    obs, pid, board_size, sun_radius, max_speed, max_turns = args
+
+    # 在工作进程中创建 FeatureEngineer（避免 CUDA 初始化）
+    from core.feature_engineering import FeatureEngineer
+    feature_engineer = FeatureEngineer(
+        board_size=board_size,
+        sun_radius=sun_radius,
+        max_speed=max_speed,
+        max_turns=max_turns,
+    )
+
+    pf, ff, gf, metadata = feature_engineer.compute(obs, pid)
+    return pf, ff, gf, obs.get("planets", []), pid, metadata
 
 
 class RolloutWorker:
@@ -29,17 +52,31 @@ class RolloutWorker:
         feature_engineer: FeatureEngineer,
         reward_calculator: RewardCalculator,
         device: str = "cuda",
+        num_feature_workers: int = -1,
+        enable_rollout_timing: bool = False,
     ):
         self.model = model
         self.feature_engineer = feature_engineer
         self.reward_calculator = reward_calculator
         self.device = device
+        self.enable_rollout_timing = enable_rollout_timing
 
-        # 创建线程池用于并行特征提取
-        import multiprocessing
-        self.num_feature_workers = max(4, multiprocessing.cpu_count() // 8)
-        self.feature_pool = ThreadPool(processes=self.num_feature_workers)
-        print(f"[RolloutWorker] 使用 {self.num_feature_workers} 线程并行提取特征")
+        # 创建进程池用于并行特征提取（CPU密集型任务需要多进程绕过GIL）
+        if num_feature_workers == -1:
+            self.num_feature_workers = multiprocessing.cpu_count() // 4
+        else:
+            self.num_feature_workers = num_feature_workers
+        self.feature_pool = ProcessPoolExecutor(max_workers=self.num_feature_workers)
+
+        # 保存特征工程配置参数，用于传递给工作进程
+        self.feature_engine_config = {
+            "board_size": feature_engineer.board_size,
+            "sun_radius": feature_engineer.sun_radius,
+            "max_speed": feature_engineer.max_speed,
+            "max_turns": feature_engineer.max_turns,
+        }
+
+        print(f"[RolloutWorker] 使用 {self.num_feature_workers} 进程并行提取特征")
 
     def rollout_game(
         self,
@@ -55,38 +92,62 @@ class RolloutWorker:
         buffer = PPOBuffer()
         self.model.eval()
 
+        # 计时统计
+        total_feature_time = 0.0
+        total_transfer_time = 0.0
+        total_inference_time = 0.0
+        total_decode_time = 0.0
+        total_step_time = 0.0
+        total_steps = 0
+
         observations = env.reset()
         raw_obs = {pid: env.get_raw_observation(pid) for pid in range(env.num_players)}
+
+        # 预分配缓冲区用于批量特征提取（避免频繁的进程间通信）
+        BATCH_STEPS = 32  # 每次批量处理 32 步的特征提取
 
         for step in range(max_steps):
             if env.done:
                 break
 
             # ========== 批量推理优化 ==========
-            # 第一阶段：批量提取所有玩家特征（CPU，并行处理）
+            # 第一阶段：批量提取所有玩家特征（CPU，多进程并行处理）
+            t_feature_start = time.time()
             obs_list = [env.get_raw_observation(pid) for pid in range(env.num_players)]
             pid_list = list(range(env.num_players))
 
-            # 使用线程池并行提取特征
-            def extract_features(obs, pid):
-                pf, ff, gf, _ = self.feature_engineer.compute(obs, pid)
-                return pf, ff, gf, obs.get("planets", []), pid
+            # 使用进程池并行提取特征（绕过GIL限制）
+            # 准备参数：(obs, pid, board_size, sun_radius, max_speed, max_turns)
+            worker_args = [
+                (obs, pid,
+                 self.feature_engine_config["board_size"],
+                 self.feature_engine_config["sun_radius"],
+                 self.feature_engine_config["max_speed"],
+                 self.feature_engine_config["max_turns"])
+                for obs, pid in zip(obs_list, pid_list)
+            ]
 
-            results = self.feature_pool.starmap(extract_features, zip(obs_list, pid_list))
-            results = list(results)  # 等待所有线程完成
+            # 批量提交任务并等待完成（比逐个 submit 更高效）
+            results = list(self.feature_pool.map(_extract_features_worker, worker_args))
+
+            feature_time = time.time() - t_feature_start
+            total_feature_time += feature_time
 
             # 组装特征
             all_features = []
-            for planet_feat, fleet_feat, global_feat, raw_planets, pid in results:
+            for planet_feat, fleet_feat, global_feat, raw_planets, pid, metadata in results:
                 all_features.append({
                     "planet_feat": planet_feat,
                     "fleet_feat": fleet_feat,
                     "global_feat": global_feat,
                     "raw_planets": raw_planets,
                     "player_id": pid,
+                    "metadata": metadata,  # 添加 metadata
+                    "owned_indices": metadata.get("owned_planet_indices", []),  # 拥有星球索引
                 })
 
             # 第二阶段：批量传输到GPU
+            t_transfer_start = time.time()
             max_planets = max(len(f["planet_feat"]) for f in all_features)
             max_fleets = max(
                 len(f["fleet_feat"]) if f["fleet_feat"].size > 0 else 0
@@ -144,7 +205,12 @@ class RolloutWorker:
             batch_planet_ships_t = torch.from_numpy(np.array(batch_planet_ships)).to(self.device)
             batch_num_players = torch.tensor([num_players] * num_players, dtype=torch.long).to(self.device)
 
+            # 传输完成，计算耗时
+            transfer_time = time.time() - t_transfer_start
+            total_transfer_time += transfer_time
+
             # 第三阶段：批量推理（GPU）- 一次推理所有玩家
+            t_inference_start = time.time()
             with torch.no_grad():
                 batch_target_logits, batch_num_ships_out, batch_values, _, _ = self.model(
                     planet_features=batch_planet_feats_t,
@@ -156,7 +222,12 @@ class RolloutWorker:
                     planet_ships=batch_planet_ships_t,
                 )
 
+            # 推理完成，计算耗时
+            inference_time = time.time() - t_inference_start
+            total_inference_time += inference_time
+
             # 第四阶段：批量解码动作
+            t_decode_start = time.time()
             all_actions: dict[int, list] = {}
             step_data: dict[int, dict] = {}
 
@@ -166,8 +237,23 @@ class RolloutWorker:
                 n = len(raw_planets)
 
                 # 获取该玩家的结果
-                target_logits = batch_target_logits[i, :n].cpu().numpy()
-                num_ships = batch_num_ships_out[i, :n].cpu().numpy()
+                # 重要：模型输出中，只有前 N_owned 行是有效的（后面是 padding）
+                # 需要使用 owned_mask 找到实际的拥有星球数量
+                mask_item = batch_owned_masks[i]
+                if isinstance(mask_item, np.ndarray):
+                    owned_mask_np = mask_item
+                else:
+                    owned_mask_np = mask_item.cpu().numpy()
+
+                n_owned = int(owned_mask_np.sum())  # 实际拥有星球数
+
+                if n_owned > 0:
+                    target_logits = batch_target_logits[i, :n_owned].cpu().numpy()
+                    num_ships = batch_num_ships_out[i, :n_owned].cpu().numpy()
+                else:
+                    # 没有拥有星球，跳过
+                    continue
+
                 value_np = batch_values[i].cpu().numpy()
 
                 # 采样或argmax
@@ -189,6 +275,11 @@ class RolloutWorker:
                 ]
                 owned_planets_dicts = [p for p in all_planets_dicts if p["owner"] == pid]
 
+                # 检查一致性
+                if len(owned_planets_dicts) != n_owned:
+                    # 如果不一致，使用前 n_owned 个拥有的星球
+                    owned_planets_dicts = owned_planets_dicts[:n_owned]
+
                 actions = self._indices_to_kaggle_actions(
                     target_indices, sampled_ships, owned_planets_dicts, all_planets_dicts
                 )
@@ -196,31 +287,48 @@ class RolloutWorker:
 
                 # 记录训练数据（仅训练策略）
                 if pid == player_id:
-                    step_data[pid] = {
-                        "planet_feat": feat["planet_feat"],
-                        "fleet_feat": feat["fleet_feat"],
-                        "global_feat": feat["global_feat"],
-                        "owned_mask": batch_owned_masks[i][:n],
-                        "enemy_mask": batch_enemy_masks[i][:n],
-                        "num_players": num_players,
-                        "planet_ships": batch_planet_ships[i][:n],
-                        "target_indices": target_indices,
-                        "num_ships_actual": sampled_ships,
-                        "log_prob": log_prob,
-                        "value": float(value_np.mean()),
-                    }
+                    # 关键：保留所有星球的特征，模型需要看到所有信息来判断敌人行为
+                    n = len(raw_planets)
+                    n_owned = len(target_indices)
+
+                    if n_owned > 0:
+                        step_data[pid] = {
+                            "planet_feat": feat["planet_feat"],  # 所有星球 [N_all, D] - 模型需要看到完整信息
+                            "fleet_feat": feat["fleet_feat"],
+                            "global_feat": feat["global_feat"],
+                            "owned_mask": batch_owned_masks[i][:n],  # 所有星球的 mask [N_all]
+                            "enemy_mask": batch_enemy_masks[i][:n],
+                            "num_players": num_players,
+                            "planet_ships": batch_planet_ships[i][:n],
+                            "target_indices": target_indices,  # 只有拥有星球的行动 [N_owned]
+                            "num_ships_actual": sampled_ships,
+                            "log_prob": log_prob,
+                            "value": float(value_np.mean()),
+                        }
+                    else:
+                        # 没有拥有星球，跳过
+                        step_data[pid] = None
 
             # 保存 obs_before 用于 reward 计算
             obs_before = {pid: env.get_raw_observation(pid) for pid in range(env.num_players)}
 
+            # 计算解码耗时
+            decode_time = time.time() - t_decode_start
+            total_decode_time += decode_time
+
             # 执行 step
+            t_step_start = time.time()
             observations, rewards, dones, infos = env.step(all_actions)
             done = env.done
+            step_time = time.time() - t_step_start
+            total_step_time += step_time
+
+            total_steps += 1
 
             # 计算 reward
             obs_after = {pid: env.get_raw_observation(pid) for pid in range(env.num_players)}
 
-            if player_id in step_data:
+            if player_id in step_data and step_data[player_id] is not None:
                 sd = step_data[player_id]
                 reward = self.reward_calculator.compute(
                     obs_before[player_id],
@@ -247,6 +355,19 @@ class RolloutWorker:
                 )
 
         self.model.train()
+
+        # 打印计时统计（仅在启用时）
+        if self.enable_rollout_timing and total_steps > 0:
+            total_time = total_feature_time + total_transfer_time + total_inference_time + total_decode_time + total_step_time
+            print(f"[Rollout] 计时统计 (共 {total_steps} 步):", flush=True)
+            print(f"  特征提取: {total_feature_time:.3f}s ({total_feature_time/total_time*100:.1f}%)", flush=True)
+            print(f"  数据传输: {total_transfer_time:.3f}s ({total_transfer_time/total_time*100:.1f}%)", flush=True)
+            print(f"  GPU推理:   {total_inference_time:.3f}s ({total_inference_time/total_time*100:.1f}%)", flush=True)
+            print(f"  动作解码: {total_decode_time:.3f}s ({total_decode_time/total_time*100:.1f}%)", flush=True)
+            print(f"  环境步:   {total_step_time:.3f}s ({total_step_time/total_time*100:.1f}%)", flush=True)
+            print(f"  总计:     {total_time:.3f}s", flush=True)
+            print(f"  每步平均: {total_time/total_steps:.4f}s", flush=True)
+
         return buffer
 
     def rollout_self_play(
@@ -255,15 +376,29 @@ class RolloutWorker:
         num_players: int = 4,
         temperature: float = 1.0,
         env_config: dict | None = None,
+        show_progress: bool = True,
     ) -> PPOBuffer:
         """跑多局自我博弈。"""
         combined_buffer = PPOBuffer()
 
-        for game_idx in range(num_games):
+        # 创建进度条
+        game_iter = range(num_games)
+        if show_progress:
+            game_iter = tqdm(game_iter, desc="[Rollout] ", unit="game")
+
+        for game_idx in game_iter:
             env = OrbitWarsEnv(num_players=num_players, config=env_config)
             game_buffer = self.rollout_game(
                 env, player_id=0, temperature=temperature
             )
+
+            # 更新进度条信息
+            if show_progress and isinstance(game_iter, tqdm):
+                game_iter.set_postfix({
+                    'steps': len(game_buffer),
+                    'players': num_players,
+                    'total': len(combined_buffer)
+                })
 
             # 合并 buffer
             for attr in [
@@ -276,6 +411,9 @@ class RolloutWorker:
                 src = getattr(game_buffer, attr)
                 dst = getattr(combined_buffer, attr)
                 dst.extend(src)
+
+        if show_progress and isinstance(game_iter, tqdm):
+            game_iter.close()
 
         return combined_buffer
 
@@ -331,6 +469,11 @@ class RolloutWorker:
         log_prob = (target_log_prob + ships_log_prob) * valid
         return log_prob.sum() / valid.sum().clamp(min=1)
 
+    def __del__(self):
+        """清理进程池资源。"""
+        if hasattr(self, 'feature_pool'):
+            self.feature_pool.shutdown(wait=True)
+
 
 def parallel_rollout(
     worker: RolloutWorker,
@@ -338,6 +481,7 @@ def parallel_rollout(
     num_players: int = 4,
     temperature: float = 1.0,
     env_config: dict | None = None,
+    show_progress: bool = True,
 ) -> PPOBuffer:
     """并行 rollout（单进程版本，后续可扩展为多进程）。"""
     return worker.rollout_self_play(
@@ -345,4 +489,5 @@ def parallel_rollout(
         num_players=num_players,
         temperature=temperature,
         env_config=env_config,
+        show_progress=show_progress,
     )

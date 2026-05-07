@@ -5,6 +5,7 @@ import os
 import random
 import time
 from pathlib import Path
+from tqdm import tqdm
 
 import numpy as np
 import torch
@@ -181,11 +182,28 @@ def train(
 
     # 加载配置
     config_path = Path(config_path)
+
+    # 如果相对路径不存在，尝试相对于脚本目录
+    if not config_path.is_absolute():
+        script_dir = Path(__file__).parent
+        config_path_abs = script_dir / config_path
+        if config_path_abs.exists():
+            config_path = config_path_abs
+
+    if rank == 0:
+        print(f"[DEBUG] 原始路径: {config_path}")
+        print(f"[DEBUG] 绝对路径: {config_path.absolute()}")
+        print(f"[DEBUG] 文件是否存在: {config_path.exists()}")
+
     if config_path.exists():
         config = AppConfig.from_yaml(config_path)
+        if rank == 0:
+            print(f"[Rank 0] 已加载配置文件: {config_path}")
+            print(f"[Rank 0] 配置: batch_size={config.training.batch_size}, num_games={config.training.num_parallel_games}, workers={config.training.num_feature_workers}")
     else:
         config = AppConfig()
-
+        if rank == 0:
+            print(f"[Rank 0] 配置文件不存在: {config_path.absolute()}，使用默认配置")
     device = f"cuda:{local_rank}"
     print(f"[Rank {rank}] device={device}")
 
@@ -203,6 +221,8 @@ def train(
             init_kwargs = {
                 "project": config.training.swanlab_project,
                 "experiment_name": f"{config.training.swanlab_experiment}_8gpu",
+                "mode": "cloud",  # 使用云端模式
+                "api_key": api_key,  # 直接传入 API key
                 "config": {
                     "model": vars(config.model),
                     "training": vars(config.training),
@@ -210,18 +230,13 @@ def train(
                 },
             }
 
-            # 确定mode：优先使用配置文件，其次根据api_key
-            mode = getattr(config.training, 'swanlab_mode', None)
-            if mode:
-                init_kwargs["mode"] = mode
-            elif api_key:
-                init_kwargs["api_key"] = api_key
-                init_kwargs["mode"] = "cloud"
-            else:
-                init_kwargs["mode"] = "local"
-
-            swanlab.init(**init_kwargs)
-            print(f"[Rank 0] SwanLab initialized: {config.training.swanlab_project}")
+            try:
+                swanlab.init(**init_kwargs)
+                print(f"[Rank 0] SwanLab initialized: {config.training.swanlab_project}")
+            except Exception as e:
+                print(f"[Rank 0] SwanLab 初始化失败: {e}")
+                print(f"[Rank 0] 将使用打印日志代替")
+                swanlab = None
         else:
             print("[Rank 0] SwanLab not available, using print logging")
 
@@ -280,7 +295,15 @@ def train(
     trainer = PPOTrainer(model, config.training, device=device)
 
     # Rollout worker - 使用单进程版本（避免CUDA多进程问题）
-    worker = RolloutWorker(model, feature_engineer, reward_calculator, device=device)
+    print(f"[DEBUG] config.training.num_feature_workers = {config.training.num_feature_workers}")
+    worker = RolloutWorker(
+        model,
+        feature_engineer,
+        reward_calculator,
+        device=device,
+        num_feature_workers=config.training.num_feature_workers,
+        enable_rollout_timing=config.training.enable_rollout_timing,
+    )
     use_mp_rollout = False
 
     # 对手池（只在 rank 0 管理）
@@ -375,8 +398,11 @@ def train(
             print(f"[Rank 0]   - 保存间隔: 每 {config.training.save_interval} 次迭代")
             print(f"[Rank 0] ========================================")
 
-    # 训练循环
-    for iteration in range(start_iteration, config.training.max_iterations):
+    # 训练循环（使用进度条）
+    iterations = range(start_iteration, config.training.max_iterations)
+    pbar = tqdm(iterations, desc="[Training]", disable=(rank != 0))
+
+    for iteration in pbar:
         t0 = time.time()
 
         # 1. 决定 2 人 / 4 人局
@@ -390,6 +416,7 @@ def train(
             num_games=games_per_rank,
             num_players=num_players,
             temperature=max(1.0 - iteration * 0.001, 0.3),
+            show_progress=(rank == 0),  # 只在 rank 0 显示进度条
         )
 
         rollout_time = time.time() - t0
@@ -403,7 +430,7 @@ def train(
             continue
 
         # 4. PPO 更新（每个进程独立更新自己的模型副本）
-        metrics = trainer.update(buffer)
+        metrics = trainer.update(buffer, show_progress=(rank == 0))
 
         # 计算reward统计
         reward_stats = trainer.compute_buffer_stats(buffer)
@@ -471,8 +498,22 @@ def train(
 
         log_metrics(metrics, iteration)
 
-        # 定期打印训练信息
-        if iteration % 10 == 0 and rank == 0:
+        # 更新进度条信息
+        if rank == 0:
+            elapsed = time.time() - t0
+            iter_time = rollout_time + (time.time() - t0 - rollout_time)
+            samples_per_sec = len(buffer) / iter_time if iter_time > 0 else 0
+
+            pbar.set_postfix({
+                'loss': f"{metrics.get('total_loss', 0):.4f}",
+                'reward': f"{metrics.get('mean_reward', 0):.4f}",
+                'buffer': len(buffer),
+                'iter_time': f"{iter_time:.2f}s",
+                'samples/s': f"{samples_per_sec:.0f}"
+            })
+
+        # 定期打印训练信息（只在前几个 iteration 或每 100 次）
+        if (iteration < 10 or iteration % 100 == 0) and rank == 0:
             elapsed = time.time() - t0
             iter_time = rollout_time + (time.time() - t0 - rollout_time)
             samples_per_sec = len(buffer) / iter_time if iter_time > 0 else 0
@@ -490,6 +531,10 @@ def train(
                     gpu_mem = torch.cuda.memory_allocated(0) / 1024**3
                     gpu_cached = torch.cuda.memory_reserved(0) / 1024**3
                     print(f"[Iter {iteration}] GPU: {gpu_mem:.2f}GB allocated, {gpu_cached:.2f}GB reserved")
+
+    # 关闭进度条
+    if rank == 0:
+        pbar.close()
 
     # 保存最终模型（只在 rank 0）
     if rank == 0:
@@ -522,7 +567,7 @@ if __name__ == "__main__":
     try:
         # 开始训练
         train(
-            config_path="training/config/default.yaml",
+            config_path="config/default.yaml",
             rank=rank,
             world_size=world_size,
             local_rank=local_rank,

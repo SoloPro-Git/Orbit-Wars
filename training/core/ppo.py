@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import copy
 from typing import Optional
+from tqdm import tqdm
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 from core.config import ModelConfig, TrainingConfig
 from core.model import OrbitWarsModel
@@ -138,7 +140,7 @@ class PPOTrainer:
             self.optimizer, T_max=config.max_iterations
         )
 
-    def update(self, buffer: PPOBuffer) -> dict:
+    def update(self, buffer: PPOBuffer, show_progress: bool = True) -> dict:
         """从 buffer 数据执行 PPO 更新。
 
         Returns:
@@ -192,7 +194,12 @@ class PPOTrainer:
         T = len(buffer)
         batch_size = min(self.config.batch_size, T)
 
-        for epoch in range(self.config.ppo_epochs):
+        # 创建 epoch 进度条
+        epoch_iter = range(self.config.ppo_epochs)
+        if show_progress:
+            epoch_iter = tqdm(epoch_iter, desc="[PPO Update]", unit="epoch")
+
+        for epoch in epoch_iter:
             indices = torch.randperm(T, device=self.device)[:batch_size]
 
             # 小批量前向
@@ -204,8 +211,20 @@ class PPOTrainer:
                 indices,
             )
 
+            # 更新进度条信息
+            if show_progress and isinstance(epoch_iter, tqdm):
+                epoch_iter.set_postfix({
+                    'policy_loss': f"{metrics.get('policy_loss', 0):.4f}",
+                    'value_loss': f"{metrics.get('value_loss', 0):.4f}",
+                    'entropy': f"{metrics.get('entropy', 0):.4f}",
+                    'batch_size': batch_size
+                })
+
             for k, v in metrics.items():
                 total_metrics[k] += v
+
+        if show_progress and isinstance(epoch_iter, tqdm):
+            epoch_iter.close()
 
         # 平均
         for k in total_metrics:
@@ -254,7 +273,7 @@ class PPOTrainer:
 
         # Policy loss
         log_probs = self._compute_log_probs(
-            target_logits, num_ships_pred, batch_ti, batch_ns, batch_om
+            target_logits, num_ships_pred, batch_ti, batch_ns
         )
         ratio = torch.exp(log_probs - batch_old_lp)
         surr1 = ratio * batch_adv
@@ -273,10 +292,13 @@ class PPOTrainer:
 
         # Opponent prediction loss (auxiliary)
         opp_loss = torch.tensor(0.0, device=self.device)
-        if opp_target is not None and self.model.config.use_opponent_head:
-            opp_loss = self._compute_opponent_loss(
-                opp_target, opp_num_ships, indices
-            )
+        if opp_target is not None:
+            # 处理 DDP 包装的情况
+            model = self.model.module if isinstance(self.model, DDP) else self.model
+            if model.config.use_opponent_head:
+                opp_loss = self._compute_opponent_loss(
+                    opp_target, opp_num_ships, indices
+                )
 
         # Total
         total_loss = (
@@ -347,7 +369,6 @@ class PPOTrainer:
         num_ships_pred: torch.Tensor,
         target_indices: torch.Tensor,
         num_ships_actual: torch.Tensor,
-        owned_mask: torch.Tensor,
     ) -> torch.Tensor:
         """计算动作 log probability。"""
         B, N_owned, N_planets = target_logits.shape
@@ -362,10 +383,11 @@ class PPOTrainer:
         sigma = 0.1
         ships_log_prob = -0.5 * ((num_ships_actual - num_ships_pred) / sigma).pow(2)
 
-        # mask 无效位置
-        valid = (~owned_mask[:, :N_owned]).float()
-        log_prob = (target_log_prob + ships_log_prob.squeeze(-1)) * valid
-        return log_prob.sum(dim=-1) / valid.sum(dim=-1).clamp(min=1)
+        # 合并 log probs
+        # 注意：这里假设所有 target_indices 对应的行动都是有效的
+        # （因为 rollout 中只为拥有星球生成了行动）
+        log_prob = target_log_prob + ships_log_prob.squeeze(-1)
+        return log_prob.mean(dim=-1)
 
     def _compute_entropy(self, target_logits: torch.Tensor) -> torch.Tensor:
         """计算策略熵。"""
@@ -386,12 +408,23 @@ class PPOTrainer:
     def _pad_and_index(tensors: list[torch.Tensor], indices: torch.Tensor) -> torch.Tensor:
         """Pad 变长 tensor 列表并按 indices 取 mini-batch。"""
         selected = [tensors[i] for i in indices.cpu().tolist()]
-        max_len = max(s.size(0) for s in selected)
-        feat_dim = selected[0].size(-1)
-        padded = torch.zeros(len(selected), max_len, feat_dim)
-        for i, s in enumerate(selected):
-            padded[i, :s.size(0)] = s
-        return padded
+
+        # 检查是否为 1D 张量（如 planet_ships）
+        if selected[0].dim() == 1:
+            # 1D 张量：添加特征维度并 padding
+            max_len = max(s.size(0) for s in selected)
+            padded = torch.zeros(len(selected), max_len)
+            for i, s in enumerate(selected):
+                padded[i, :s.size(0)] = s
+            return padded
+        else:
+            # 2D 张量：正常 padding
+            max_len = max(s.size(0) for s in selected)
+            feat_dim = selected[0].size(-1)
+            padded = torch.zeros(len(selected), max_len, feat_dim)
+            for i, s in enumerate(selected):
+                padded[i, :s.size(0)] = s
+            return padded
 
     @staticmethod
     def _pad_and_index_fleets(tensors: list[torch.Tensor], indices: torch.Tensor) -> torch.Tensor:

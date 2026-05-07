@@ -41,6 +41,8 @@ class TrainingConfig:
     max_grad_norm: float = 0.5
     batch_size: int = 2048
     num_parallel_games: int = 128
+    num_feature_workers: int = 8  # 特征提取工作进程数，-1表示自动设置（CPU核心数//4）
+    enable_rollout_timing: bool = False  # 是否启用rollout详细计时统计
     save_interval: int = 50
     max_iterations: int = 10000
     warmup_steps: int = 100

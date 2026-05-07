@@ -186,7 +186,14 @@ def train(config_path: str = "training/config/default.yaml"):
     )
 
     trainer = PPOTrainer(model, config.training, device=device)
-    worker = RolloutWorker(model, feature_engineer, reward_calculator, device=device)
+    worker = RolloutWorker(
+        model,
+        feature_engineer,
+        reward_calculator,
+        device=device,
+        num_feature_workers=config.training.num_feature_workers,
+        enable_rollout_timing=config.training.enable_rollout_timing,
+    )
 
     pool_config = OpponentPoolConfig(
         pool_size=config.self_play.pool_size,
