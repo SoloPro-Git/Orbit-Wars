@@ -29,14 +29,15 @@ training:
   opponent_pred_coef: 0.1
   intermediate_reward_weight: 0.2
   max_grad_norm: 0.5
-  batch_size: 2048
-  num_parallel_games: 128
+  batch_size: 8192        # 高性能配置：提升GPU利用率
+  num_parallel_games: 256 # 高性能配置：更多并行游戏
   save_interval: 50
   max_iterations: 10000
   warmup_steps: 100
   # Checkpoint管理
   max_checkpoints: 5  # 最多保留5个checkpoint
   keep_best_n: 2      # 保留最好的2个模型（按胜率）
+  resume_from_checkpoint: true
 
 self_play:
   pool_size: 20

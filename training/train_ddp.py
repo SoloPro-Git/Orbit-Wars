@@ -362,6 +362,16 @@ def train(
         else:
             print(f"[Rank 0] Starting training for {config.training.max_iterations} iterations with {world_size} GPUs")
 
+        # 打印训练配置（单卡模式）
+        if world_size == 1:
+            print(f"[Rank 0] 训练配置:")
+            print(f"[Rank 0]   - 批次大小: {config.training.batch_size}")
+            print(f"[Rank 0]   - 并行游戏: {config.training.num_parallel_games}")
+            print(f"[Rank 0]   - PPO epochs: {config.training.ppo_epochs}")
+            print(f"[Rank 0]   - 学习率: {config.training.learning_rate}")
+            print(f"[Rank 0]   - 保存间隔: 每 {config.training.save_interval} 次迭代")
+            print(f"[Rank 0] ========================================")
+
     # 训练循环
     for iteration in range(start_iteration, config.training.max_iterations):
         t0 = time.time()
@@ -458,9 +468,22 @@ def train(
 
         log_metrics(metrics, iteration)
 
-        if iteration % 100 == 0 and rank == 0:
+        # 定期打印训练信息
+        if iteration % 10 == 0 and rank == 0:
             elapsed = time.time() - t0
-            print(f"[Iter {iteration}] elapsed={elapsed:.1f}s buffer={len(buffer)}")
+            iter_time = rollout_time + (time.time() - t0 - rollout_time)
+            print(f"[Iter {iteration}/{config.training.max_iterations}] "
+                  f"loss={metrics.get('total_loss', 0):.4f}, "
+                  f"reward={metrics.get('mean_reward', 0):.4f}, "
+                  f"buffer={len(buffer)}, "
+                  f"time={iter_time:.2f}s")
+
+            # 单卡模式：打印更详细的GPU信息
+            if world_size == 1 and iteration % 50 == 0:
+                if torch.cuda.is_available():
+                    gpu_mem = torch.cuda.memory_allocated(0) / 1024**3
+                    gpu_cached = torch.cuda.memory_reserved(0) / 1024**3
+                    print(f"[Iter {iteration}] GPU: {gpu_mem:.2f}GB allocated, {gpu_cached:.2f}GB reserved")
 
     # 保存最终模型（只在 rank 0）
     if rank == 0:
