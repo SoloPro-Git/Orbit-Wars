@@ -19,7 +19,7 @@ import numpy as np
 # 常量 & 维度
 # =====================================================================
 NUM_OWNERS = 5        # owner 0, 1, 2, 3 + neutral(-1)
-D_PLANET = 22         # 星球特征维度
+D_PLANET = 28         # 星球特征维度 (增加了运动预测特征)
 D_FLEET = 11          # 舰队特征维度
 D_GLOBAL = 8          # 全局特征维度
 SUN_CENTER = (50.0, 50.0)
@@ -62,11 +62,23 @@ class FeatureEngineer:
         # ---------- 解析原始数据 ----------
         raw_planets = obs.get("planets", [])
         raw_fleets = obs.get("fleets", [])
+        raw_initial_planets = obs.get("initial_planets", [])
         angular_velocity = obs.get("angular_velocity", 0.0)
         turn = obs.get("step", 0)
         comet_planet_ids = set(obs.get("comet_planet_ids", []))
         comets_data = obs.get("comets", [])
         num_players = self._infer_num_players(raw_planets)
+
+        # ---------- 处理初始行星信息（用于预测运动） ----------
+        initial_planets = {}
+        if raw_initial_planets:
+            for ip in raw_initial_planets:
+                ip_id, ip_owner, ip_x, ip_y, ip_radius, ip_ships, ip_production = ip
+                initial_planets[int(ip_id)] = {
+                    "x": float(ip_x),
+                    "y": float(ip_y),
+                    "radius": float(ip_radius),
+                }
 
         # ---------- 找到母星作为坐标偏移原点 ----------
         home_x, home_y = self._find_home_planet(raw_planets, player_id)
@@ -75,15 +87,26 @@ class FeatureEngineer:
         planets: list[dict] = []
         for p in raw_planets:
             pid, owner, x, y, radius, ships, production = p
+            planet_id = int(pid)
+
+            # 计算是否是公转星球
+            center_x, center_y = 50.0, 50.0
+            dist_to_center = math.hypot(float(x) - center_x, float(y) - center_y)
+            orbital_radius = dist_to_center
+            is_orbiting = (orbital_radius + float(radius)) < 50.0
+
             planets.append({
-                "id": int(pid),
+                "id": planet_id,
                 "owner": int(owner),
                 "x": float(x),
                 "y": float(y),
                 "radius": float(radius),
                 "ships": float(ships),
                 "production": float(production),
-                "is_comet": int(pid) in comet_planet_ids,
+                "is_comet": planet_id in comet_planet_ids,
+                "is_orbiting": is_orbiting,
+                "orbital_radius": orbital_radius if is_orbiting else 0.0,
+                "initial_pos": initial_planets.get(planet_id, {"x": float(x), "y": float(y)}),
             })
 
         # ---------- 构建舰队列表 ----------
@@ -167,7 +190,13 @@ class FeatureEngineer:
           18:    is_contested
           19:    planet_economic_value
           20:    comet_roi (仅彗星)
-          21:    reserved / padding (0)
+          21:    future_pos_5steps_x (公转行星5步后预测位置)
+          22:    future_pos_5steps_y (公转行星5步后预测位置)
+          23:    future_pos_10steps_x (公转行星10步后预测位置)
+          24:    future_pos_10steps_y (公转行星10步后预测位置)
+          25:    future_pos_20steps_x (公转行星20步后预测位置)
+          26:    future_pos_20steps_y (公转行星20步后预测位置)
+          27:    orbital_radius / 50 (轨道半径)
         """
         n = len(planets)
         features = np.zeros((n, D_PLANET), dtype=np.float32)
@@ -216,6 +245,39 @@ class FeatureEngineer:
             dist_to_sun = math.hypot(p["x"] - SUN_CENTER[0], p["y"] - SUN_CENTER[1])
             is_orbiting = (dist_to_sun + p["radius"] < 50.0) and not p["is_comet"]
             features[i, 11] = float(is_orbiting)
+
+            # --- 公转行星运动预测特征 ---
+            if is_orbiting and "initial_pos" in p:
+                # 计算当前角度（从初始位置计算）
+                init_pos = p["initial_pos"]
+                current_angle = math.atan2(p["y"] - SUN_CENTER[1], p["x"] - SUN_CENTER[0])
+
+                # 预测未来5步、10步、20步后的位置（用于长期规划）
+                # 21: future_pos_5steps_x
+                # 22: future_pos_5steps_y
+                # 23: future_pos_10steps_x
+                # 24: future_pos_10steps_y
+                # 需要增加 D_PLANET 到 28 才能容纳所有特征
+                for future_steps, idx_x, idx_y in [(5, 21, 22), (10, 23, 24), (20, 25, 26)]:
+                    future_angle = current_angle + angular_velocity * future_steps
+                    future_x = SUN_CENTER[0] + p["orbital_radius"] * math.cos(future_angle)
+                    future_y = SUN_CENTER[1] + p["orbital_radius"] * math.sin(future_angle)
+                    # 归一化预测位置相对于当前母星
+                    features[i, idx_x] = (future_x - home_x) / self.board_size
+                    features[i, idx_y] = (future_y - home_y) / self.board_size
+            else:
+                features[i, 21] = 0.0  # 5步预测x
+                features[i, 22] = 0.0  # 5步预测y
+                features[i, 23] = 0.0  # 10步预测x
+                features[i, 24] = 0.0  # 10步预测y
+                features[i, 25] = 0.0  # 20步预测x
+                features[i, 26] = 0.0  # 20步预测y
+
+            # --- 轨道半径（帮助模型识别公转行为）---
+            if is_orbiting:
+                features[i, 27] = p["orbital_radius"] / 50.0
+            else:
+                features[i, 27] = 0.0
 
             # --- 到太阳距离 ---
             features[i, 12] = dist_to_sun / 50.0
