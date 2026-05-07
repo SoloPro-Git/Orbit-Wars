@@ -54,7 +54,7 @@ def kill_existing_processes():
         time.sleep(2)
 
 
-def start_worker_process(gpu_id: int, worker_id: int, config_path: str, output_file: str) -> subprocess.Popen:
+def start_worker_process(gpu_id: int, worker_id: int, config_path: str, output_file: str, is_master: bool = False) -> subprocess.Popen:
     """启动一个worker进程。"""
     cmd = [
         sys.executable,
@@ -68,10 +68,14 @@ def start_worker_process(gpu_id: int, worker_id: int, config_path: str, output_f
     # 让父进程的环境变量传递给子进程
     # env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)  # ❌ 删除这行
 
-    # 设置 SwanLab API key（避免交互式提示）
-    swanlab_key_file = Path(__file__).parent / "config" / "swanlab_key.txt"
-    if swanlab_key_file.exists():
-        env['SWANLAB_API_KEY'] = swanlab_key_file.read_text().strip()
+    # 只在主进程（gpu0_worker0）启用 SwanLab
+    if is_master:
+        swanlab_key_file = Path(__file__).parent / "config" / "swanlab_key.txt"
+        if swanlab_key_file.exists():
+            env['SWANLAB_API_KEY'] = swanlab_key_file.read_text().strip()
+        env['SWANLAB_ENABLED'] = '1'
+    else:
+        env['SWANLAB_ENABLED'] = '0'
 
     env['PYTHONUNBUFFERED'] = '1'  # 禁用输出缓冲
 
@@ -157,8 +161,13 @@ def main():
     for gpu_id, num_procs in sorted(gpu_config.items()):
         for i in range(num_procs):
             log_file = log_dir / f"gpu{gpu_id}_worker{i}.log"
-            print(f"启动 worker {worker_id+1}/{total_processes} (GPU {gpu_id}, 进程 {i+1}/{num_procs}) -> {log_file}")
-            proc = start_worker_process(gpu_id, worker_id, config_path, str(log_file))
+            # 只在第一个进程（gpu0_worker0）启用 SwanLab
+            is_master = (gpu_id == 0 and i == 0)
+            if is_master:
+                print(f"启动 worker {worker_id+1}/{total_processes} (GPU {gpu_id}, 进程 {i+1}/{num_procs}) [SwanLab主进程] -> {log_file}")
+            else:
+                print(f"启动 worker {worker_id+1}/{total_processes} (GPU {gpu_id}, 进程 {i+1}/{num_procs}) -> {log_file}")
+            proc = start_worker_process(gpu_id, worker_id, config_path, str(log_file), is_master=is_master)
             processes[worker_id] = proc
             worker_id += 1
             time.sleep(1)  # 错开启动时间
