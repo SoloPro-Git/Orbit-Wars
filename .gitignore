@@ -11,4 +11,4 @@ wheels/
 
 # Playwright MCP
 .playwright-mcp/
-.kaggle/
+.kaggle/training/config/swanlab_key.txt
