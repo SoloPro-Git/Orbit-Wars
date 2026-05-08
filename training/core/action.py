@@ -36,6 +36,11 @@ def decode_actions(
 
         # Determine target planet
         target_idx = int(np.argmax(target_logits[i]))
+
+        # 边界检查
+        if target_idx >= len(all_planets) or target_idx < 0:
+            continue
+
         target = all_planets[target_idx]
 
         # Compute angle from source to target

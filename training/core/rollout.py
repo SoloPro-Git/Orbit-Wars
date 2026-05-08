@@ -530,24 +530,41 @@ class RolloutWorker:
         all_planets: list[dict],
         threshold: float = 1.0,
     ) -> list[list]:
-        """将 target indices + num_ships 转为 kaggle 动作格式。"""
+        """将 target indices + num_ships 转为 kaggle 动作格式。
+
+        Args:
+            target_indices: [N_owned] 目标星球索引
+            num_ships: [N_owned] 或 [N_owned, 1] 飞船绝对数量（模型已乘以 planet_ships）
+            owned_planets: 己方星球列表
+            all_planets: 所有星球列表
+            threshold: 绝对数量阈值，低于此值不发射
+
+        Returns:
+            Kaggle格式的动作列表 [[from_planet_id, angle, num_ships], ...]
+        """
         import math
         actions = []
         for i, src in enumerate(owned_planets):
             if i >= len(target_indices) or i >= len(num_ships):
                 break
+
+            # num_ships 是模型输出的绝对数量（已经乘以 planet_ships）
             ships = float(num_ships[i]) if num_ships.ndim == 1 else float(num_ships[i, 0])
+
+            # 检查阈值
             if ships < threshold or src["ships"] <= 0:
                 continue
 
-            ships = min(int(max(ships, 1)), int(src["ships"]))
+            # 确保至少发射1艘船，且不超过拥有的飞船数
+            ships = max(1.0, ships)
+            ships = min(ships, src["ships"])
 
             tgt_idx = int(target_indices[i])
             if tgt_idx >= len(all_planets):
                 continue
             tgt = all_planets[tgt_idx]
             angle = math.atan2(tgt["y"] - src["y"], tgt["x"] - src["x"])
-            actions.append([src["id"], angle, ships])
+            actions.append([src["id"], angle, int(ships)])
         return actions
 
     @staticmethod

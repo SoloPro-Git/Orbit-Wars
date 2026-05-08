@@ -80,10 +80,16 @@ class OrbitWarsPredictor:
         Returns:
             actions: [[from_planet_id, angle, num_ships], ...]
         """
-        # ---- 1. Feature extraction ----
-        planet_features, fleet_features, global_features, metadata = (
-            self.feature_engineer.compute(obs, player_id)
-        )
+        try:
+            # ---- 1. Feature extraction ----
+            planet_features, fleet_features, global_features, metadata = (
+                self.feature_engineer.compute(obs, player_id)
+            )
+        except Exception as e:
+            print(f"[Predictor] Feature extraction error: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
 
         # ---- 2. Numpy -> Torch tensors with batch dim ----
         planet_feat_t = torch.from_numpy(planet_features).unsqueeze(0).to(self.device)
@@ -136,6 +142,19 @@ class OrbitWarsPredictor:
                 planet_ships=planet_ships,
             )
 
+            # 截断或填充 target_logits 以匹配实际星球数量
+            n_model_planets = target_logits.shape[2]  # 模型输出的星球数（通常40）
+            n_actual_planets = n_planets_actual
+
+            if n_actual_planets < n_model_planets:
+                # 截断到实际星球数
+                target_logits = target_logits[:, :, :n_actual_planets]
+            elif n_actual_planets > n_model_planets:
+                # 填充（理论上不应该发生，因为max是40）
+                pad_size = n_actual_planets - n_model_planets
+                padding = torch.zeros(1, target_logits.shape[1], pad_size, device=self.device)
+                target_logits = torch.cat([target_logits, padding], dim=2)
+
         # ---- 7. Convert to numpy ----
         target_logits_np = target_logits.cpu().numpy()  # [1, N_owned, N_planets]
         num_ships_np = num_ships_out.cpu().numpy()  # [1, N_owned, 1] (absolute ship counts)
@@ -168,24 +187,39 @@ class OrbitWarsPredictor:
                 owned_planets.append(planet_dict)
 
         # ---- 9. Prepare num_ships_raw for decode_actions ----
-        # decode_actions expects sigmoid-style [0,1] values and multiplies by source_ships.
-        # The model already returns absolute counts (num_ships_out = raw * owned_ships).
-        # We need to convert back to [0,1] ratios for decode_actions.
+        # 模型输出 num_ships_out 已经是绝对数量（sigmoid * owned_ships）
+        # decode_actions 期望 [0,1] 比例值，所以需要转换回比例
         num_ships_raw_for_decode = np.zeros_like(num_ships_np)
         for i, src in enumerate(owned_planets):
             src_ships = src.get("ships", 0)
             if src_ships > 0:
+                # 将绝对数量转换回比例（供 decode_actions 使用）
                 num_ships_raw_for_decode[i, 0] = num_ships_np[i, 0] / src_ships
             else:
                 num_ships_raw_for_decode[i, 0] = 0.0
 
         # ---- 10. Decode actions ----
-        actions = decode_actions(
-            target_logits=target_logits_np,
-            num_ships_raw=num_ships_raw_for_decode,
-            owned_planets=owned_planets,
-            all_planets=all_planets,
-            threshold=0.3,
-        )
+        # 添加边界检查
+        if len(owned_planets) == 0 or len(all_planets) == 0:
+            return []
+
+        if target_logits_np.shape[1] != len(all_planets):
+            print(f"[Predictor] Warning: target_logits shape {target_logits_np.shape} != num_planets {len(all_planets)}")
+            # 如果维度不匹配，返回空动作
+            return []
+
+        try:
+            actions = decode_actions(
+                target_logits=target_logits_np,
+                num_ships_raw=num_ships_raw_for_decode,
+                owned_planets=owned_planets,
+                all_planets=all_planets,
+                threshold=0.01,  # 降低阈值，让模型更容易行动
+            )
+        except Exception as e:
+            print(f"[Predictor] Decode actions error: {e}")
+            import traceback
+            traceback.print_exc()
+            actions = []
 
         return actions
