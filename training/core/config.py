@@ -43,6 +43,7 @@ class TrainingConfig:
     num_parallel_games: int = 128
     num_feature_workers: int = 8  # 特征提取工作进程数，-1表示自动设置（CPU核心数//4）
     enable_rollout_timing: bool = False  # 是否启用rollout详细计时统计
+    use_gpu_features: bool = False  # 是否使用GPU向量化特征提取（推荐）
     save_interval: int = 50
     max_iterations: int = 10000
     warmup_steps: int = 100
@@ -87,12 +88,23 @@ class EnvironmentConfig:
 
 
 @dataclass
+class RayConfig:
+    """Ray 分布式训练配置。"""
+    num_rollout_workers: int = 8          # rollout worker 数量
+    num_gpus_per_worker: float = 0.25     # 每个 worker 的 GPU 数量
+    trainer_num_gpus: int = 1             # trainer 的 GPU 数量
+    games_per_rollout: int = 64           # 每次 rollout 的游戏数
+    max_rollout_retries: int = 3          # rollout 失败重试次数
+
+
+@dataclass
 class AppConfig:
     model: ModelConfig = field(default_factory=ModelConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
     self_play: SelfPlayConfig = field(default_factory=SelfPlayConfig)
     reward: RewardConfig = field(default_factory=RewardConfig)
     environment: EnvironmentConfig = field(default_factory=EnvironmentConfig)
+    ray: RayConfig = field(default_factory=RayConfig)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "AppConfig":
@@ -104,6 +116,7 @@ class AppConfig:
             self_play=SelfPlayConfig(**data.get("self_play", {})),
             reward=RewardConfig(**data.get("reward", {})),
             environment=EnvironmentConfig(**data.get("environment", {})),
+            ray=RayConfig(**data.get("ray", {})),
         )
 
     @classmethod

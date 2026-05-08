@@ -14,6 +14,18 @@ from typing import Any
 
 import numpy as np
 
+# 尝试导入 Numba 优化版本，失败则使用纯Python
+try:
+    from core.feature_engineering_numba import (
+        fleet_speed_numba,
+        segment_intersects_circle_numba,
+        distance_numba,
+        predict_fleet_targets_numba,
+    )
+    USE_NUMBA = True
+except ImportError:
+    USE_NUMBA = False
+
 
 # =====================================================================
 # 常量 & 维度
@@ -312,9 +324,6 @@ class FeatureEngineer:
             else:
                 features[i, 20] = 0.0
 
-            # 第21维 reserved
-            features[i, 21] = 0.0
-
         return features, meta
 
     # =================================================================
@@ -564,10 +573,12 @@ class FeatureEngineer:
     # =================================================================
     def _fleet_speed(self, ships: float) -> float:
         """根据飞船数计算舰队速度 (对数曲线)。"""
+        if USE_NUMBA:
+            return fleet_speed_numba(ships, self.max_speed)
+        # 纯Python回退
         if ships <= 0:
             return 1.0
         log_ratio = math.log(max(ships, 1.0)) / math.log(1000.0)
-        # 裁剪到 [0, 1] 避免极端值
         log_ratio = max(0.0, min(1.0, log_ratio))
         speed = 1.0 + (self.max_speed - 1.0) * (log_ratio ** 1.5)
         return speed
@@ -583,6 +594,8 @@ class FeatureEngineer:
         检查线段 (ax,ay)-(bx,by) 是否与圆 (cx,cy,cr) 相交。
         使用连续碰撞检测算法。
         """
+        if USE_NUMBA:
+            return segment_intersects_circle_numba(ax, ay, bx, by, cx, cy, cr)
         # 线段方向向量
         dx = bx - ax
         dy = by - ay

@@ -4,7 +4,7 @@ from __future__ import annotations
 import copy
 import time
 from typing import Optional
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from multiprocessing.pool import ThreadPool
 from tqdm import tqdm
 import multiprocessing
 
@@ -21,13 +21,10 @@ from core.ppo import PPOBuffer
 
 
 def _extract_features_worker(args):
-    """工作进程中执行的特征提取函数（必须是模块级函数）。
-
-    注意：这个函数在独立的子进程中运行，不能访问 CUDA。
-    """
+    """工作线程中执行的特征提取函数。"""
     obs, pid, board_size, sun_radius, max_speed, max_turns = args
 
-    # 在工作进程中创建 FeatureEngineer（避免 CUDA 初始化）
+    # 在工作线程中创建 FeatureEngineer（线程安全的）
     from core.feature_engineering import FeatureEngineer
     feature_engineer = FeatureEngineer(
         board_size=board_size,
@@ -43,7 +40,7 @@ def _extract_features_worker(args):
 class RolloutWorker:
     """跑自我博弈并收集训练数据。
 
-    使用线程池并行提取特征，充分利用多核CPU。
+    支持CPU多进程或GPU向量化特征提取。
     """
 
     def __init__(
@@ -54,29 +51,44 @@ class RolloutWorker:
         device: str = "cuda",
         num_feature_workers: int = -1,
         enable_rollout_timing: bool = False,
+        use_gpu_features: bool = False,
     ):
         self.model = model
         self.feature_engineer = feature_engineer
         self.reward_calculator = reward_calculator
         self.device = device
         self.enable_rollout_timing = enable_rollout_timing
+        self.use_gpu_features = use_gpu_features
 
-        # 创建进程池用于并行特征提取（CPU密集型任务需要多进程绕过GIL）
-        if num_feature_workers == -1:
-            self.num_feature_workers = multiprocessing.cpu_count() // 4
+        # GPU特征提取器
+        if self.use_gpu_features:
+            from core.feature_engineering_gpu import FeatureEngineerGPU
+            self.feature_engineer_gpu = FeatureEngineerGPU(
+                board_size=feature_engineer.board_size,
+                sun_radius=feature_engineer.sun_radius,
+                max_speed=feature_engineer.max_speed,
+                max_turns=feature_engineer.max_turns,
+                device=device,
+            )
+            print(f"[RolloutWorker] 使用GPU向量化特征提取")
+            self.feature_pool = None
         else:
-            self.num_feature_workers = num_feature_workers
-        self.feature_pool = ProcessPoolExecutor(max_workers=self.num_feature_workers)
+            # 创建线程池用于并行特征提取
+            if num_feature_workers == -1:
+                self.num_feature_workers = max(4, multiprocessing.cpu_count() // 8)
+            else:
+                self.num_feature_workers = num_feature_workers
+            self.feature_pool = ThreadPool(processes=self.num_feature_workers)
 
-        # 保存特征工程配置参数，用于传递给工作进程
-        self.feature_engine_config = {
-            "board_size": feature_engineer.board_size,
-            "sun_radius": feature_engineer.sun_radius,
-            "max_speed": feature_engineer.max_speed,
-            "max_turns": feature_engineer.max_turns,
-        }
+            # 保存特征工程配置参数，用于传递给工作线程
+            self.feature_engine_config = {
+                "board_size": feature_engineer.board_size,
+                "sun_radius": feature_engineer.sun_radius,
+                "max_speed": feature_engineer.max_speed,
+                "max_turns": feature_engineer.max_turns,
+            }
 
-        print(f"[RolloutWorker] 使用 {self.num_feature_workers} 进程并行提取特征")
+            print(f"[RolloutWorker] 使用 {self.num_feature_workers} 线程并行提取特征")
 
     def rollout_game(
         self,
@@ -110,99 +122,192 @@ class RolloutWorker:
             if env.done:
                 break
 
+            # 每100步打印一次进度（调试用）
+            # if step > 0 and step % 100 == 0:
+            #     print(f"[Rollout] Step {step}/{max_steps}...", flush=True)
+
             # ========== 批量推理优化 ==========
-            # 第一阶段：批量提取所有玩家特征（CPU，多进程并行处理）
+            # 第一阶段：批量提取所有玩家特征
             t_feature_start = time.time()
             obs_list = [env.get_raw_observation(pid) for pid in range(env.num_players)]
             pid_list = list(range(env.num_players))
 
-            # 使用进程池并行提取特征（绕过GIL限制）
-            # 准备参数：(obs, pid, board_size, sun_radius, max_speed, max_turns)
-            worker_args = [
-                (obs, pid,
-                 self.feature_engine_config["board_size"],
-                 self.feature_engine_config["sun_radius"],
-                 self.feature_engine_config["max_speed"],
-                 self.feature_engine_config["max_turns"])
-                for obs, pid in zip(obs_list, pid_list)
-            ]
+            if self.use_gpu_features:
+                # GPU向量化特征提取（零拷贝，已在GPU上）
+                all_features = []
+                for obs, pid in zip(obs_list, pid_list):
+                    planet_feat, fleet_feat, global_feat, metadata = self.feature_engineer_gpu.compute(
+                        obs, pid
+                    )
+                    # 已经是GPU tensor，无需传输
+                    all_features.append({
+                        "planet_feat": planet_feat,
+                        "fleet_feat": fleet_feat,
+                        "global_feat": global_feat,
+                        "raw_planets": obs.get("planets", []),
+                        "player_id": pid,
+                        "metadata": metadata,
+                        "owned_indices": metadata.get("owned_planet_indices", []),
+                    })
+            else:
+                # CPU多进程并行特征提取
+                worker_args = [
+                    (obs, pid,
+                     self.feature_engine_config["board_size"],
+                     self.feature_engine_config["sun_radius"],
+                     self.feature_engine_config["max_speed"],
+                     self.feature_engine_config["max_turns"])
+                    for obs, pid in zip(obs_list, pid_list)
+                ]
 
-            # 批量提交任务并等待完成（比逐个 submit 更高效）
-            results = list(self.feature_pool.map(_extract_features_worker, worker_args))
+                # 批量提交任务并等待完成（比逐个 submit 更高效）
+                results = list(self.feature_pool.map(_extract_features_worker, worker_args))
+
+                # 组装特征
+                all_features = []
+                for planet_feat, fleet_feat, global_feat, raw_planets, pid, metadata in results:
+                    all_features.append({
+                        "planet_feat": planet_feat,
+                        "fleet_feat": fleet_feat,
+                        "global_feat": global_feat,
+                        "raw_planets": raw_planets,
+                        "player_id": pid,
+                        "metadata": metadata,
+                        "owned_indices": metadata.get("owned_planet_indices", []),
+                    })
 
             feature_time = time.time() - t_feature_start
             total_feature_time += feature_time
 
-            # 组装特征
-            all_features = []
-            for planet_feat, fleet_feat, global_feat, raw_planets, pid, metadata in results:
-                all_features.append({
-                    "planet_feat": planet_feat,
-                    "fleet_feat": fleet_feat,
-                    "global_feat": global_feat,
-                    "raw_planets": raw_planets,
-                    "player_id": pid,
-                    "metadata": metadata,  # 添加 metadata
-                    "owned_indices": metadata.get("owned_planet_indices", []),  # 拥有星球索引
-                })
-
-            # 第二阶段：批量传输到GPU
+            # 第二阶段：批量传输到GPU（或直接使用GPU tensor）
             t_transfer_start = time.time()
             max_planets = max(len(f["planet_feat"]) for f in all_features)
             max_fleets = max(
-                len(f["fleet_feat"]) if f["fleet_feat"].size > 0 else 0
+                len(f["fleet_feat"]) if f["fleet_feat"].shape[0] > 0 else 0
                 for f in all_features
             )
             num_players = env.num_players
 
-            batch_planet_feats = []
-            batch_fleet_feats = []
-            batch_global_feats = []
-            batch_owned_masks = []
-            batch_enemy_masks = []
-            batch_planet_ships = []
+            if self.use_gpu_features:
+                # GPU特征：已经在GPU上，只需padding
+                batch_planet_feats = []
+                batch_fleet_feats = []
+                batch_global_feats = []
+                batch_owned_masks = []
+                batch_enemy_masks = []
+                batch_planet_ships = []
 
-            for feat in all_features:
-                pid = feat["player_id"]
-                raw_planets = feat["raw_planets"]
-                n = len(raw_planets)
+                for feat in all_features:
+                    pid = feat["player_id"]
+                    raw_planets = feat["raw_planets"]
+                    n = len(raw_planets)
 
-                # Padding到相同长度
-                planet_padded = np.zeros((max_planets, feat["planet_feat"].shape[1]), dtype=np.float32)
-                planet_padded[:len(feat["planet_feat"])] = feat["planet_feat"]
+                    # GPU tensor padding
+                    planet_feat = feat["planet_feat"]  # [N, D]
+                    fleet_feat = feat["fleet_feat"]    # [M, D] 或 [0, D]
 
-                fleet_dim = feat["fleet_feat"].shape[1] if feat["fleet_feat"].size > 0 else 11
-                fleet_padded = np.zeros((max_fleets, fleet_dim), dtype=np.float32)
-                if feat["fleet_feat"].size > 0:
-                    fleet_padded[:len(feat["fleet_feat"])] = feat["fleet_feat"]
+                    # Padding到相同长度
+                    planet_padded = torch.zeros(
+                        max_planets, planet_feat.shape[1],
+                        dtype=torch.float32, device=self.device
+                    )
+                    planet_padded[:planet_feat.shape[0]] = planet_feat
 
-                # 构建masks
-                owned_mask = np.zeros(max_planets, dtype=bool)
-                enemy_mask = np.zeros(max_planets, dtype=bool)
-                for i, p in enumerate(raw_planets):
-                    owner = int(p[1])
-                    if owner == pid:
-                        owned_mask[i] = True
-                    elif owner != -1:
-                        enemy_mask[i] = True
+                    if fleet_feat.shape[0] > 0:
+                        fleet_padded = torch.zeros(
+                            max_fleets, fleet_feat.shape[1],
+                            dtype=torch.float32, device=self.device
+                        )
+                        fleet_padded[:fleet_feat.shape[0]] = fleet_feat
+                    else:
+                        fleet_padded = torch.zeros(
+                            max_fleets, 11,
+                            dtype=torch.float32, device=self.device
+                        )
 
-                planet_ships = np.array([float(p[5]) for p in raw_planets], dtype=np.float32)
-                planet_ships = np.pad(planet_ships, (0, max_planets - len(planet_ships)), constant_values=0)
+                    # 构建masks
+                    owned_mask = torch.zeros(max_planets, dtype=torch.bool, device=self.device)
+                    enemy_mask = torch.zeros(max_planets, dtype=torch.bool, device=self.device)
+                    for i, p in enumerate(raw_planets):
+                        owner = int(p[1])
+                        if owner == pid:
+                            owned_mask[i] = True
+                        elif owner != -1:
+                            enemy_mask[i] = True
 
-                batch_planet_feats.append(planet_padded)
-                batch_fleet_feats.append(fleet_padded)
-                batch_global_feats.append(feat["global_feat"])
-                batch_owned_masks.append(owned_mask)
-                batch_enemy_masks.append(enemy_mask)
-                batch_planet_ships.append(planet_ships)
+                    planet_ships = torch.tensor(
+                        [float(p[5]) for p in raw_planets],
+                        dtype=torch.float32, device=self.device
+                    )
+                    planet_ships_padded = torch.zeros(max_planets, dtype=torch.float32, device=self.device)
+                    planet_ships_padded[:len(planet_ships)] = planet_ships
 
-            # 一次性传输到GPU
-            batch_planet_feats_t = torch.from_numpy(np.array(batch_planet_feats)).to(self.device)
-            batch_fleet_feats_t = torch.from_numpy(np.array(batch_fleet_feats)).to(self.device)
-            batch_global_feats_t = torch.from_numpy(np.array(batch_global_feats)).to(self.device)
-            batch_owned_masks_t = torch.from_numpy(np.array(batch_owned_masks)).to(self.device)
-            batch_enemy_masks_t = torch.from_numpy(np.array(batch_enemy_masks)).to(self.device)
-            batch_planet_ships_t = torch.from_numpy(np.array(batch_planet_ships)).to(self.device)
+                    batch_planet_feats.append(planet_padded)
+                    batch_fleet_feats.append(fleet_padded)
+                    batch_global_feats.append(feat["global_feat"])
+                    batch_owned_masks.append(owned_mask)
+                    batch_enemy_masks.append(enemy_mask)
+                    batch_planet_ships.append(planet_ships_padded)
+
+                # Stack为batch（已经在GPU上）
+                batch_planet_feats_t = torch.stack(batch_planet_feats, dim=0)
+                batch_fleet_feats_t = torch.stack(batch_fleet_feats, dim=0)
+                batch_global_feats_t = torch.stack(batch_global_feats, dim=0)
+                batch_owned_masks_t = torch.stack(batch_owned_masks, dim=0)
+                batch_enemy_masks_t = torch.stack(batch_enemy_masks, dim=0)
+                batch_planet_ships_t = torch.stack(batch_planet_ships, dim=0)
+            else:
+                # CPU特征：需要传输到GPU
+                batch_planet_feats = []
+                batch_fleet_feats = []
+                batch_global_feats = []
+                batch_owned_masks = []
+                batch_enemy_masks = []
+                batch_planet_ships = []
+
+                for feat in all_features:
+                    pid = feat["player_id"]
+                    raw_planets = feat["raw_planets"]
+                    n = len(raw_planets)
+
+                    # Padding到相同长度
+                    planet_padded = np.zeros((max_planets, feat["planet_feat"].shape[1]), dtype=np.float32)
+                    planet_padded[:len(feat["planet_feat"])] = feat["planet_feat"]
+
+                    fleet_dim = feat["fleet_feat"].shape[1] if feat["fleet_feat"].size > 0 else 11
+                    fleet_padded = np.zeros((max_fleets, fleet_dim), dtype=np.float32)
+                    if feat["fleet_feat"].size > 0:
+                        fleet_padded[:len(feat["fleet_feat"])] = feat["fleet_feat"]
+
+                    # 构建masks
+                    owned_mask = np.zeros(max_planets, dtype=bool)
+                    enemy_mask = np.zeros(max_planets, dtype=bool)
+                    for i, p in enumerate(raw_planets):
+                        owner = int(p[1])
+                        if owner == pid:
+                            owned_mask[i] = True
+                        elif owner != -1:
+                            enemy_mask[i] = True
+
+                    planet_ships = np.array([float(p[5]) for p in raw_planets], dtype=np.float32)
+                    planet_ships = np.pad(planet_ships, (0, max_planets - len(planet_ships)), constant_values=0)
+
+                    batch_planet_feats.append(planet_padded)
+                    batch_fleet_feats.append(fleet_padded)
+                    batch_global_feats.append(feat["global_feat"])
+                    batch_owned_masks.append(owned_mask)
+                    batch_enemy_masks.append(enemy_mask)
+                    batch_planet_ships.append(planet_ships)
+
+                # 一次性传输到GPU
+                batch_planet_feats_t = torch.from_numpy(np.array(batch_planet_feats)).to(self.device)
+                batch_fleet_feats_t = torch.from_numpy(np.array(batch_fleet_feats)).to(self.device)
+                batch_global_feats_t = torch.from_numpy(np.array(batch_global_feats)).to(self.device)
+                batch_owned_masks_t = torch.from_numpy(np.array(batch_owned_masks)).to(self.device)
+                batch_enemy_masks_t = torch.from_numpy(np.array(batch_enemy_masks)).to(self.device)
+                batch_planet_ships_t = torch.from_numpy(np.array(batch_planet_ships)).to(self.device)
+
+            # num_players tensor (两种模式都需要)
             batch_num_players = torch.tensor([num_players] * num_players, dtype=torch.long).to(self.device)
 
             # 传输完成，计算耗时
@@ -470,9 +575,10 @@ class RolloutWorker:
         return log_prob.sum() / valid.sum().clamp(min=1)
 
     def __del__(self):
-        """清理进程池资源。"""
-        if hasattr(self, 'feature_pool'):
-            self.feature_pool.shutdown(wait=True)
+        """清理线程池资源。"""
+        if hasattr(self, 'feature_pool') and self.feature_pool is not None:
+            self.feature_pool.close()
+            self.feature_pool.join()
 
 
 def parallel_rollout(

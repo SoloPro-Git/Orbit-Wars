@@ -14,3 +14,4 @@ wheels/
 .kaggle/
 training/config/swanlab_key.txt
 training/logs/*
+training/.ray_temp/
