@@ -22,6 +22,19 @@ class ModelConfig:
 
 
 @dataclass
+class ExpertDataConfig:
+    """专家演示数据配置。"""
+    enabled: bool = True  # 是否启用专家数据预训练
+    data_dir: str = "data/expert_demonstrations"  # 专家数据目录
+    num_pretrain_iterations: int = 100  # 预训练迭代次数
+    pretrain_batch_size: int = 256  # 预训练批次大小
+    pretrain_learning_rate: float = 1e-4  # 预训练学习率
+    behavior_clone_loss_coef: float = 1.0  # 行为克隆损失系数
+    mix_expert_data_ratio: float = 0.3  # 在 RL 训练中混合专家数据的比例
+    use_until_iteration: int = 100  # 前 N 次迭代使用专家数据（-1 表示一直使用）
+
+
+@dataclass
 class TrainingConfig:
     framework: str = "pytorch"
     tracker: str = "swanlab"
@@ -105,6 +118,7 @@ class AppConfig:
     reward: RewardConfig = field(default_factory=RewardConfig)
     environment: EnvironmentConfig = field(default_factory=EnvironmentConfig)
     ray: RayConfig = field(default_factory=RayConfig)
+    expert_data: ExpertDataConfig = field(default_factory=ExpertDataConfig)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "AppConfig":
@@ -117,6 +131,7 @@ class AppConfig:
             reward=RewardConfig(**data.get("reward", {})),
             environment=EnvironmentConfig(**data.get("environment", {})),
             ray=RayConfig(**data.get("ray", {})),
+            expert_data=ExpertDataConfig(**data.get("expert_data", {})),
         )
 
     @classmethod
