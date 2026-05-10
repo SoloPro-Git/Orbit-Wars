@@ -1,14 +1,14 @@
 #!/bin/bash
-# 生成 1000 局专家演示数据脚本
-# 使用多进程并行生成，带进度条
+# 生成 1000 局专家演示数据
+# 使用 Kaggle 高分策略生成训练数据
 
 echo "============================================================"
-echo "Orbit Wars 大规模专家数据生成"
+echo "Orbit Wars 专家数据生成 (1000 局)"
 echo "============================================================"
 echo ""
 
 # 激活虚拟环境
-source .venv/bin/activate
+source ../../.venv/bin/activate
 
 # 参数设置
 NUM_EPISODES=1000          # 总对局数
@@ -27,21 +27,13 @@ echo ""
 
 # 估算时间和空间
 EST_TIME_MIN=$((NUM_EPISODES * 6 / 60 / NUM_PROCESSES))
-EST_SIZE_MB=$((NUM_EPISODES * 10))
+EST_SIZE_GB=$((NUM_EPISODES * 10 / 1024))
 echo "预计资源消耗:"
 echo "  时间: ~${EST_TIME_MIN} 分钟"
-echo "  磁盘空间: ~${EST_SIZE_MB} MB"
+echo "  磁盘: ~${EST_SIZE_GB} GB"
 echo ""
 
-# 确认开始
-read -p "确认开始生成? (y/n): " confirm
-if [ "$confirm" != "y" ]; then
-    echo "已取消"
-    exit 0
-fi
-
-echo ""
-echo "开始生成..."
+echo "开始生成（自动运行，无需确认）..."
 echo ""
 
 # 运行多进程生成脚本

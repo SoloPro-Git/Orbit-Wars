@@ -1,55 +1,73 @@
 #!/bin/bash
-# Orbit Wars Ray 分布式训练启动脚本
+# Orbit Wars 完整训练流程（预训练 + RL）
 #
 # 环境变量配置（可选）:
 #   export GPUS="1,2,3,4,5,6,7"           # 使用的 GPU
-#   export ROLLOUT_WORKERS=14            # Rollout worker 数量
-#   export GAMES_PER_ROLLOUT=4           # 每个 rollout 的游戏数
-#   export MAX_ITERATIONS=10000          # 最大迭代次数
+#   export SKIP_PRETRAIN=1               # 跳过预训练
 #
 # 使用方式:
-#   bash train.sh                        # 使用默认配置
-#   GPUS="1,2" bash train.sh             # 使用 GPU 1,2
-#   ROLLOUT_WORKERS=8 bash train.sh      # 使用 8 个 workers
+#   bash train.sh                        # 完整流程（预训练 + RL）
+#   SKIP_PRETRAIN=1 bash train.sh        # 跳过预训练，只运行 RL
 
 set -e
 
 # 默认配置
-GPUS=${GPUS:-"1,2,3,4,5,6,7"}
-ROLLOUT_WORKERS=${ROLLOUT_WORKERS:-24}
-GPUS_PER_WORKER=${GPUS_PER_WORKER:-0.25}
-TRAINER_GPUS=${TRAINER_GPUS:-0.5}
-GAMES_PER_ROLLOUT=${GAMES_PER_ROLLOUT:-8}
-MAX_ITERATIONS=${MAX_ITERATIONS:-10000}
+GPUS=${GPUS:-"0,1,2,3,4,5,6,7"}
+CONFIG_FILE=${CONFIG_FILE:-"config/default.yaml"}
+SKIP_PRETRAIN=${SKIP_PRETRAIN:-0}
 
 echo "============================================================"
-echo "  Orbit Wars - Ray 分布式训练"
+echo "  Orbit Wars 训练启动器（自动化）"
 echo "============================================================"
 echo "可见 GPU: $GPUS"
-echo "Rollout Workers: $ROLLOUT_WORKERS"
-echo "GPU per Worker: $GPUS_PER_WORKER"
-echo "Trainer GPU: $TRAINER_GPUS"
-echo "Games per Rollout: $GAMES_PER_ROLLOUT"
-echo "Max Iterations: $MAX_ITERATIONS"
-echo "总并行游戏: $((ROLLOUT_WORKERS * GAMES_PER_ROLLOUT)) 局"
+echo "配置文件: $CONFIG_FILE"
+echo "跳过预训练: $SKIP_PRETRAIN"
 echo "============================================================"
 echo ""
 
+# 激活虚拟环境
+cd "$(dirname "$0")/../"
+source .venv/bin/activate
+cd training
+
+echo "自动化训练流程："
+echo "  1. 检查专家数据"
+if [ "$SKIP_PRETRAIN" = "0" ]; then
+    echo "  2. 专家数据预训练（Ray 多GPU 分布式）"
+    echo "  3. 自动评估质量"
+fi
+echo "  $((3 + SKIP_PRETRAIN)). Ray 分布式强化学习（多GPU PPO）"
+echo ""
+
+# 检查专家数据
+EXPERT_DATA_DIR="../data/expert_demonstrations"
+if [ ! -d "$EXPERT_DATA_DIR" ] || [ -z "$(ls -A $EXPERT_DATA_DIR 2>/dev/null)" ]; then
+    echo "⚠️  未找到专家数据: $EXPERT_DATA_DIR"
+    echo "跳过预训练，直接运行强化学习..."
+    SKIP_PRETRAIN=1
+fi
+
 # 清理旧进程
 echo "[清理] 停止旧进程..."
+pkill -9 -f "train_with_expert.py" 2>/dev/null || true
 pkill -9 -f "train_ray.py" 2>/dev/null || true
-rm -rf /data2/solo/Orbit-Wars/training/.ray_temp 2>/dev/null || true
+rm -rf .ray_temp 2>/dev/null || true
 sleep 2
 
-# 启动训练
-echo "[启动] 开始训练..."
-CUDA_VISIBLE_DEVICES=$GPUS python train_ray.py \
-  --rollout-workers $ROLLOUT_WORKERS \
-  --gpus-per-worker $GPUS_PER_WORKER \
-  --trainer-gpus $TRAINER_GPUS \
-  --games-per-rollout $GAMES_PER_ROLLOUT \
-  --max-iterations $MAX_ITERATIONS \
-  --no-ray-redis
+echo "✅ 准备就绪，开始训练..."
+echo ""
+
+# 启动完整训练流程
+if [ "$SKIP_PRETRAIN" = "1" ]; then
+    echo "跳过预训练，直接运行强化学习..."
+    CUDA_VISIBLE_DEVICES=$GPUS python train_ray.py \
+        --config "$CONFIG_FILE" \
+        --skip-pretrain
+else
+    echo "运行完整流程（预训练 + RL）..."
+    CUDA_VISIBLE_DEVICES=$GPUS python train_with_expert.py \
+        --config "$CONFIG_FILE"
+fi
 
 echo ""
 echo "✅ 训练完成"

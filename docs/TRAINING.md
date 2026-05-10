@@ -1,84 +1,132 @@
-# Orbit Wars 训练快速启动
+# 训练配置说明
 
-## 快速开始
+## 🔧 配置项
 
-### 1. 测试环境
+### 专家数据预训练配置
+
+在 `training/config/expert_pretraining.yaml` 中配置：
+
+```yaml
+expert_data:
+  # 基础配置
+  enabled: true                        # 启用专家数据预训练
+  data_dir: data/expert_demonstrations  # 数据目录
+
+  # 训练配置
+  num_pretrain_iterations: 100         # ⭐ 最大训练轮数
+  pretrain_batch_size: 256             # 批次大小
+  pretrain_learning_rate: 1e-4         # 学习率
+  behavior_clone_loss_coef: 1.0        # 损失系数
+
+  # Ray 分布式配置
+  num_pretrain_workers: 4              # ⭐ Worker 数量
+  gpus_per_worker: 0.5                 # ⭐ 每个 Worker GPU 数量
+
+  # 自动化配置
+  auto_proceed: true                   # ⭐ 自动继续（不中断）
+```
+
+## 📊 资源使用
+
+### 预训练阶段（Ray 分布式）
+
+使用 **Ray 多 GPU 并行**：
+
+```
+Worker 0: GPU 0.0
+Worker 1: GPU 0.5
+Worker 2: GPU 1.0
+Worker 3: GPU 1.5
+```
+
+- 总 GPU: 约 2 个
+- 每个Worker独立训练
+- 自动聚合梯度
+
+### 强化学习阶段（Ray 分布式）
+
+```
+Rollout Workers: 8 个
+每个 Worker: 0.25 GPU
+Trainer: 1 个完整 GPU
+```
+
+## ⚙️ 调整 GPU 数量
+
+### 方案 1: 调整 Worker 数量
+
+```yaml
+expert_data:
+  num_pretrain_workers: 8      # 增加到 8 个
+  gpus_per_worker: 0.25        # 每个 Worker 0.25 GPU
+```
+总 GPU: 8 × 0.25 = 2 个
+
+### 方案 2: 调整每 Worker GPU
+
+```yaml
+expert_data:
+  num_pretrain_workers: 4      # 保持 4 个
+  gpus_per_worker: 1.0         # 每个 Worker 1 个完整 GPU
+```
+总 GPU: 4 × 1.0 = 4 个
+
+## 🚀 训练命令
+
+### 完整训练（推荐）
 
 ```bash
-cd training
-./test_training.sh
+./train.sh
 ```
 
-预期输出：
-```
-✓ 所有测试通过！训练系统准备就绪。
-```
+自动执行：
+1. 生成数据（如需要）
+2. Ray 分布式预训练
+3. 自动评估
+4. Ray 分布式强化学习
 
-### 2. 开始训练
+### 单独预训练
 
-**单卡训练：**
 ```bash
-cd training
-python core/train.py
+python training/train_with_expert.py \
+    --config training/config/expert_pretraining.yaml
 ```
 
-**8卡分布式训练（推荐）：**
-```bash
-cd training
-./train_8gpu.sh
+## 📈 训练进度
+
+### 预训练
+
+```
+--- 迭代 1/100 ---
+  训练 4 个 workers...
+  聚合模型参数...
+  Train Loss: 2.345 | Val Loss: 2.412
+  ✓ 保存 checkpoint: training/checkpoints/pretrain_iter_50.pkl
 ```
 
-**自定义GPU数量：**
-```bash
-cd training
-NUM_GPUS=4 ./train_ddp.sh
+### 强化学习
+
+```
+Iteration 100 | Reward: 125.3 | Win Rate: 0.52
+Iteration 200 | Reward: 156.7 | Win Rate: 0.58
 ```
 
-### 3. 监控训练
+## 💾 输出文件
 
-训练日志会自动上传到SwanLab，可以在浏览器中查看训练进度。
+### Checkpoints
 
-Checkpoint保存在 `checkpoints/` 目录。
-
-### 4. 提交模型
-
-训练完成后，模型会自动保存为 `model.pt`，可直接用于Kaggle提交。
-
-## 系统配置
-
-- **GPU**: 8x NVIDIA H20-3e (每张143GB显存)
-- **PyTorch**: 2.5.1+cu121
-- **训练框架**: PPO + 自我博弈
-- **模型参数**: 1,604,950
-
-## 性能优化
-
-当前配置针对8卡H20优化：
-- 并行游戏数: 128
-- 批次大小: 2048
-- 每卡处理约16个并行游戏
-
-可根据硬件调整 `training/config/default.yaml` 中的参数。
-
-## 故障排查
-
-**问题**: CUDA错误
-```bash
-# 检查GPU状态
-nvidia-smi
-
-# 重新安装PyTorch
-uv pip install "torch>=2.5.0,<2.6" --index-url https://download.pytorch.org/whl/cu121
+```
+training/checkpoints/
+├── pretrain_iter_50.pkl        # 预训练中间检查点
+├── pretrain_iter_100.pkl       # 预训练中间检查点
+├── pretrained_model.pkl        # 预训练最终模型
+├── iter_100.pkl                # RL 检查点
+├── iter_200.pkl                # RL 检查点
+└── best_model.pkl              # 最佳模型
 ```
 
-**问题**: 导入错误
-```bash
-# 确保在正确的目录
-cd training
-python core/train.py
-```
+### SwanLab
 
-**问题**: 显存不足
-- 减少 `num_parallel_games`
-- 减少 `batch_size`
-- 减少模型 `d_model`
+- 实时查看训练曲线
+- 对比不同实验
+- 监控 GPU 使用

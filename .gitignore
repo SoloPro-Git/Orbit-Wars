@@ -15,3 +15,6 @@ wheels/
 training/config/swanlab_key.txt
 training/logs/*
 training/.ray_temp/
+replay_*.html
+data/expert_demonstrations/*
+training/checkpoints/*
