@@ -157,7 +157,7 @@ class OrbitWarsPredictor:
 
         # ---- 7. Convert to numpy ----
         target_logits_np = target_logits.cpu().numpy()  # [1, N_owned, N_planets]
-        num_ships_np = num_ships_out.cpu().numpy()  # [1, N_owned, 1] (absolute ship counts)
+        num_ships_np = num_ships_out.cpu().numpy()  # [1, N_owned, 1] (sigmoid ratio)
 
         # Remove batch dim
         if target_logits_np.shape[1] == 0:
@@ -186,19 +186,7 @@ class OrbitWarsPredictor:
             if int(owner) == player_id:
                 owned_planets.append(planet_dict)
 
-        # ---- 9. Prepare num_ships_raw for decode_actions ----
-        # 模型输出 num_ships_out 已经是绝对数量（sigmoid * owned_ships）
-        # decode_actions 期望 [0,1] 比例值，所以需要转换回比例
-        num_ships_raw_for_decode = np.zeros_like(num_ships_np)
-        for i, src in enumerate(owned_planets):
-            src_ships = src.get("ships", 0)
-            if src_ships > 0:
-                # 将绝对数量转换回比例（供 decode_actions 使用）
-                num_ships_raw_for_decode[i, 0] = num_ships_np[i, 0] / src_ships
-            else:
-                num_ships_raw_for_decode[i, 0] = 0.0
-
-        # ---- 10. Decode actions ----
+        # ---- 9. Decode actions ----
         # 添加边界检查
         if len(owned_planets) == 0 or len(all_planets) == 0:
             return []
@@ -211,10 +199,10 @@ class OrbitWarsPredictor:
         try:
             actions = decode_actions(
                 target_logits=target_logits_np,
-                num_ships_raw=num_ships_raw_for_decode,
+                num_ships_raw=num_ships_np,
                 owned_planets=owned_planets,
                 all_planets=all_planets,
-                threshold=0.01,  # 降低阈值，让模型更容易行动
+                threshold=0.1,
             )
         except Exception as e:
             print(f"[Predictor] Decode actions error: {e}")

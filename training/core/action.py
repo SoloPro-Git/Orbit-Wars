@@ -134,7 +134,8 @@ def sample_actions(
     target_logits: np.ndarray,  # [N_owned, N_all_planets]
     num_ships_raw: np.ndarray,  # [N_owned, 1] sigmoid output
     temperature: float = 1.0,
-) -> tuple[np.ndarray, np.ndarray]:
+    return_log_probs: bool = False,
+) -> tuple[np.ndarray, np.ndarray] | tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Sample actions from policy distribution (for training).
 
     Uses Gumbel-Softmax trick for target sampling and adds Gaussian noise
@@ -145,21 +146,35 @@ def sample_actions(
     """
     n_owned, n_planets = target_logits.shape
 
-    # Gumbel-Softmax sampling for targets
+    # Gumbel-Max sampling for targets
     if temperature <= 0:
         target_indices = np.argmax(target_logits, axis=-1)
+        logits_max = target_logits.max(axis=-1, keepdims=True)
+        stable_logits = target_logits - logits_max
+        log_softmax = stable_logits - np.log(np.exp(stable_logits).sum(axis=-1, keepdims=True) + 1e-10)
+        target_log_prob = log_softmax[np.arange(n_owned), target_indices]
     else:
         # Generate Gumbel noise
         gumbel_noise = -np.log(-np.log(np.random.uniform(0, 1, size=target_logits.shape) + 1e-20) + 1e-20)
         # Apply temperature scaling + Gumbel noise, then argmax
         perturbed_logits = target_logits / temperature + gumbel_noise
         target_indices = np.argmax(perturbed_logits, axis=-1)
+        scaled = target_logits / max(temperature, 1e-6)
+        scaled_max = scaled.max(axis=-1, keepdims=True)
+        log_softmax = scaled - scaled_max - np.log(np.exp(scaled - scaled_max).sum(axis=-1, keepdims=True) + 1e-10)
+        target_log_prob = log_softmax[np.arange(n_owned), target_indices]
 
     # Add Gaussian noise for ship count exploration
     ship_noise = np.random.normal(0, 0.1, size=num_ships_raw.shape)
     num_ships = np.clip(num_ships_raw + ship_noise, 0.0, 1.0)
 
-    return target_indices, num_ships
+    if not return_log_probs:
+        return target_indices, num_ships
+
+    sigma = 0.15
+    ship_log_prob = -0.5 * (((num_ships - num_ships_raw) / sigma) ** 2).squeeze(-1)
+    total_log_prob = target_log_prob + ship_log_prob
+    return target_indices, num_ships, total_log_prob
 
 
 def compute_action_log_probs(

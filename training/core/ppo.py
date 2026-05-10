@@ -255,6 +255,7 @@ class PPOTrainer:
         batch_ps = self._pad_and_index(planet_ships, indices).to(self.device)
         batch_ti = self._pad_long_and_index(target_indices, indices).to(self.device)
         batch_ns = self._pad_and_index(num_ships_actual, indices).to(self.device)
+        batch_action_mask = self._build_action_mask(target_indices, indices).to(self.device)
 
         batch_old_lp = old_log_probs[indices]
         batch_adv = advantages[indices]
@@ -273,7 +274,7 @@ class PPOTrainer:
 
         # Policy loss
         log_probs = self._compute_log_probs(
-            target_logits, num_ships_pred, batch_ti, batch_ns
+            target_logits, num_ships_pred, batch_ti, batch_ns, batch_action_mask
         )
         ratio = torch.exp(log_probs - batch_old_lp)
         surr1 = ratio * batch_adv
@@ -286,7 +287,7 @@ class PPOTrainer:
         value_loss = F.mse_loss(value, batch_ret)
 
         # Entropy bonus
-        entropy = self._compute_entropy(target_logits)
+        entropy = self._compute_entropy(target_logits, batch_action_mask)
         entropy_loss = -self.config.entropy_coef * entropy
 
         # Opponent prediction loss (auxiliary)
@@ -368,6 +369,7 @@ class PPOTrainer:
         num_ships_pred: torch.Tensor,
         target_indices: torch.Tensor,
         num_ships_actual: torch.Tensor,
+        action_mask: torch.Tensor,
     ) -> torch.Tensor:
         """计算动作 log probability。所有值都在 sigmoid 比例空间。
 
@@ -394,20 +396,33 @@ class PPOTrainer:
 
         # 合并 log probs 并取每样本平均
         log_prob = target_log_prob + ships_log_prob.squeeze(-1)  # [B, N_owned]
-        return log_prob.mean(dim=-1)  # [batch]
+        masked = log_prob * action_mask.float()
+        denom = action_mask.float().sum(dim=-1).clamp(min=1.0)
+        return masked.sum(dim=-1) / denom  # [batch]
 
-    def _compute_entropy(self, target_logits: torch.Tensor) -> torch.Tensor:
+    def _compute_entropy(self, target_logits: torch.Tensor, action_mask: torch.Tensor) -> torch.Tensor:
         """计算策略熵。"""
         probs = F.softmax(target_logits, dim=-1)
         log_probs = F.log_softmax(target_logits, dim=-1)
-        entropy = -(probs * log_probs).sum(dim=-1)
-        return entropy.mean()
+        entropy = -(probs * log_probs).sum(dim=-1) * action_mask.float()
+        denom = action_mask.float().sum().clamp(min=1.0)
+        return entropy.sum() / denom
 
     def _compute_opponent_loss(self, opp_target, opp_num_ships, indices):
         """对手预测辅助损失 (placeholder, 需要 opp_target_indices)。"""
         # 简单的 entropy 正则化
-        entropy = self._compute_entropy(opp_target)
+        mask = torch.ones(opp_target.shape[:2], dtype=torch.bool, device=opp_target.device)
+        entropy = self._compute_entropy(opp_target, mask)
         return -entropy * 0.1
+
+    @staticmethod
+    def _build_action_mask(tensors: list[torch.Tensor], indices: torch.Tensor) -> torch.Tensor:
+        selected = [tensors[i] for i in indices.cpu().tolist()]
+        max_len = max(s.size(0) for s in selected)
+        mask = torch.zeros(len(selected), max_len, dtype=torch.bool)
+        for i, s in enumerate(selected):
+            mask[i, :s.size(0)] = True
+        return mask
 
     # --- Padding utilities ---
 

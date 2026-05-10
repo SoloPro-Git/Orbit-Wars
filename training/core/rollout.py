@@ -377,19 +377,10 @@ class RolloutWorker:
 
                 # 采样或argmax
                 if pid == player_id:
-                    target_indices, sampled_ships = sample_actions(
-                        target_logits, num_ships, temperature=temperature
+                    target_indices, sampled_ships, sampled_log_probs = sample_actions(
+                        target_logits, num_ships, temperature=temperature, return_log_probs=True
                     )
-                    # 计算 log_prob: target categorical + ships gaussian
-                    log_softmax = np.log(
-                        np.exp(target_logits) / np.exp(target_logits).sum(axis=-1, keepdims=True) + 1e-10
-                    )
-                    target_log_prob = log_softmax[
-                        np.arange(len(target_indices)), target_indices
-                    ]
-                    sigma = 0.15
-                    ship_log_prob = -0.5 * ((sampled_ships.squeeze() - num_ships.squeeze()) / sigma) ** 2
-                    log_prob = float((target_log_prob + ship_log_prob).mean())
+                    log_prob = float(np.mean(sampled_log_probs))
                 else:
                     target_indices = np.argmax(target_logits, axis=-1)
                     sampled_ships = num_ships.squeeze(-1)
@@ -409,7 +400,7 @@ class RolloutWorker:
                     owned_planets_dicts = owned_planets_dicts[:n_owned]
 
                 actions = self._indices_to_kaggle_actions(
-                    target_indices, sampled_ships, owned_planets_dicts, all_planets_dicts
+                    target_indices, sampled_ships, owned_planets_dicts, all_planets_dicts, target_logits=target_logits
                 )
                 all_actions[pid] = actions
 
@@ -561,6 +552,7 @@ class RolloutWorker:
         owned_planets: list[dict],
         all_planets: list[dict],
         threshold_ratio: float = 0.1,
+        target_logits: np.ndarray | None = None,
     ) -> list[list]:
         """将 target indices + sigmoid 比例转为 kaggle 动作格式。
 
@@ -593,7 +585,23 @@ class RolloutWorker:
                 continue
             tgt = all_planets[tgt_idx]
             angle = math.atan2(tgt["y"] - src["y"], tgt["x"] - src["x"])
-            actions.append([src["id"], angle, int(ships)])
+            primary_ships = int(ships)
+            actions.append([src["id"], angle, primary_ships])
+
+            # 允许同一星球二次发射（规则允许多次发射），用于缓解“单动作”限制。
+            # 条件：剩余飞船充足，且模型对第二目标也有较强偏好。
+            if target_logits is not None and i < target_logits.shape[0]:
+                src_total = float(src["ships"])
+                rem = int(src_total) - primary_ships
+                if rem >= 8 and ratio >= 0.35:
+                    top2 = np.argsort(target_logits[i])[-2:]
+                    alt_idx = int(top2[0]) if int(top2[1]) == tgt_idx else int(top2[1])
+                    if 0 <= alt_idx < len(all_planets) and alt_idx != tgt_idx:
+                        alt = all_planets[alt_idx]
+                        alt_angle = math.atan2(alt["y"] - src["y"], alt["x"] - src["x"])
+                        split = max(1, int(rem * 0.4))
+                        if split >= 3:
+                            actions.append([src["id"], alt_angle, split])
         return actions
 
     @staticmethod

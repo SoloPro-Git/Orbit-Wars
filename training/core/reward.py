@@ -125,6 +125,26 @@ def _get_comet_ids(obs: dict) -> set:
     return set(obs.get("comet_planet_ids", []))
 
 
+def _get_comet_remaining_life(obs: dict) -> dict[int, int]:
+    """Return comet remaining lifetime map: comet_planet_id -> remaining steps.
+
+    Uses observation field `comets[{planet_ids, paths, path_index}]`.
+    """
+    remaining: dict[int, int] = {}
+    comet_groups = obs.get("comets", [])
+    for g in comet_groups:
+        planet_ids = g.get("planet_ids", [])
+        paths = g.get("paths", [])
+        path_index = int(g.get("path_index", 0))
+        for i, pid in enumerate(planet_ids):
+            if i >= len(paths):
+                continue
+            path = paths[i]
+            life = max(len(path) - path_index, 0)
+            remaining[int(pid)] = life
+    return remaining
+
+
 def get_player_total_ships(obs: dict, player_id: int) -> int:
     """Total ships = ships on owned planets + ships in owned fleets."""
     planets = _get_planets_array(obs)
@@ -303,6 +323,7 @@ class RewardCalculator:
         planets_after = _get_planets_array(obs_after)
         fleets_after = _get_fleets_array(obs_after)
         comet_ids = _get_comet_ids(obs_after)
+        comet_remaining_life = _get_comet_remaining_life(obs_after)
 
         # --- 1. Capture reward ---
         capture_reward = self._compute_capture_reward(
@@ -332,7 +353,7 @@ class RewardCalculator:
         # --- 6. Comet ROI ---
         comet_reward = self._compute_comet_roi(
             planets_before, planets_after, comet_ids, player_id, turn,
-            obs_after.get("fleets", [])
+            comet_remaining_life,
         )
 
         # Weighted sum
@@ -426,9 +447,10 @@ class RewardCalculator:
         lost = expected - actual
         lost = max(lost, 0.0)
 
-        # Normalise by total ships to keep in range
-        total = max(our_planet_ships_before, 1.0)
-        return -lost / total
+        # Keep consistent with actual launch scale. If we launched few ships,
+        # penalise relative to launch size to reduce reward-noise.
+        denom = max(float(launched), our_planet_ships_before, 1.0)
+        return -lost / denom
 
     def _compute_defense_reward(self, obs_before: dict, obs_after: dict,
                                 player_id: int, turn: int) -> float:
@@ -458,35 +480,49 @@ class RewardCalculator:
                 float(row[_P_SHIPS]) if int(row[_P_OWNER]) == player_id else 0.0
             )
 
+        # Build owners-after map
+        owners_after = {int(r[_P_ID]): int(r[_P_OWNER]) for r in planets_after}
+
+        # Use trajectory-aware proxy for "incoming attack":
+        # fleet is considered threatening a planet if its motion ray intersects
+        # that planet in front of current position.
+        def _fleet_threatens_planet(fleet_row: np.ndarray, planet_row: np.ndarray) -> bool:
+            fx, fy = float(fleet_row[_F_X]), float(fleet_row[_F_Y])
+            ang = float(fleet_row[_F_ANGLE])
+            px, py = float(planet_row[_P_X]), float(planet_row[_P_Y])
+            pr = float(planet_row[_P_RADIUS])
+
+            vx = np.cos(ang)
+            vy = np.sin(ang)
+            dx = px - fx
+            dy = py - fy
+            proj = dx * vx + dy * vy
+            if proj <= 0:
+                return False
+            perp = abs(dx * vy - dy * vx)
+            return perp <= (pr + 1.2)
+
         reward = 0.0
         for row in our_planets_before:
             pid = int(row[_P_ID])
             ships_before = float(row[_P_SHIPS])
+            owner_after = owners_after.get(pid, -1)
 
-            # Check if enemy fleets were heading to this planet
+            # Check if enemy fleets were likely heading to this planet
             if fleets_before.shape[0] > 0:
                 enemy_mask = fleets_before[:, _F_OWNER] != player_id
                 enemy_fleets = fleets_before[enemy_mask]
-                # Fleets whose from_planet is this planet (they arrived)
-                # More accurately, fleets that could have arrived at this planet
-                # Since we don't have exact target, check if any enemy fleet
-                # originated near this planet (proxy for incoming)
-                near_planet = np.zeros(enemy_fleets.shape[0], dtype=bool)
+                threatened = False
                 if enemy_fleets.shape[0] > 0:
-                    # Simple heuristic: if enemy fleet was heading toward our planet
-                    # we consider it an attack attempt
-                    for i, f in enumerate(enemy_fleets):
-                        fx, fy = f[_F_X], f[_F_Y]
-                        px, py = row[_P_X], row[_P_Y]
-                        dist = np.sqrt((fx - px) ** 2 + (fy - py) ** 2)
-                        # If fleet was within reasonable attack distance
-                        if dist < 15.0:
-                            near_planet[i] = True
+                    for f in enemy_fleets:
+                        if _fleet_threatens_planet(f, row):
+                            threatened = True
+                            break
 
-                if near_planet.any():
+                if threatened:
                     # We were attacked but still hold the planet
-                    survived = ships_after.get(pid, 0.0)
-                    if survived > 0 and ships_before > 0:
+                    survived = ships_after.get(pid, 0.0) if owner_after == player_id else 0.0
+                    if owner_after == player_id and survived > 0 and ships_before > 0:
                         defense_ratio = min(survived / ships_before, 1.0)
                         value = planet_economic_value(row, turn, self.max_turns)
                         reward += value * defense_ratio
@@ -497,19 +533,40 @@ class RewardCalculator:
                               obs_after: dict, player_id: int) -> float:
         """Penalty for ships stuck in transit (frozen assets).
 
-        cost = -in_transit_ships * (1 - 0.99) / total_ships
-             = -in_transit_ships * 0.01 / total_ships
+        仅惩罚“低 ROI 在途舰队”，避免抑制正常长线运输和远程打击。
         """
         total = get_player_total_ships(obs_after, player_id)
         if total <= 0:
             return 0.0
 
-        in_transit = 0.0
+        planets = _get_planets_array(obs_after)
+        if planets.shape[0] == 0:
+            return 0.0
+        planet_by_id = {int(r[_P_ID]): r for r in planets}
+
+        low_roi_transit = 0.0
         if fleets_after.shape[0] > 0:
             mask = fleets_after[:, _F_OWNER] == player_id
-            in_transit = float(fleets_after[mask, _F_SHIPS].sum())
+            own_fleets = fleets_after[mask]
+            for f in own_fleets:
+                ships = float(f[_F_SHIPS])
+                if ships <= 0:
+                    continue
+                from_pid = int(f[_F_FROM])
+                src = planet_by_id.get(from_pid)
+                # 无法识别来源时给轻微惩罚
+                if src is None:
+                    low_roi_transit += ships * 0.25
+                    continue
+                # 来源低产星球发出的大兵团更可能是“低效在途”
+                src_prod = float(src[_P_PRODUCTION])
+                src_ships = float(src[_P_SHIPS])
+                if src_prod <= 1.0 and ships > max(12.0, src_ships * 0.5):
+                    low_roi_transit += ships
+                else:
+                    low_roi_transit += ships * 0.15
 
-        return -in_transit * 0.01 / total
+        return -low_roi_transit * 0.005 / total
 
     def _compute_production_advantage(self, obs_before: dict,
                                       obs_after: dict,
@@ -562,7 +619,7 @@ class RewardCalculator:
     def _compute_comet_roi(self, planets_before: np.ndarray,
                            planets_after: np.ndarray,
                            comet_ids: set, player_id: int,
-                           turn: int, fleets_raw: list) -> float:
+                           turn: int, comet_remaining_life: dict[int, int]) -> float:
         """Reward for capturing comets with positive ROI."""
         if not comet_ids:
             return 0.0
@@ -582,7 +639,10 @@ class RewardCalculator:
             owner_after = int(row[_P_OWNER])
             owner_before = owners_before.get(pid, -1)
             if owner_after == player_id and owner_before != player_id:
-                roi = comet_roi(row.tolist(), turn, fleets_raw, self.max_turns)
+                production = float(row[_P_PRODUCTION])
+                ships_on_comet = float(row[_P_SHIPS])
+                remaining_life = float(comet_remaining_life.get(pid, 0))
+                roi = production * remaining_life - ships_on_comet
                 if roi > 0:
                     reward += roi
 

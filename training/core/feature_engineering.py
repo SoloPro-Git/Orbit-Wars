@@ -92,8 +92,11 @@ class FeatureEngineer:
                     "radius": float(ip_radius),
                 }
 
-        # ---------- 找到母星作为坐标偏移原点 ----------
-        home_x, home_y = self._find_home_planet(raw_planets, player_id)
+        # ---------- 固定参考原点 ----------
+        # 使用“初始母星”或中心点，避免中途丢星后坐标系跳变导致分布漂移。
+        home_x, home_y = self._get_stable_reference_origin(
+            raw_planets, raw_initial_planets, player_id
+        )
 
         # ---------- 构建星球列表 ----------
         planets: list[dict] = []
@@ -135,7 +138,9 @@ class FeatureEngineer:
             })
 
         # ---------- 威胁预测 (按 player_id 视角) ----------
-        threat_info = self._compute_threat_features(fleets, planets, turn, player_id)
+        threat_info = self._compute_threat_features(
+            fleets, planets, turn, player_id, angular_velocity, comets_data
+        )
 
         # ---------- 彗星剩余生命 ----------
         comet_remaining = self._compute_comet_remaining(comets_data)
@@ -245,7 +250,7 @@ class FeatureEngineer:
             features[i, 7] = p["radius"] / 10.0
 
             # --- 驻军 ---
-            features[i, 8] = p["ships"] / 100.0
+            features[i, 8] = math.log1p(p["ships"]) / math.log(1000.0)
 
             # --- 产量 ---
             features[i, 9] = p["production"] / 5.0
@@ -296,9 +301,9 @@ class FeatureEngineer:
 
             # --- 威胁特征 ---
             ti = threat_info.get(pid, {})
-            features[i, 13] = ti.get("incoming_enemy_ships", 0.0) / 100.0
+            features[i, 13] = math.log1p(ti.get("incoming_enemy_ships", 0.0)) / math.log(1000.0)
             features[i, 14] = ti.get("incoming_enemy_eta", 50.0) / 50.0
-            features[i, 15] = ti.get("incoming_friendly_ships", 0.0) / 100.0
+            features[i, 15] = math.log1p(ti.get("incoming_friendly_ships", 0.0)) / math.log(1000.0)
             features[i, 16] = ti.get("incoming_friendly_eta", 50.0) / 50.0
 
             # threat_level = enemy_strength / (garrison + eta * production + eps)
@@ -367,7 +372,7 @@ class FeatureEngineer:
             features[i, 7] = f["angle"] / math.pi
 
             # 舰船数
-            features[i, 8] = f["ships"] / 100.0
+            features[i, 8] = math.log1p(f["ships"]) / math.log(1000.0)
 
             # 速度 (根据公式计算)
             speed = self._fleet_speed(f["ships"])
@@ -435,9 +440,9 @@ class FeatureEngineer:
             elif f["owner"] != -1:
                 enemy_ships += f["ships"]
 
-        feat[2] = own_ships / 500.0
+        feat[2] = math.log1p(own_ships) / math.log(2000.0)
         feat[3] = own_production / 25.0
-        feat[4] = enemy_ships / 500.0
+        feat[4] = math.log1p(enemy_ships) / math.log(3000.0)
         feat[5] = own_planet_count / 40.0
         feat[6] = num_players / 4.0
         feat[7] = max(self.max_turns - turn, 0) / 500.0
@@ -515,6 +520,8 @@ class FeatureEngineer:
         planets: list[dict],
         turn: int,
         player_id: int,
+        angular_velocity: float = 0.0,
+        comets_data: list[dict] | None = None,
     ) -> dict[int, dict]:
         """
         汇总威胁信息到每个星球，按 player_id 视角区分敌我。
@@ -531,7 +538,9 @@ class FeatureEngineer:
             "is_contested": bool,
         }}
         """
-        predictions = self._predict_fleet_targets(fleets, planets)
+        predictions = self._predict_fleet_targets_dynamic(
+            fleets, planets, turn=turn, angular_velocity=angular_velocity, comets_data=comets_data or []
+        )
         result: dict[int, dict] = {}
 
         for pid, arrivals in predictions.items():
@@ -567,6 +576,78 @@ class FeatureEngineer:
             }
 
         return result
+
+    def _predict_fleet_targets_dynamic(
+        self,
+        fleets: list[dict],
+        planets: list[dict],
+        turn: int,
+        angular_velocity: float,
+        comets_data: list[dict],
+    ) -> dict[int, list[dict]]:
+        """考虑行星公转/彗星路径的动态碰撞外推。"""
+        max_steps = 50
+        predictions: dict[int, list[dict]] = {}
+        comet_pos_by_step: dict[tuple[int, int], tuple[float, float]] = {}
+        for g in comets_data:
+            planet_ids = [int(pid) for pid in g.get("planet_ids", [])]
+            paths = g.get("paths", [])
+            path_index = int(g.get("path_index", 0))
+            for j, pid in enumerate(planet_ids):
+                if j >= len(paths):
+                    continue
+                path = paths[j]
+                if not isinstance(path, (list, np.ndarray)):
+                    continue
+                for s in range(1, max_steps + 1):
+                    idx = path_index + s
+                    if idx < len(path):
+                        xy = path[idx]
+                        if isinstance(xy, (list, np.ndarray)) and len(xy) >= 2:
+                            comet_pos_by_step[(pid, s)] = (float(xy[0]), float(xy[1]))
+
+        for f in fleets:
+            speed = self._fleet_speed(f["ships"])
+            dx = math.cos(f["angle"]) * speed
+            dy = math.sin(f["angle"]) * speed
+            cur_x, cur_y = f["x"], f["y"]
+
+            for step in range(1, max_steps + 1):
+                new_x = cur_x + dx
+                new_y = cur_y + dy
+                if new_x < 0 or new_x > self.board_size or new_y < 0 or new_y > self.board_size:
+                    break
+                if self._segment_intersects_circle(
+                    cur_x, cur_y, new_x, new_y, SUN_CENTER[0], SUN_CENTER[1], self.sun_radius
+                ):
+                    break
+
+                collided = False
+                for p in planets:
+                    px, py = p["x"], p["y"]
+                    if p["is_comet"]:
+                        pos = comet_pos_by_step.get((p["id"], step))
+                        if pos is not None:
+                            px, py = pos
+                    elif p.get("is_orbiting", False):
+                        # 按当前角度往前推 step 步
+                        cur_ang = math.atan2(p["y"] - SUN_CENTER[1], p["x"] - SUN_CENTER[0])
+                        fut_ang = cur_ang + angular_velocity * step
+                        px = SUN_CENTER[0] + p["orbital_radius"] * math.cos(fut_ang)
+                        py = SUN_CENTER[1] + p["orbital_radius"] * math.sin(fut_ang)
+
+                    if self._segment_intersects_circle(cur_x, cur_y, new_x, new_y, px, py, p["radius"]):
+                        predictions.setdefault(p["id"], []).append(
+                            {"fleet_id": f["id"], "owner": f["owner"], "ships": f["ships"], "eta": step}
+                        )
+                        collided = True
+                        break
+
+                if collided:
+                    break
+                cur_x, cur_y = new_x, new_y
+
+        return predictions
 
     # =================================================================
     # 辅助方法
@@ -629,17 +710,20 @@ class FeatureEngineer:
         return True
 
     @staticmethod
-    def _find_home_planet(
-        raw_planets: list, player_id: int,
+    def _get_stable_reference_origin(
+        raw_planets: list, raw_initial_planets: list, player_id: int,
     ) -> tuple[float, float]:
         """
-        找到 owner == player_id 的星球作为母星。
-        如果有多个自有星球，选第一个。如果没有，返回地图中心。
+        使用稳定坐标原点，避免中途丢星导致特征突变：
+        1) 初始观测中 player_id 的起始母星
+        2) 回退为地图中心
         """
+        for p in raw_initial_planets:
+            if int(p[1]) == player_id:
+                return float(p[2]), float(p[3])
         for p in raw_planets:
             if int(p[1]) == player_id:
                 return float(p[2]), float(p[3])
-        # 没有自有星球时，回退到中心
         return SUN_CENTER[0], SUN_CENTER[1]
 
     @staticmethod
