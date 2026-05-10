@@ -17,6 +17,7 @@ from tqdm import tqdm
 from training.core.config import ExpertDataConfig
 from training.core.feature_engineering import FeatureEngineer
 from training.core.model import OrbitWarsModel
+from training.expert.action_labeling import infer_target_planet_id
 from training.expert.data_generator import ExpertDataset
 
 
@@ -48,9 +49,10 @@ class ExpertPretrainer:
         print(f"验证集: {len(self.val_ds)} 样本")
 
         # 创建优化器
+        lr = float(config.pretrain_learning_rate)
         self.optimizer = torch.optim.Adam(
             self.model.parameters(),
-            lr=config.pretrain_learning_rate,
+            lr=lr,
         )
 
         # SwanLab（延迟导入）
@@ -335,22 +337,13 @@ class ExpertPretrainer:
             src_row = owned_id_to_row[from_id]
             src = owned_planets[src_row]
 
-            # 通过角度找到目标星球索引
-            best_target_idx = None
-            best_angle_diff = float("inf")
-
-            for tgt in all_planets_dicts:
-                if tgt["id"] == from_id:
-                    continue
-                dx = tgt["x"] - src["x"]
-                dy = tgt["y"] - src["y"]
-                tgt_angle = np.arctan2(dy, dx)
-                diff = abs(tgt_angle - float(angle))
-                if diff > np.pi:
-                    diff = 2 * np.pi - diff
-                if diff < best_angle_diff:
-                    best_angle_diff = diff
-                    best_target_idx = all_id_to_idx[tgt["id"]]
+            target_pid = infer_target_planet_id(
+                observation=observation,
+                from_planet_id=int(from_id),
+                angle=float(angle),
+                num_ships=float(num_ships),
+            )
+            best_target_idx = all_id_to_idx.get(target_pid) if target_pid is not None else None
 
             if best_target_idx is None:
                 continue

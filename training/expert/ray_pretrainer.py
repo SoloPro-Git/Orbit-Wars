@@ -51,6 +51,7 @@ from training.core.model import OrbitWarsModel
 from training.core.feature_engineering import FeatureEngineer
 from training.core.action import decode_actions
 from training.expert.data_generator import ExpertDataset
+from training.expert.action_labeling import infer_target_planet_id
 from training.core.reward import RewardCalculator, RewardConfig
 
 # ===========================================================================
@@ -324,7 +325,8 @@ class PretrainingWorker:
             print(f"[PretrainingWorker {worker_id}] 初始化 on CPU")
 
         # 加载模型
-        self.model = OrbitWarsModel(model_config, n_planets=40).to(self.device)
+        self.model_n_planets = 40
+        self.model = OrbitWarsModel(model_config, n_planets=self.model_n_planets).to(self.device)
         self.model.train()
 
         # 只加载分配的文件
@@ -463,7 +465,15 @@ class PretrainingWorker:
                     if step % 50 == 0 and iter_valid > 0:
                         pbar.set_postfix(loss=f"{iter_loss / iter_valid:.4f}", valid=iter_valid)
 
-                except Exception:
+                except Exception as e:
+                    msg = str(e)
+                    if (
+                        "CUDA error" in msg
+                        or "device-side assert" in msg
+                        or "index out of range" in msg
+                        or "Target" in msg
+                    ):
+                        raise
                     continue
 
             pbar.close()
@@ -564,7 +574,15 @@ class PretrainingWorker:
                     avg = total_loss / num_valid
                     pbar.set_postfix(loss=f"{avg:.4f}", valid=num_valid)
 
-            except Exception:
+            except Exception as e:
+                msg = str(e)
+                if (
+                    "CUDA error" in msg
+                    or "device-side assert" in msg
+                    or "index out of range" in msg
+                    or "Target" in msg
+                ):
+                    raise
                 continue
 
         pbar.close()
@@ -800,22 +818,15 @@ class PretrainingWorker:
             if from_pid not in id_to_col:
                 continue
 
-            src = all_planets[id_to_col[from_pid]]
-            best_tid = -1
-            best_angle_diff = float("inf")
-            for tgt in all_planets:
-                if tgt["id"] == from_pid:
-                    continue
-                tgt_angle = math.atan2(tgt["y"] - src["y"], tgt["x"] - src["x"])
-                diff = abs(tgt_angle - angle)
-                if diff > math.pi:
-                    diff = 2 * math.pi - diff
-                if diff < best_angle_diff:
-                    best_angle_diff = diff
-                    best_tid = tgt["id"]
+            best_tid = infer_target_planet_id(
+                observation=observation,
+                from_planet_id=from_pid,
+                angle=angle,
+                num_ships=float(ships),
+            )
 
             # 更新标签
-            if best_tid >= 0:
+            if best_tid is not None and best_tid in id_to_col:
                 idx = owned_id_to_idx[from_pid]
                 target_labels[idx] = id_to_col[best_tid]
                 # 计算派遣比例
@@ -827,17 +838,21 @@ class PretrainingWorker:
         target_labels = torch.tensor(target_labels, dtype=torch.long, device=self.device)
         ship_targets = torch.tensor(ship_ratios, dtype=torch.float32, device=self.device).unsqueeze(0).unsqueeze(-1)  # [1, n_owned, 1]
 
-        # 只对有效动作计算损失
-        valid_mask = target_labels >= 0
+        # 只对有效动作计算损失，且目标索引必须在当前 logits 的真实范围内。
+        # 不要只依赖 self.model_n_planets，避免 CE 目标越界导致 CUDA assert。
+        logits_n_planets = int(target_logits.size(-1))
+        valid_mask = (target_labels >= 0) & (target_labels < logits_n_planets)
         if not valid_mask.any():
             return torch.tensor(0.0, device=self.device)
 
         # 1. 目标选择损失（交叉熵）
-        # target_logits: [1, n_owned, n_planets]
+        # target_logits: [1, n_owned, logits_n_planets]
         # 取出有效的 owned planets
         valid_indices = torch.where(valid_mask)[0]
-        valid_logits = target_logits[0, valid_indices, :n_planets]  # [n_valid, n_planets]
+        valid_logits = target_logits[0, valid_indices, :logits_n_planets]  # [n_valid, logits_n_planets]
         valid_targets = target_labels[valid_indices]        # [n_valid]
+        if valid_targets.numel() == 0 or valid_logits.size(-1) <= 1:
+            return torch.tensor(0.0, device=self.device)
 
         target_loss = F.cross_entropy(valid_logits, valid_targets)
 

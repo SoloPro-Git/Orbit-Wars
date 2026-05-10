@@ -314,18 +314,29 @@ class ExpertDataset:
     def split(
         self,
         train_ratio: float = 0.8,
+        seed: int = 42,
     ) -> tuple["ExpertDataset", "ExpertDataset"]:
         """分割数据集为训练集和验证集。
 
         Args:
             train_ratio: 训练集比例。
+            seed: 随机种子（用于可复现随机切分）。
 
         Returns:
             (train_dataset, val_dataset)
         """
-        n_train = int(len(self.data) * train_ratio)
-        train_data = self.data[:n_train]
-        val_data = self.data[n_train:]
+        if len(self.data) == 0:
+            train_data = []
+            val_data = []
+        else:
+            rng = np.random.default_rng(seed)
+            indices = np.arange(len(self.data))
+            rng.shuffle(indices)
+            n_train = int(len(indices) * train_ratio)
+            train_idx = indices[:n_train]
+            val_idx = indices[n_train:]
+            train_data = [self.data[i] for i in train_idx]
+            val_data = [self.data[i] for i in val_idx]
 
         train_ds = ExpertDataset.__new__(ExpertDataset)
         train_ds.data = train_data

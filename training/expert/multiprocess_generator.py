@@ -128,23 +128,19 @@ def save_episode_to_file(
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # IMPORTANT:
+    # Use one-file-per-episode to avoid concurrent append race when multiple
+    # processes finish episodes and write to the same file simultaneously.
     if file_format == "jsonl":
-        # 计算文件编号
-        file_idx = episode_id // 20  # 每 20 局一个文件
-        file_path = output_dir / f"expert_data_{file_idx:04d}.jsonl"
-
-        # 追加模式写入
-        with open(file_path, "a") as f:
+        file_path = output_dir / f"expert_ep_{episode_id:06d}.jsonl"
+        with open(file_path, "w") as f:
             for sample in trajectory:
                 sample_serializable = make_json_serializable(sample)
                 f.write(json.dumps(sample_serializable, ensure_ascii=False) + "\n")
-
     else:  # pkl
         import pickle
-        file_idx = episode_id // 20
-        file_path = output_dir / f"expert_data_{file_idx:04d}.pkl"
-
-        with open(file_path, "ab") as f:  # 二进制追加模式
+        file_path = output_dir / f"expert_ep_{episode_id:06d}.pkl"
+        with open(file_path, "wb") as f:
             pickle.dump(trajectory, f)
 
     return file_path
