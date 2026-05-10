@@ -30,6 +30,9 @@
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 # 禁用 kaggle_environments 的冗长日志
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -38,6 +41,23 @@ os.environ['KAGGLE_ENGINES_LOG_LEVEL'] = '0'
 # ⚠️ 禁用 SwanLab 交互式提示 (必须在导入 swanlab 之前设置)
 os.environ['SWANLAB_NO_INTERACTIVE'] = '1'
 os.environ['SWANLAB_DISABLE_INTERACTIVE'] = '1'
+
+
+# 设置导入路径（支持从 training 目录运行）
+script_dir = Path(__file__).parent.resolve()
+project_root = script_dir.parent.resolve()
+training_dir = script_dir
+
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+if str(training_dir) not in sys.path:
+    sys.path.insert(0, str(training_dir))
+
+os.chdir(project_root)
+
+# 先导入 core 模块以触发 __init__.py 的路径设置
+import core  # noqa: F401
 
 import random
 import time
@@ -61,6 +81,7 @@ from core.feature_engineering import FeatureEngineer
 from core.reward import RewardCalculator, RewardConfig
 from core.ppo import PPOTrainer, PPOBuffer
 from core.rollout import RolloutWorker, parallel_rollout
+from core.opponent_pool import OpponentPool, OpponentPoolConfig
 
 import logging
 logging.getLogger('kaggle_environments').setLevel(logging.WARNING)
@@ -83,7 +104,6 @@ class TrainingActor:
         self,
         config_path: str,
         device: str = "cuda:0",
-        swanlab_api_key: Optional[str] = None,
     ):
         print("[TrainingActor] 初始化...")
 
@@ -108,12 +128,23 @@ class TrainingActor:
             max_players=4,
         ).to(self.device)
 
+        pretrained_ckpt = Path("training/checkpoints/pretrained_model.pkl")
+        if self.config.expert_data.enabled and pretrained_ckpt.exists():
+            try:
+                ckpt = torch.load(pretrained_ckpt, map_location="cpu", weights_only=False)
+                state_dict = ckpt.get("model_state_dict", ckpt) if isinstance(ckpt, dict) else ckpt
+                self.model.load_state_dict(state_dict, strict=False)
+                print(f"[TrainingActor] 已加载预训练权重: {pretrained_ckpt}")
+            except Exception as e:
+                print(f"[TrainingActor] 预训练权重加载失败: {e}")
+
         # 训练器
         self.trainer = PPOTrainer(self.model, self.config.training, device=self.device)
 
         # SwanLab
         self.swanlab = None
-        if swanlab_api_key:
+        # 检查环境变量中是否有 API key
+        if os.environ.get('SWANLAB_API_KEY'):
             try:
                 import swanlab
                 self.swanlab = swanlab
@@ -128,7 +159,6 @@ class TrainingActor:
                         "ray": vars(self.config.ray),
                     },
                     mode=getattr(self.config.training, 'swanlab_mode', 'cloud'),
-                    api_key=swanlab_api_key,
                     logdir=None,
                     public=False,
                     launcher=False,  # 禁用交互式 launcher
@@ -297,7 +327,32 @@ class RolloutActor:
             use_gpu_features=use_gpu_features,
         )
 
+        pool_config = OpponentPoolConfig(
+            pool_size=self.config.self_play.pool_size,
+            sample_expert_ratio=self.config.self_play.sample_expert_ratio,
+            sample_heuristic_ratio=self.config.self_play.sample_heuristic_ratio,
+            sample_checkpoint_ratio=self.config.self_play.sample_checkpoint_ratio,
+            checkpoint_latest_ratio=self.config.self_play.checkpoint_latest_ratio,
+            checkpoint_best_ratio=self.config.self_play.checkpoint_best_ratio,
+            checkpoint_random_ratio=self.config.self_play.checkpoint_random_ratio,
+            add_to_pool_win_rate=self.config.self_play.add_to_pool_win_rate,
+            diversity_threshold=self.config.self_play.diversity_threshold,
+        )
+        self.opponent_pool = OpponentPool(config=pool_config, pool_dir="checkpoints/pool")
+        self.opponent_pool.load_index()
+        self.opponent_pool.register_default_experts()
+        self._refresh_opponent_checkpoints()
+
         print(f"[RolloutActor {worker_id}] 初始化完成")
+
+    def _refresh_opponent_checkpoints(self) -> None:
+        self.opponent_pool.add_checkpoint_dir("training/checkpoints", elo=580, generation=0)
+        self.opponent_pool.add_checkpoint_dir(
+            "checkpoints",
+            patterns=("model_iter_*.pt", "model_final.pt"),
+            elo=600,
+            generation=0,
+        )
 
     def rollout(
         self,
@@ -330,12 +385,14 @@ class RolloutActor:
         # 执行 rollout
         t_rollout = time.time()
         print(f"[DEBUG][RolloutActor {self.worker_id}] 开始 parallel_rollout()...")
+        self._refresh_opponent_checkpoints()
         buffer = parallel_rollout(
             self.worker,
             num_games=num_games,
             num_players=num_players,
             temperature=temperature,
             show_progress=False,
+            opponent_pool=self.opponent_pool,
         )
         print(f"[DEBUG][RolloutActor {self.worker_id}] parallel_rollout() 完成，耗时 {time.time()-t_rollout:.2f}s，buffer size={len(buffer)}")
 
@@ -380,31 +437,33 @@ def main():
     parser.add_argument("--max-iterations", type=int, default=None,
                         help="最大迭代次数 (覆盖配置文件)")
     parser.add_argument("--config", default="config/default.yaml",
-                        help="配置文件路径")
+                        help="配置文件路径（相对于脚本目录或项目根目录）")
     parser.add_argument("--no-ray-redis", action="store_true",
                         help="不使用 Ray Redis (单机模式)")
 
     args = parser.parse_args()
 
-    # 加载配置
+    # 加载配置（支持多种路径格式）
     config_path = Path(args.config)
+
+    # 如果配置文件不存在，尝试相对于脚本目录的路径
+    if not config_path.exists():
+        script_dir = Path(__file__).parent
+        config_path = script_dir / args.config
+
+    # 如果还是不存在，尝试相对于项目根目录的路径
+    if not config_path.exists():
+        project_root = Path(__file__).parent.parent
+        config_path = project_root / args.config
+
     if config_path.exists():
         config = AppConfig.from_yaml(config_path)
+        print(f"✓ 加载配置: {config_path}")
     else:
+        print(f"⚠️  配置文件不存在: {args.config}")
+        print(f"   尝试的路径: {config_path}")
+        print(f"   使用默认配置")
         config = AppConfig()
-        # 添加默认 Ray 配置
-        from dataclasses import dataclass
-        from core.config import BaseConfig
-
-        @dataclass
-        class RayConfig(BaseConfig):
-            num_rollout_workers: int = 8
-            num_gpus_per_worker: float = 0.25
-            trainer_num_gpus: int = 1
-            games_per_rollout: int = 64
-            max_rollout_retries: int = 3
-
-        config.ray = RayConfig()
 
     # 命令行参数覆盖配置
     num_workers = args.rollout_workers or config.ray.num_rollout_workers
@@ -417,12 +476,13 @@ def main():
     os.environ['SWANLAB_NO_INTERACTIVE'] = '1'
     os.environ['SWANLAB_DISABLE_INTERACTIVE'] = '1'
 
-    # 获取 SwanLab API key
+    # 获取 SwanLab API key 并设置环境变量
     swanlab_key = os.environ.get('SWANLAB_API_KEY')
     if not swanlab_key:
         key_file = Path(__file__).parent / "config" / "swanlab_key.txt"
         if key_file.exists():
             swanlab_key = key_file.read_text().strip()
+            os.environ['SWANLAB_API_KEY'] = swanlab_key
 
     # 打印配置
     print("=" * 60)
@@ -465,6 +525,7 @@ def main():
         "num_gpus": torch.cuda.device_count() if torch.cuda.is_available() else 0,
         "ignore_reinit_error": True,
         "_temp_dir": str(ray_temp_dir),  # 设置临时目录
+        "include_dashboard": False,  # 禁用 Dashboard（Python 3.12 兼容性问题）
     }
 
     if args.no_ray_redis:
@@ -481,7 +542,6 @@ def main():
     ).remote(
         config_path=args.config,
         device="cuda:0" if trainer_gpus > 0 else "cpu",
-        swanlab_api_key=swanlab_key,
     )
 
     # 创建 Rollout Actors

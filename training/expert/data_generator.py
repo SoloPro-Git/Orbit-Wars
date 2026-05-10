@@ -262,12 +262,14 @@ class ExpertDataset:
 
     def _load_data(self):
         """加载所有数据文件。"""
-        # 查找 JSONL 和 PKL 文件
         jsonl_files = list(self.data_dir.glob("*.jsonl"))
         pkl_files = list(self.data_dir.glob("*.pkl"))
         data_files = jsonl_files + pkl_files
 
-        print(f"发现 {len(data_files)} 个数据文件")
+        if self.max_samples:
+            print(f"发现 {len(data_files)} 个数据文件（限制加载 {self.max_samples} 样本）")
+        else:
+            print(f"发现 {len(data_files)} 个数据文件")
 
         generator = ExpertDataGenerator()
 
@@ -303,6 +305,9 @@ class ExpertDataset:
         Returns:
             批次数据列表。
         """
+        if len(self.data) == 0 or batch_size <= 0:
+            return []
+
         indices = np.random.choice(len(self.data), size=batch_size, replace=True)
         return [self.data[i] for i in indices]
 
@@ -325,10 +330,12 @@ class ExpertDataset:
         train_ds = ExpertDataset.__new__(ExpertDataset)
         train_ds.data = train_data
         train_ds.max_samples = None
+        train_ds.data_dir = self.data_dir
 
         val_ds = ExpertDataset.__new__(ExpertDataset)
         val_ds.data = val_data
         val_ds.max_samples = None
+        val_ds.data_dir = self.data_dir
 
         return train_ds, val_ds
 

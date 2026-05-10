@@ -26,12 +26,26 @@ class ExpertDataConfig:
     """专家演示数据配置。"""
     enabled: bool = True  # 是否启用专家数据预训练
     data_dir: str = "data/expert_demonstrations"  # 专家数据目录
-    num_pretrain_iterations: int = 100  # 预训练迭代次数
+    num_pretrain_iterations: int = 100  # 预训练迭代次数（最大）
     pretrain_batch_size: int = 256  # 预训练批次大小
     pretrain_learning_rate: float = 1e-4  # 预训练学习率
     behavior_clone_loss_coef: float = 1.0  # 行为克隆损失系数
     mix_expert_data_ratio: float = 0.3  # 在 RL 训练中混合专家数据的比例
     use_until_iteration: int = 100  # 前 N 次迭代使用专家数据（-1 表示一直使用）
+
+    # Ray 分布式配置
+    num_pretrain_workers: int = 4  # 预训练 worker 数量
+    gpus_per_worker: float = 0.5  # 每个 worker 的 GPU 数量
+    sync_interval: int = 10  # 每隔多少个 iter 合并一次参数
+    auto_proceed: bool = True  # 评估未达标是否自动继续（True）或停止（False）
+    pretrain_resume_from: Optional[str] = None  # 预训练恢复路径（为 None 则从头训练）
+
+    # 专家策略评估门控
+    eval_gate_enabled: bool = True  # 启用真实对局评估门控
+    eval_gate_interval: int = 100  # 每 N iteration 评估一次
+    eval_gate_num_games: int = 20  # 每次评估的对局数
+    eval_gate_win_rate_threshold: float = 0.45  # 胜率阈值（>= 此值通过门控）
+    eval_gate_device: str = "cpu"  # 评估设备（CPU 不干扰 GPU 训练）
 
 
 @dataclass
@@ -68,11 +82,13 @@ class TrainingConfig:
 
 @dataclass
 class SelfPlayConfig:
-    pool_size: int = 20
-    sample_latest_ratio: float = 0.4
-    sample_random_ratio: float = 0.3
-    sample_best_ratio: float = 0.2
+    pool_size: int = 64
+    sample_expert_ratio: float = 0.1
     sample_heuristic_ratio: float = 0.1
+    sample_checkpoint_ratio: float = 0.8
+    checkpoint_latest_ratio: float = 0.3
+    checkpoint_best_ratio: float = 0.3
+    checkpoint_random_ratio: float = 0.4
     two_player_prob: float = 0.3
     add_to_pool_win_rate: float = 0.45
     diversity_threshold: float = 0.3

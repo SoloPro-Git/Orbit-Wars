@@ -96,13 +96,8 @@ def evaluate(
                 ]
                 owned_p = [p for p in all_planets_dicts if p["owner"] == pid]
 
-                # 需要将绝对飞船数转回比例给 decode_actions
-                ns_raw = np.zeros_like(ns)
-                for i, src in enumerate(owned_p):
-                    if src["ships"] > 0:
-                        ns_raw[i, 0] = ns[i, 0] / src["ships"]
-
-                actions = decode_actions(tl, ns_raw, owned_p, all_planets_dicts, threshold=0.3)
+                # 模型输出 sigmoid 比例，decode_actions 内部乘以飞船数
+                actions = decode_actions(tl, ns, owned_p, all_planets_dicts, threshold=0.3)
                 all_actions[pid] = actions
 
             env.step(all_actions)
@@ -164,6 +159,13 @@ def train(config_path: str = "training/config/default.yaml"):
         max_players=4,
     ).to(device)
 
+    pretrained_ckpt = Path("training/checkpoints/pretrained_model.pkl")
+    if config.expert_data.enabled and pretrained_ckpt.exists():
+        ckpt = torch.load(pretrained_ckpt, map_location="cpu", weights_only=False)
+        state_dict = ckpt.get("model_state_dict", ckpt) if isinstance(ckpt, dict) else ckpt
+        model.load_state_dict(state_dict, strict=False)
+        print(f"[Train] Loaded pretrained weights: {pretrained_ckpt}")
+
     feature_engineer = FeatureEngineer(
         board_size=config.environment.board_size,
         sun_radius=config.environment.sun_radius,
@@ -197,18 +199,31 @@ def train(config_path: str = "training/config/default.yaml"):
 
     pool_config = OpponentPoolConfig(
         pool_size=config.self_play.pool_size,
-        sample_latest_ratio=config.self_play.sample_latest_ratio,
-        sample_random_ratio=config.self_play.sample_random_ratio,
-        sample_best_ratio=config.self_play.sample_best_ratio,
+        sample_expert_ratio=config.self_play.sample_expert_ratio,
         sample_heuristic_ratio=config.self_play.sample_heuristic_ratio,
+        sample_checkpoint_ratio=config.self_play.sample_checkpoint_ratio,
+        checkpoint_latest_ratio=config.self_play.checkpoint_latest_ratio,
+        checkpoint_best_ratio=config.self_play.checkpoint_best_ratio,
+        checkpoint_random_ratio=config.self_play.checkpoint_random_ratio,
         add_to_pool_win_rate=config.self_play.add_to_pool_win_rate,
         diversity_threshold=config.self_play.diversity_threshold,
     )
     pool = OpponentPool(config=pool_config, pool_dir="checkpoints/pool")
     pool.load_index()
 
-    # 启发式种子 agent
-    pool.add_heuristic("random")
+    # 注册专家策略
+    pool.register_default_experts()
+
+    # 将已有 pretrained / 历史 RL checkpoint 自动加入对手池
+    pool.add_checkpoint_dir("training/checkpoints", elo=580, generation=0)
+    pool.add_checkpoint_dir("checkpoints", patterns=("model_iter_*.pt", "model_final.pt"), elo=600, generation=0)
+    pool_stats = pool.get_stats()
+    print(
+        "[Train] Opponent pool: "
+        f"{pool.size} checkpoints, "
+        f"kaggle={pool_stats.get('kaggle_experts', [])}, "
+        f"debug={pool_stats.get('debug_experts', [])}"
+    )
 
     # Checkpoint 目录
     ckpt_dir = Path("checkpoints")
@@ -224,12 +239,13 @@ def train(config_path: str = "training/config/default.yaml"):
         # 1. 决定 2 人 / 4 人局
         num_players = 2 if random.random() < config.self_play.two_player_prob else 4
 
-        # 2. 并行 rollout
+        # 2. 并行 rollout（使用对手池采样对手）
         buffer = parallel_rollout(
             worker,
             num_games=min(config.training.num_parallel_games, 32),
             num_players=num_players,
             temperature=max(1.0 - iteration * 0.001, 0.3),
+            opponent_pool=pool,
         )
 
         rollout_time = time.time() - t0
