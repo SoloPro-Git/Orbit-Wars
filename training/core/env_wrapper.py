@@ -185,10 +185,9 @@ class OrbitWarsEnv:
 
         self._env = make("orbit_wars", configuration=config, debug=True)
 
-        # 用 run 启动到第一步。env.run 会调用所有 agent 函数。
-        # 我们用 "random" 作为占位 agent。
-        agents = ["random"] * self.num_players
-        self._env.run(agents)
+        # kaggle env 默认创建 2 人局。
+        # 调用 reset(num_players) 初始化为正确人数，只产生初始状态不推进游戏。
+        self._env.reset(self.num_players)
 
         self._done = False
         self._step_count = 0

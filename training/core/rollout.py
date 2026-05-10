@@ -96,10 +96,14 @@ class RolloutWorker:
         player_id: int = 0,
         temperature: float = 1.0,
         max_steps: int = 500,
+        opponent_agents: dict[int, Any] | None = None,
     ) -> PPOBuffer:
         """跑一局游戏，收集训练数据。
 
-        player_id: 训练策略对应的玩家 ID，其他位置用同一模型 self-play。
+        player_id: 训练策略对应的玩家 ID。
+        opponent_agents: {pid: agent_fn} 非训练位置的对手 agent。
+            agent_fn 签名: (obs: dict) -> list[list]  (kaggle action 格式)
+            如果为 None，则所有位置都用当前模型 self-play。
         """
         buffer = PPOBuffer()
         self.model.eval()
@@ -341,6 +345,16 @@ class RolloutWorker:
                 raw_planets = feat["raw_planets"]
                 n = len(raw_planets)
 
+                # 如果有外部对手 agent，直接调用，不经过模型推理
+                if opponent_agents and pid in opponent_agents:
+                    opp_obs = env.get_raw_observation(pid)
+                    try:
+                        opp_actions = opponent_agents[pid](opp_obs)
+                    except Exception:
+                        opp_actions = []
+                    all_actions[pid] = opp_actions
+                    continue
+
                 # 获取该玩家的结果
                 # 重要：模型输出中，只有前 N_owned 行是有效的（后面是 padding）
                 # 需要使用 owned_mask 找到实际的拥有星球数量
@@ -366,7 +380,16 @@ class RolloutWorker:
                     target_indices, sampled_ships = sample_actions(
                         target_logits, num_ships, temperature=temperature
                     )
-                    log_prob = 0.0  # 简化
+                    # 计算 log_prob: target categorical + ships gaussian
+                    log_softmax = np.log(
+                        np.exp(target_logits) / np.exp(target_logits).sum(axis=-1, keepdims=True) + 1e-10
+                    )
+                    target_log_prob = log_softmax[
+                        np.arange(len(target_indices)), target_indices
+                    ]
+                    sigma = 0.15
+                    ship_log_prob = -0.5 * ((sampled_ships.squeeze() - num_ships.squeeze()) / sigma) ** 2
+                    log_prob = float((target_log_prob + ship_log_prob).mean())
                 else:
                     target_indices = np.argmax(target_logits, axis=-1)
                     sampled_ships = num_ships.squeeze(-1)
@@ -398,17 +421,17 @@ class RolloutWorker:
 
                     if n_owned > 0:
                         step_data[pid] = {
-                            "planet_feat": feat["planet_feat"],  # 所有星球 [N_all, D] - 模型需要看到完整信息
+                            "planet_feat": feat["planet_feat"],  # 所有星球 [N_all, D]
                             "fleet_feat": feat["fleet_feat"],
                             "global_feat": feat["global_feat"],
                             "owned_mask": batch_owned_masks[i][:n],  # 所有星球的 mask [N_all]
                             "enemy_mask": batch_enemy_masks[i][:n],
                             "num_players": num_players,
                             "planet_ships": batch_planet_ships[i][:n],
-                            "target_indices": target_indices,  # 只有拥有星球的行动 [N_owned]
-                            "num_ships_actual": sampled_ships,
-                            "log_prob": log_prob,
-                            "value": float(value_np.mean()),
+                            "target_indices": target_indices,  # 拥有星球的行动 [N_owned]
+                            "num_ships_actual": sampled_ships,  # sigmoid 比例 [0,1]
+                            "log_prob": log_prob,               # 真实计算的 log probability
+                            "value": float(value_np),           # 标量价值
                         }
                     else:
                         # 没有拥有星球，跳过
@@ -482,19 +505,28 @@ class RolloutWorker:
         temperature: float = 1.0,
         env_config: dict | None = None,
         show_progress: bool = True,
+        opponent_pool: Any | None = None,
     ) -> PPOBuffer:
         """跑多局自我博弈。"""
         combined_buffer = PPOBuffer()
 
-        # 创建进度条
         game_iter = range(num_games)
         if show_progress:
             game_iter = tqdm(game_iter, desc="[Rollout] ", unit="game")
 
         for game_idx in game_iter:
             env = OrbitWarsEnv(num_players=num_players, config=env_config)
+
+            # 为这局采样对手
+            opponents = None
+            if opponent_pool is not None:
+                opponents = opponent_pool.sample_opponents_for_game(
+                    num_players, training_player=0
+                )
+
             game_buffer = self.rollout_game(
-                env, player_id=0, temperature=temperature
+                env, player_id=0, temperature=temperature,
+                opponent_agents=opponents,
             )
 
             # 更新进度条信息
@@ -525,19 +557,19 @@ class RolloutWorker:
     def _indices_to_kaggle_actions(
         self,
         target_indices: np.ndarray,
-        num_ships: np.ndarray,
+        num_ships_ratio: np.ndarray,
         owned_planets: list[dict],
         all_planets: list[dict],
-        threshold: float = 1.0,
+        threshold_ratio: float = 0.1,
     ) -> list[list]:
-        """将 target indices + num_ships 转为 kaggle 动作格式。
+        """将 target indices + sigmoid 比例转为 kaggle 动作格式。
 
         Args:
             target_indices: [N_owned] 目标星球索引
-            num_ships: [N_owned] 或 [N_owned, 1] 飞船绝对数量（模型已乘以 planet_ships）
+            num_ships_ratio: [N_owned] 或 [N_owned, 1] sigmoid 比例 [0, 1]
             owned_planets: 己方星球列表
             all_planets: 所有星球列表
-            threshold: 绝对数量阈值，低于此值不发射
+            threshold_ratio: 比例阈值，低于此值不发射
 
         Returns:
             Kaggle格式的动作列表 [[from_planet_id, angle, num_ships], ...]
@@ -545,19 +577,16 @@ class RolloutWorker:
         import math
         actions = []
         for i, src in enumerate(owned_planets):
-            if i >= len(target_indices) or i >= len(num_ships):
+            if i >= len(target_indices) or i >= len(num_ships_ratio):
                 break
 
-            # num_ships 是模型输出的绝对数量（已经乘以 planet_ships）
-            ships = float(num_ships[i]) if num_ships.ndim == 1 else float(num_ships[i, 0])
-
-            # 检查阈值
-            if ships < threshold or src["ships"] <= 0:
+            # num_ships_ratio 是 sigmoid 比例，乘以源星球飞船数得到绝对数量
+            ratio = float(num_ships_ratio[i]) if num_ships_ratio.ndim == 1 else float(num_ships_ratio[i, 0])
+            if ratio < threshold_ratio or src["ships"] <= 0:
                 continue
 
-            # 确保至少发射1艘船，且不超过拥有的飞船数
-            ships = max(1.0, ships)
-            ships = min(ships, src["ships"])
+            ships = ratio * src["ships"]
+            ships = max(1.0, min(ships, src["ships"]))
 
             tgt_idx = int(target_indices[i])
             if tgt_idx >= len(all_planets):
@@ -605,6 +634,7 @@ def parallel_rollout(
     temperature: float = 1.0,
     env_config: dict | None = None,
     show_progress: bool = True,
+    opponent_pool: Any | None = None,
 ) -> PPOBuffer:
     """并行 rollout（单进程版本，后续可扩展为多进程）。"""
     return worker.rollout_self_play(
@@ -613,4 +643,5 @@ def parallel_rollout(
         temperature=temperature,
         env_config=env_config,
         show_progress=show_progress,
+        opponent_pool=opponent_pool,
     )

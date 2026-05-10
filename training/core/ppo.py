@@ -282,9 +282,8 @@ class PPOTrainer:
         ) * batch_adv
         policy_loss = -torch.min(surr1, surr2).mean()
 
-        # Value loss
-        value_scalar = value.mean(dim=-1)  # [batch] 取期望排名
-        value_loss = F.mse_loss(value_scalar, batch_ret)
+        # Value loss — value 已经是 [batch] 标量
+        value_loss = F.mse_loss(value, batch_ret)
 
         # Entropy bonus
         entropy = self._compute_entropy(target_logits)
@@ -370,24 +369,32 @@ class PPOTrainer:
         target_indices: torch.Tensor,
         num_ships_actual: torch.Tensor,
     ) -> torch.Tensor:
-        """计算动作 log probability。"""
+        """计算动作 log probability。所有值都在 sigmoid 比例空间。
+
+        target_logits:    [batch, N_owned, N_planets]
+        num_ships_pred:   [batch, N_owned, 1]  sigmoid 比例
+        target_indices:   [batch, N_owned]  采样的目标索引
+        num_ships_actual: [batch, N_owned, 1] 或 [batch, N_owned]  采样后的 sigmoid 比例
+        """
         B, N_owned, N_planets = target_logits.shape
 
         # target log prob
         log_softmax = F.log_softmax(target_logits, dim=-1)
         target_log_prob = log_softmax.gather(
             2, target_indices.clamp(0, N_planets - 1).unsqueeze(-1)
-        ).squeeze(-1)
+        ).squeeze(-1)  # [batch, N_owned]
 
-        # num_ships log prob (高斯)
-        sigma = 0.1
-        ships_log_prob = -0.5 * ((num_ships_actual - num_ships_pred) / sigma).pow(2)
+        # num_ships log prob (高斯, sigmoid 比例空间)
+        sigma = 0.15
+        if num_ships_actual.dim() == 3:
+            ship_diff = num_ships_actual - num_ships_pred  # [B, N_owned, 1]
+        else:
+            ship_diff = (num_ships_actual - num_ships_pred.squeeze(-1))  # [B, N_owned]
+        ships_log_prob = -0.5 * (ship_diff / sigma).pow(2)
 
-        # 合并 log probs
-        # 注意：这里假设所有 target_indices 对应的行动都是有效的
-        # （因为 rollout 中只为拥有星球生成了行动）
-        log_prob = target_log_prob + ships_log_prob.squeeze(-1)
-        return log_prob.mean(dim=-1)
+        # 合并 log probs 并取每样本平均
+        log_prob = target_log_prob + ships_log_prob.squeeze(-1)  # [B, N_owned]
+        return log_prob.mean(dim=-1)  # [batch]
 
     def _compute_entropy(self, target_logits: torch.Tensor) -> torch.Tensor:
         """计算策略熵。"""

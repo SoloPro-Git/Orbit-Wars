@@ -13,7 +13,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from core.config import ModelConfig
+try:
+    from core.config import ModelConfig
+except ImportError:
+    from training.core.config import ModelConfig
 
 
 # ---------------------------------------------------------------------------
@@ -272,7 +275,7 @@ class PolicyHead(nn.Module):
 
 
 class ValueHead(nn.Module):
-    """Global value estimate: ranking probability distribution."""
+    """Global scalar value estimate for PPO."""
 
     def __init__(self, config: ModelConfig, max_players: int = 4):
         super().__init__()
@@ -282,9 +285,8 @@ class ValueHead(nn.Module):
             _get_activation(config.activation),
             nn.LayerNorm(d),
             nn.Dropout(config.dropout),
-            nn.Linear(d, max_players),
+            nn.Linear(d, 1),  # 标量价值，不再是排名分布
         )
-        self.max_players = max_players
 
     def forward(
         self,
@@ -293,28 +295,15 @@ class ValueHead(nn.Module):
         num_players: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
-        planet_emb:   [batch, N_planets, d_model]
-        padding_mask: [batch, N_planets] True = pad
-        num_players:  [batch]  (used to mask out invalid ranks)
-        Returns:      [batch, max_players]  softmax ranking probabilities
+        Returns: [batch] 标量价值估计
         """
-        # Mean-pool over valid (non-padded) planets
         if padding_mask is not None:
-            mask_inv = (~padding_mask).float().unsqueeze(-1)  # [B, N, 1]
+            mask_inv = (~padding_mask).float().unsqueeze(-1)
             pooled = (planet_emb * mask_inv).sum(dim=1) / mask_inv.sum(dim=1).clamp(min=1)
         else:
             pooled = planet_emb.mean(dim=1)
 
-        logits = self.mlp(pooled)  # [batch, max_players]
-
-        # Mask out ranks beyond num_players for each sample
-        if num_players is not None:
-            max_p = self.max_players
-            player_mask = torch.arange(max_p, device=logits.device).unsqueeze(0)  # [1, max_p]
-            player_mask = player_mask >= num_players.unsqueeze(1)  # [batch, max_p]
-            logits = logits.masked_fill(player_mask, float("-inf"))
-
-        return F.softmax(logits, dim=-1)
+        return self.mlp(pooled).squeeze(-1)  # [batch]
 
 
 class OpponentHead(nn.Module):
@@ -443,8 +432,8 @@ class OrbitWarsModel(nn.Module):
 
         Returns:
             target_logits:     [batch, N_owned, N_planets]
-            num_ships:         [batch, N_owned, 1]  (sigmoid, in [0, 1])
-            value:             [batch, max_players]  (ranking probability)
+            num_ships:         [batch, N_owned, 1]  (sigmoid 比例 [0,1])
+            value:             [batch]  (scalar value estimate)
             opp_target_logits: [batch, N_enemy, N_planets]  (or None)
             opp_num_ships:     [batch, N_enemy, 1]          (or None)
         """
@@ -519,14 +508,15 @@ class OrbitWarsModel(nn.Module):
         # --- 7. Policy head ---
         target_logits, num_ships_raw = self.policy_head(fused, global_context)
 
-        # Scale num_ships by actual ship counts if provided
+        # num_ships_raw 是 sigmoid 比例 [0,1]，保持不变。
+        # 在 decode_actions 时再乘以实际飞船数。
+        # 把 planet_ships 传给 owned 行以便 rollout 使用。
         if planet_ships is not None:
             owned_ships = self._gather_by_mask(
                 planet_ships.unsqueeze(-1), owned_mask
             )  # [B, N_owned, 1]
-            num_ships_out = num_ships_raw * owned_ships
         else:
-            num_ships_out = num_ships_raw
+            owned_ships = torch.ones_like(num_ships_raw)
 
         # --- 8. Value head ---
         value = self.value_head(planet_emb, padding_mask=planet_padding_mask, num_players=num_players)
@@ -549,17 +539,10 @@ class OrbitWarsModel(nn.Module):
                     context_padding_mask=context_pad_mask,
                 )
 
-            opp_target_logits, opp_num_ships_raw = self.opponent_head(enemy_fused, global_context)
+            opp_target_logits, opp_num_ships = self.opponent_head(enemy_fused, global_context)
+            # opp_num_ships 也是 sigmoid 比例 [0,1]
 
-            if planet_ships is not None:
-                enemy_ships = self._gather_by_mask(
-                    planet_ships.unsqueeze(-1), enemy_mask
-                )
-                opp_num_ships = opp_num_ships_raw * enemy_ships
-            else:
-                opp_num_ships = opp_num_ships_raw
-
-        return target_logits, num_ships_out, value, opp_target_logits, opp_num_ships
+        return target_logits, num_ships_raw, value, opp_target_logits, opp_num_ships
 
     # ------------------------------------------------------------------
     # Masking utilities
