@@ -205,13 +205,56 @@ class InMemoryModelAgent:
         if target_logits_np.shape[1] != len(all_planets):
             return []
 
-        actions = decode_actions(
+        actions = self._decode_actions_with_split(
             target_logits=target_logits_np,
             num_ships_raw=num_ships_np,
             owned_planets=owned_planets,
             all_planets=all_planets,
-            threshold=0.01,
+            threshold=0.08,
         )
+
+        return actions
+
+    @staticmethod
+    def _decode_actions_with_split(
+        target_logits,
+        num_ships_raw,
+        owned_planets,
+        all_planets,
+        threshold: float = 0.08,
+    ):
+        actions = []
+        for i, src in enumerate(owned_planets):
+            if i >= len(target_logits) or i >= len(num_ships_raw):
+                break
+            src_ships = float(src.get("ships", 0.0))
+            if src_ships <= 0:
+                continue
+
+            ratio = float(num_ships_raw[i, 0])
+            if ratio < threshold:
+                continue
+
+            tgt_idx = int(np.argmax(target_logits[i]))
+            if tgt_idx < 0 or tgt_idx >= len(all_planets):
+                continue
+            tgt = all_planets[tgt_idx]
+            angle = math.atan2(tgt["y"] - src["y"], tgt["x"] - src["x"])
+
+            send = int(max(1.0, min(src_ships, ratio * src_ships)))
+            actions.append([src["id"], angle, send])
+
+            # 允许次级分兵（和 rollout 对齐）
+            rem = int(src_ships) - send
+            if rem >= 8 and ratio >= 0.35:
+                top2 = np.argsort(target_logits[i])[-2:]
+                alt_idx = int(top2[0]) if int(top2[1]) == tgt_idx else int(top2[1])
+                if 0 <= alt_idx < len(all_planets) and alt_idx != tgt_idx:
+                    alt = all_planets[alt_idx]
+                    alt_angle = math.atan2(alt["y"] - src["y"], alt["x"] - src["x"])
+                    split = max(1, int(rem * 0.4))
+                    if split >= 3:
+                        actions.append([src["id"], alt_angle, split])
 
         return actions
 
@@ -262,22 +305,29 @@ def evaluate_win_rate_against_expert(
     for game_idx in range(num_games):
         seed = 42 + game_idx
         env = make("orbit_wars", configuration={"seed": seed}, debug=False)
-        env.run([model_agent, expert_agent])
+        model_is_p0 = (game_idx % 2 == 0)
+        if model_is_p0:
+            env.run([model_agent, expert_agent])
+        else:
+            env.run([expert_agent, model_agent])
 
         final = env.steps[-1]
         p0_reward = final[0].reward
         p1_reward = final[1].reward
+        model_reward = p0_reward if model_is_p0 else p1_reward
+        expert_reward = p1_reward if model_is_p0 else p0_reward
 
-        if p0_reward > p1_reward:
+        if model_reward > expert_reward:
             wins += 1
-        elif p0_reward < p1_reward:
+        elif model_reward < expert_reward:
             losses += 1
         else:
             draws += 1
 
         print(f"    第 {game_idx+1}/{num_games} 局 (seed={seed}): "
-              f"模型={p0_reward} vs 专家={p1_reward} "
-              f"-> {'胜' if p0_reward > p1_reward else '负' if p0_reward < p1_reward else '平'}")
+              f"模型={model_reward} vs 专家={expert_reward} "
+              f"({'先手' if model_is_p0 else '后手'})"
+              f" -> {'胜' if model_reward > expert_reward else '负' if model_reward < expert_reward else '平'}")
 
     win_rate = wins / num_games
     return {
@@ -396,6 +446,13 @@ class PretrainingWorker:
 
         total_loss = 0.0
         total_valid = 0
+        total_acted_ratio_expert = 0.0
+        total_acted_ratio_pred = 0.0
+        total_ship_ratio_mae = 0.0
+        total_target_label_valid_ratio = 0.0
+        total_action_map_ratio = 0.0
+        total_bc_loss = 0.0
+        total_value_loss = 0.0
 
         for local_iter in range(num_iters):
             it = start_iteration + local_iter
@@ -446,7 +503,7 @@ class PretrainingWorker:
                         "num_players": num_players_tensor,
                     }
 
-                    loss = self._compute_loss(
+                    loss, diag = self._compute_loss(
                         features_dict,
                         expert_actions,
                         sample["observation"],
@@ -461,6 +518,13 @@ class PretrainingWorker:
 
                     iter_loss += loss.item()
                     iter_valid += 1
+                    total_acted_ratio_expert += diag.get("acted_ratio_expert", 0.0)
+                    total_acted_ratio_pred += diag.get("acted_ratio_pred", 0.0)
+                    total_ship_ratio_mae += diag.get("ship_ratio_mae", 0.0)
+                    total_target_label_valid_ratio += diag.get("target_label_valid_ratio", 0.0)
+                    total_action_map_ratio += diag.get("action_map_ratio", 0.0)
+                    total_bc_loss += diag.get("bc_loss", 0.0)
+                    total_value_loss += diag.get("value_loss", 0.0)
 
                     if step % 50 == 0 and iter_valid > 0:
                         pbar.set_postfix(loss=f"{iter_loss / iter_valid:.4f}", valid=iter_valid)
@@ -487,6 +551,13 @@ class PretrainingWorker:
             "model_state": self.model.state_dict(),
             "loss": avg_loss,
             "num_samples": total_valid,
+            "acted_ratio_expert": total_acted_ratio_expert / max(1, total_valid),
+            "acted_ratio_pred": total_acted_ratio_pred / max(1, total_valid),
+            "ship_ratio_mae": total_ship_ratio_mae / max(1, total_valid),
+            "target_label_valid_ratio": total_target_label_valid_ratio / max(1, total_valid),
+            "action_map_ratio": total_action_map_ratio / max(1, total_valid),
+            "bc_loss": total_bc_loss / max(1, total_valid),
+            "value_loss": total_value_loss / max(1, total_valid),
         }
 
     def train_iteration(self, model_state_dict: dict, iteration: int = 0) -> Dict:
@@ -506,6 +577,11 @@ class PretrainingWorker:
         steps_per_iter = 500
         total_loss = 0.0
         num_valid = 0
+        total_acted_ratio_expert = 0.0
+        total_acted_ratio_pred = 0.0
+        total_ship_ratio_mae = 0.0
+        total_target_label_valid_ratio = 0.0
+        total_action_map_ratio = 0.0
 
         pbar = tqdm(
             range(steps_per_iter),
@@ -610,6 +686,11 @@ class PretrainingWorker:
         val_samples = random.sample(self.train_data, min(100, len(self.train_data)))
         total_loss = 0.0
         num_valid = 0
+        total_acted_ratio_expert = 0.0
+        total_acted_ratio_pred = 0.0
+        total_ship_ratio_mae = 0.0
+        total_target_label_valid_ratio = 0.0
+        total_action_map_ratio = 0.0
 
         with torch.no_grad():
             for sample in val_samples:
@@ -659,7 +740,7 @@ class PretrainingWorker:
                     if not expert_actions:
                         continue
 
-                    loss = self._compute_loss(
+                    loss, diag = self._compute_loss(
                         features_dict,
                         expert_actions,
                         sample["observation"],
@@ -668,6 +749,11 @@ class PretrainingWorker:
                     )
                     total_loss += loss.item()
                     num_valid += 1
+                    total_acted_ratio_expert += diag.get("acted_ratio_expert", 0.0)
+                    total_acted_ratio_pred += diag.get("acted_ratio_pred", 0.0)
+                    total_ship_ratio_mae += diag.get("ship_ratio_mae", 0.0)
+                    total_target_label_valid_ratio += diag.get("target_label_valid_ratio", 0.0)
+                    total_action_map_ratio += diag.get("action_map_ratio", 0.0)
 
                 except Exception:
                     continue
@@ -676,6 +762,11 @@ class PretrainingWorker:
         return {
             "worker_id": self.worker_id,
             "val_loss": total_loss / max(1, num_valid),
+            "val_acted_ratio_expert": total_acted_ratio_expert / max(1, num_valid),
+            "val_acted_ratio_pred": total_acted_ratio_pred / max(1, num_valid),
+            "val_ship_ratio_mae": total_ship_ratio_mae / max(1, num_valid),
+            "val_target_label_valid_ratio": total_target_label_valid_ratio / max(1, num_valid),
+            "val_action_map_ratio": total_action_map_ratio / max(1, num_valid),
         }
 
     def _compute_loss(
@@ -685,7 +776,7 @@ class PretrainingWorker:
         observation: dict,
         player_id: int | None = None,
         reward: float = 0.0,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, dict]:
         """计算行为克隆损失 + value function 损失。
 
         Args:
@@ -718,22 +809,18 @@ class PretrainingWorker:
         value_pred = model_output[2]     # [batch, max_players]
 
         # 1. 行为克隆损失
-        bc_loss = self._compute_behavior_cloning_loss(
+        bc_loss, bc_diag = self._compute_behavior_cloning_loss(
             target_logits, pred_ships, expert_actions, observation, player_id
         )
 
-        # 2. Value function 损失（使用数据生成时记录的环境 reward）
-        value_loss = self._compute_value_loss(
-            value_pred, reward
-        )
+        # 2. Value loss 在预训练阶段容易引入噪声，降到很低权重。
+        value_loss = self._compute_value_loss(value_pred, reward)
 
-        # 总损失
-        total_loss = (
-            self.config.behavior_clone_loss_coef * bc_loss +
-            0.1 * value_loss
-        )
-
-        return total_loss
+        # 总损失：以行为克隆为主
+        total_loss = self.config.behavior_clone_loss_coef * bc_loss + 0.02 * value_loss
+        bc_diag["value_loss"] = float(value_loss.detach().item())
+        bc_diag["bc_loss"] = float(bc_loss.detach().item())
+        return total_loss, bc_diag
 
     def _compute_behavior_cloning_loss(
         self,
@@ -742,17 +829,29 @@ class PretrainingWorker:
         expert_actions: list,
         observation: dict,
         player_id: int | None = None,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, dict]:
         """计算行为克隆损失。
 
         将专家的 angle 映射到目标行星 ID，然后计算分类损失。
         """
         if not expert_actions:
-            return torch.tensor(0.0, device=self.device)
+            return torch.tensor(0.0, device=self.device), {
+                "acted_ratio_expert": 0.0,
+                "acted_ratio_pred": 0.0,
+                "ship_ratio_mae": 0.0,
+                "target_label_valid_ratio": 0.0,
+                "action_map_ratio": 0.0,
+            }
 
         raw_planets = observation.get("planets", [])
         if not raw_planets:
-            return torch.tensor(0.0, device=self.device)
+            return torch.tensor(0.0, device=self.device), {
+                "acted_ratio_expert": 0.0,
+                "acted_ratio_pred": 0.0,
+                "ship_ratio_mae": 0.0,
+                "target_label_valid_ratio": 0.0,
+                "action_map_ratio": 0.0,
+            }
 
         all_planets = [
             {
@@ -774,7 +873,13 @@ class PretrainingWorker:
         owned_planet_ids = [p["id"] for p in owned_planets]
 
         if not owned_planet_ids:
-            return torch.tensor(0.0, device=self.device)
+            return torch.tensor(0.0, device=self.device), {
+                "acted_ratio_expert": 0.0,
+                "acted_ratio_pred": 0.0,
+                "ship_ratio_mae": 0.0,
+                "target_label_valid_ratio": 0.0,
+                "action_map_ratio": 0.0,
+            }
 
         # 将专家动作转换为模型格式
         # 专家动作：[[from_planet_id, angle, num_ships], ...]
@@ -795,6 +900,7 @@ class PretrainingWorker:
         # 为每个 owned planet 创建目标标签
         target_labels = []      # [n_owned] 目标行星 ID
         ship_ratios = []        # [n_owned] 派遣船只比例
+        acted_flags = []        # [n_owned] 是否行动 (0/1)
 
         # 首先，找到每个 owned planet 的总船只数
         planet_ships = {p["id"]: p["ships"] for p in owned_planets}
@@ -803,9 +909,23 @@ class PretrainingWorker:
         for pid in owned_planet_ids:
             target_labels.append(-1)  # -1 表示不行动
             ship_ratios.append(0.0)
+            acted_flags.append(0.0)
 
         # 根据专家动作更新
+        # 同一 source 行星若有多次发射，保留舰队规模最大的动作，
+        # 避免“后写覆盖”随机吞掉主动作标签。
+        best_action_by_src = {}
         for action in expert_actions:
+            if len(action) < 3:
+                continue
+            from_pid = int(action[0])
+            ships = int(action[2])
+            prev = best_action_by_src.get(from_pid)
+            if prev is None or ships > int(prev[2]):
+                best_action_by_src[from_pid] = action
+
+        mapped_count = 0
+        for action in best_action_by_src.values():
             if len(action) < 3:
                 continue
             from_pid = int(action[0])
@@ -829,21 +949,42 @@ class PretrainingWorker:
             if best_tid is not None and best_tid in id_to_col:
                 idx = owned_id_to_idx[from_pid]
                 target_labels[idx] = id_to_col[best_tid]
+                mapped_count += 1
                 # 计算派遣比例
                 if from_pid in planet_ships and planet_ships[from_pid] > 0:
                     ratio = min(ships / planet_ships[from_pid], 1.0)
                     ship_ratios[idx] = ratio
+                    acted_flags[idx] = 1.0
+            else:
+                # 即便目标无法映射，也保留“该星球有行动”和出兵比例监督
+                idx = owned_id_to_idx[from_pid]
+                if from_pid in planet_ships and planet_ships[from_pid] > 0:
+                    ratio = min(ships / planet_ships[from_pid], 1.0)
+                    ship_ratios[idx] = max(ship_ratios[idx], ratio)
+                acted_flags[idx] = 1.0
 
         # 转换为张量
         target_labels = torch.tensor(target_labels, dtype=torch.long, device=self.device)
         ship_targets = torch.tensor(ship_ratios, dtype=torch.float32, device=self.device).unsqueeze(0).unsqueeze(-1)  # [1, n_owned, 1]
+        acted_targets = torch.tensor(acted_flags, dtype=torch.float32, device=self.device).unsqueeze(0).unsqueeze(-1)  # [1, n_owned, 1]
 
         # 只对有效动作计算损失，且目标索引必须在当前 logits 的真实范围内。
         # 不要只依赖 self.model_n_planets，避免 CE 目标越界导致 CUDA assert。
         logits_n_planets = int(target_logits.size(-1))
         valid_mask = (target_labels >= 0) & (target_labels < logits_n_planets)
         if not valid_mask.any():
-            return torch.tensor(0.0, device=self.device)
+            pred_owned = pred_ships[0, :n_owned, :]
+            tgt_owned = ship_targets[0, :n_owned, :]
+            act_owned = acted_targets[0, :n_owned, :]
+            acted_count = float(act_owned.sum().item())
+            diag = {
+                "acted_ratio_expert": float(act_owned.mean().item()),
+                "acted_ratio_pred": float(pred_owned.mean().item()),
+                "ship_ratio_mae": float((pred_owned - tgt_owned).abs().mean().item()),
+                "target_label_valid_ratio": 0.0,
+                "action_map_ratio": float(mapped_count / max(acted_count, 1.0)),
+            }
+            return torch.tensor(0.0, device=self.device), diag
 
         # 1. 目标选择损失（交叉熵）
         # target_logits: [1, n_owned, logits_n_planets]
@@ -852,19 +993,49 @@ class PretrainingWorker:
         valid_logits = target_logits[0, valid_indices, :logits_n_planets]  # [n_valid, logits_n_planets]
         valid_targets = target_labels[valid_indices]        # [n_valid]
         if valid_targets.numel() == 0 or valid_logits.size(-1) <= 1:
-            return torch.tensor(0.0, device=self.device)
+            pred_owned = pred_ships[0, :n_owned, :]
+            tgt_owned = ship_targets[0, :n_owned, :]
+            act_owned = acted_targets[0, :n_owned, :]
+            acted_count = float(act_owned.sum().item())
+            diag = {
+                "acted_ratio_expert": float(act_owned.mean().item()),
+                "acted_ratio_pred": float(pred_owned.mean().item()),
+                "ship_ratio_mae": float((pred_owned - tgt_owned).abs().mean().item()),
+                "target_label_valid_ratio": 0.0,
+                "action_map_ratio": float(mapped_count / max(acted_count, 1.0)),
+            }
+            return torch.tensor(0.0, device=self.device), diag
 
         target_loss = F.cross_entropy(valid_logits, valid_targets)
 
-        # 2. 船只数量损失（MSE）
-        valid_pred_ships = pred_ships[0, valid_indices, :]  # [n_valid, 1]
-        valid_ship_targets = ship_targets[0, valid_indices, :]  # [n_valid, 1]
-        ships_loss = F.mse_loss(valid_pred_ships, valid_ship_targets)
+        # 2. 出兵比例损失（对所有 owned 星球监督：行动=ratio，不行动=0）
+        pred_owned = pred_ships[0, :n_owned, :]  # [n_owned, 1]
+        tgt_owned = ship_targets[0, :n_owned, :]  # [n_owned, 1]
+        act_owned = acted_targets[0, :n_owned, :]  # [n_owned, 1]
+
+        ratio_weights = 1.0 + 3.0 * act_owned
+        ratio_err = (pred_owned - tgt_owned).pow(2)
+        ships_loss = (ratio_err * ratio_weights).sum() / ratio_weights.sum().clamp(min=1.0)
+
+        # 3. 行动/不行动监督（帮助学会节奏）
+        act_bce = F.binary_cross_entropy(
+            pred_owned.clamp(min=1e-5, max=1 - 1e-5),
+            act_owned,
+        )
 
         # 总行为克隆损失
-        bc_loss = target_loss + 0.1 * ships_loss
+        bc_loss = target_loss + 0.3 * ships_loss + 1.0 * act_bce
 
-        return bc_loss
+        acted_count = float(act_owned.sum().item())
+        valid_count = float(valid_mask.sum().item())
+        diag = {
+            "acted_ratio_expert": float(act_owned.mean().item()),
+            "acted_ratio_pred": float(pred_owned.mean().item()),
+            "ship_ratio_mae": float((pred_owned - tgt_owned).abs().mean().item()),
+            "target_label_valid_ratio": float(valid_count / max(acted_count, 1.0)),
+            "action_map_ratio": float(mapped_count / max(acted_count, 1.0)),
+        }
+        return bc_loss, diag
 
     def _compute_value_loss(
         self,
@@ -1032,6 +1203,13 @@ class RayDistributedPretrainer:
             # 3. 统计
             avg_train_loss = np.mean([r["loss"] for r in results])
             stats["train_loss"].append(avg_train_loss)
+            avg_acted_ratio_expert = float(np.mean([r.get("acted_ratio_expert", 0.0) for r in results]))
+            avg_acted_ratio_pred = float(np.mean([r.get("acted_ratio_pred", 0.0) for r in results]))
+            avg_ship_ratio_mae = float(np.mean([r.get("ship_ratio_mae", 0.0) for r in results]))
+            avg_target_label_valid_ratio = float(np.mean([r.get("target_label_valid_ratio", 0.0) for r in results]))
+            avg_action_map_ratio = float(np.mean([r.get("action_map_ratio", 0.0) for r in results]))
+            avg_bc_loss = float(np.mean([r.get("bc_loss", 0.0) for r in results]))
+            avg_value_loss = float(np.mean([r.get("value_loss", 0.0) for r in results]))
             sync_time = time.time() - t0
 
             # 4. 验证
@@ -1044,6 +1222,11 @@ class RayDistributedPretrainer:
             avg_val_loss = np.mean([r["val_loss"] for r in val_results])
             stats["val_loss"].append(avg_val_loss)
             val_loss_str = f" Val:{avg_val_loss:.4f}"
+            avg_val_acted_ratio_expert = float(np.mean([r.get("val_acted_ratio_expert", 0.0) for r in val_results]))
+            avg_val_acted_ratio_pred = float(np.mean([r.get("val_acted_ratio_pred", 0.0) for r in val_results]))
+            avg_val_ship_ratio_mae = float(np.mean([r.get("val_ship_ratio_mae", 0.0) for r in val_results]))
+            avg_val_target_label_valid_ratio = float(np.mean([r.get("val_target_label_valid_ratio", 0.0) for r in val_results]))
+            avg_val_action_map_ratio = float(np.mean([r.get("val_action_map_ratio", 0.0) for r in val_results]))
 
             # 记录 SwanLab
             if self.swanlab:
@@ -1051,6 +1234,18 @@ class RayDistributedPretrainer:
                     "pretrain_iteration": sync_end - 1,
                     "train_loss": avg_train_loss,
                     "val_loss": avg_val_loss,
+                    "pretrain_bc_loss": avg_bc_loss,
+                    "pretrain_value_loss": avg_value_loss,
+                    "pretrain_acted_ratio_expert": avg_acted_ratio_expert,
+                    "pretrain_acted_ratio_pred": avg_acted_ratio_pred,
+                    "pretrain_ship_ratio_mae": avg_ship_ratio_mae,
+                    "pretrain_target_label_valid_ratio": avg_target_label_valid_ratio,
+                    "pretrain_action_map_ratio": avg_action_map_ratio,
+                    "pretrain_val_acted_ratio_expert": avg_val_acted_ratio_expert,
+                    "pretrain_val_acted_ratio_pred": avg_val_acted_ratio_pred,
+                    "pretrain_val_ship_ratio_mae": avg_val_ship_ratio_mae,
+                    "pretrain_val_target_label_valid_ratio": avg_val_target_label_valid_ratio,
+                    "pretrain_val_action_map_ratio": avg_val_action_map_ratio,
                 })
 
             # 更新进度条
@@ -1066,6 +1261,9 @@ class RayDistributedPretrainer:
             pbar_sync.write(
                 f"[Iter {sync_start}-{sync_end-1}] "
                 f"Loss:{avg_train_loss:.4f}{val_loss_str} "
+                f"Act(pred/expert):{avg_acted_ratio_pred:.3f}/{avg_acted_ratio_expert:.3f} "
+                f"ShipMAE:{avg_ship_ratio_mae:.3f} "
+                f"ValidLbl:{avg_target_label_valid_ratio:.3f} "
                 f"Samples:{total_samples} "
                 f"Time:{sync_time:.1f}s "
                 f"| {' '.join(worker_losses)}"

@@ -202,7 +202,7 @@ class OrbitWarsPredictor:
                 num_ships_raw=num_ships_np,
                 owned_planets=owned_planets,
                 all_planets=all_planets,
-                threshold=0.1,
+                threshold=0.08,
             )
         except Exception as e:
             print(f"[Predictor] Decode actions error: {e}")
