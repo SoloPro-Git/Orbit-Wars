@@ -61,10 +61,11 @@ from training.core.model import OrbitWarsModel
 import training.core.feature_engineering as fe_module
 FeatureEngineer = fe_module.FeatureEngineer
 from training.expert import load_expert_dataset
+from training.expert.pretraining import ExpertPretrainer, resolve_stage_checkpoint_dir
 from training.expert.ray_pretrainer import RayDistributedPretrainer
 
 
-def check_data_exists(data_dir: str) -> bool:
+def check_data_exists(data_dir: str, extra_data_dirs: list[str] | None = None) -> bool:
     """检查专家数据是否存在。
 
     Args:
@@ -73,15 +74,15 @@ def check_data_exists(data_dir: str) -> bool:
     Returns:
         是否存在
     """
-    data_path = Path(data_dir)
-    if not data_path.exists():
-        return False
-
-    # 检查是否有数据文件
-    jsonl_files = list(data_path.glob("*.jsonl"))
-    pkl_files = list(data_path.glob("*.pkl"))
-
-    return len(jsonl_files) > 0 or len(pkl_files) > 0
+    all_dirs = [Path(data_dir)] + [Path(p) for p in (extra_data_dirs or [])]
+    for data_path in all_dirs:
+        if not data_path.exists():
+            continue
+        jsonl_files = list(data_path.glob("*.jsonl"))
+        pkl_files = list(data_path.glob("*.pkl"))
+        if len(jsonl_files) > 0 or len(pkl_files) > 0:
+            return True
+    return False
 
 
 def evaluate_quality(
@@ -189,6 +190,7 @@ def main():
     parser.add_argument("--config", type=str, default="config/default.yaml")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--skip-pretrain", action="store_true")
+    parser.add_argument("--pretrain-only", action="store_true")
     args = parser.parse_args()
 
     print("=" * 70)
@@ -221,6 +223,10 @@ def main():
     swanlab_run = None
 
     if swanlab and config.training.swanlab_project:
+        stage_tag = ""
+        if config.expert_data.staged_mode:
+            stage_tag = f"-stage-{str(config.expert_data.active_stage).upper().strip()}"
+        experiment_name = f"{config.training.swanlab_experiment}{stage_tag}"
         # 从 key 文件加载并设置环境变量
         swanlab_api_key = os.environ.get('SWANLAB_API_KEY')
         if not swanlab_api_key:
@@ -234,7 +240,7 @@ def main():
         try:
             swanlab_run = swanlab.init(
                 project=config.training.swanlab_project,
-                experiment_name=config.training.swanlab_experiment,
+                experiment_name=experiment_name,
                 mode=config.training.swanlab_mode,
                 logdir=None,
                 public=False,
@@ -249,7 +255,7 @@ def main():
     device = args.device
 
     # 检查数据
-    if not check_data_exists(config.expert_data.data_dir):
+    if not check_data_exists(config.expert_data.data_dir, config.expert_data.extra_data_dirs):
         print(f"\n❌ 未找到专家数据: {config.expert_data.data_dir}")
         print("请先运行: ./generate_expert_data.sh")
         return
@@ -270,18 +276,39 @@ def main():
         print("阶段 1: Ray 分布式专家数据预训练")
         print("=" * 70)
 
-        # 创建分布式预训练器
-        pretrainer = RayDistributedPretrainer(
-            model,
-            config.expert_data,
-            swanlab_run=swanlab_run,
-        )
+        use_local_pretrainer = str(config.expert_data.pretrain_backend).lower() == "local"
 
-        # 执行预训练
-        stats = pretrainer.pretrain()
+        if use_local_pretrainer:
+            print("[Pretrain] 使用本地 ExpertPretrainer（支持 A/B/C 单阶段门控）")
+            pretrainer = ExpertPretrainer(
+                model=model,
+                config=config.expert_data,
+                device=args.device,
+            )
+            stats = pretrainer.pretrain(
+                num_iterations=config.expert_data.num_pretrain_iterations,
+                checkpoint_dir="training/checkpoints",
+            )
+        else:
+            # 创建分布式预训练器
+            pretrainer = RayDistributedPretrainer(
+                model,
+                config.expert_data,
+                swanlab_run=swanlab_run,
+            )
+            # 执行预训练
+            stats = pretrainer.pretrain()
 
         # 加载预训练后的模型
-        pretrained_ckpt = Path("training/checkpoints/pretrained_model.pkl")
+        if config.expert_data.staged_mode:
+            stage_dir = resolve_stage_checkpoint_dir(
+                "training/checkpoints",
+                config.expert_data,
+                str(config.expert_data.active_stage).upper().strip(),
+            )
+            pretrained_ckpt = stage_dir / "pretrained_model.pkl"
+        else:
+            pretrained_ckpt = Path("training/checkpoints/pretrained_model.pkl")
         if pretrained_ckpt.exists():
             checkpoint = torch.load(pretrained_ckpt)
             model.load_state_dict(checkpoint["model_state_dict"])
@@ -312,11 +339,24 @@ def main():
             # 无真实对局结果（门控未启用），回退到 loss 估算
             expert_dataset = load_expert_dataset(
                 config.expert_data.data_dir,
+                extra_data_dirs=config.expert_data.extra_data_dirs,
                 max_samples=500,
             )
             metrics = evaluate_quality(model, feature_engineer, expert_dataset)
             if swanlab_run:
                 swanlab_run.log(metrics)
+
+        # staged 模式下，门控由阶段指标决定
+        if config.expert_data.staged_mode:
+            stage_id = stats.get("stage_id", config.expert_data.active_stage)
+            stage_id_str = str(stage_id).upper().strip()
+            stage_id_idx = {"A": 1.0, "B": 2.0, "C": 3.0}.get(stage_id_str, 0.0)
+            print(f"\n[Staged] 当前阶段: {stage_id} | gate_passed={gate_passed}")
+            if swanlab_run:
+                swanlab_run.log({
+                    "staged/stage_id_idx": stage_id_idx,
+                    "staged/gate_passed": int(bool(gate_passed)),
+                })
 
         # 决定是否继续强化学习
         if config.expert_data.auto_proceed:
@@ -338,8 +378,15 @@ def main():
             else:
                 print("\n✓ 继续强化学习训练")
 
-        # 清理 Ray Workers
-        pretrainer.shutdown()
+        # 清理 Ray Workers（仅 Ray pretrainer 需要）
+        if hasattr(pretrainer, "shutdown"):
+            pretrainer.shutdown()
+
+        if args.pretrain_only or config.expert_data.stop_after_pretrain:
+            print("\n[Pretrain] stop_after_pretrain=true 或 --pretrain-only，流程在预训练后结束。")
+            if swanlab_run:
+                swanlab_run.finish()
+            return
 
     else:
         print("\n跳过预训练阶段")

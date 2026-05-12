@@ -53,6 +53,7 @@ from training.core.action import decode_actions
 from training.expert.data_generator import ExpertDataset
 from training.expert.action_labeling import infer_target_planet_id
 from training.core.reward import RewardCalculator, RewardConfig
+from training.expert.pretraining import resolve_stage_checkpoint_dir
 
 # ===========================================================================
 # 内存模型 Agent（用于评估对局）
@@ -339,6 +340,78 @@ def evaluate_win_rate_against_expert(
     }
 
 
+def nearest_planet_sniper_agent(obs, configuration=None):
+    """简单 sniper：每个己方星球攻击最近非己方星球。"""
+    player = obs.get("player", 0) if isinstance(obs, dict) else obs.player
+    raw_planets = obs.get("planets", []) if isinstance(obs, dict) else obs.planets
+    my_planets = [p for p in raw_planets if int(p[1]) == int(player)]
+    targets = [p for p in raw_planets if int(p[1]) != int(player)]
+    actions = []
+    if not targets:
+        return actions
+    for src in my_planets:
+        sx, sy = float(src[2]), float(src[3])
+        src_ships = int(src[5])
+        nearest = min(
+            targets,
+            key=lambda t: math.hypot(float(t[2]) - sx, float(t[3]) - sy),
+        )
+        ships_need = int(nearest[5]) + 1
+        if src_ships >= ships_need:
+            angle = math.atan2(float(nearest[3]) - sy, float(nearest[2]) - sx)
+            actions.append([int(src[0]), angle, ships_need])
+    return actions
+
+
+def evaluate_win_rate_against_sniper(
+    model_state_dict: dict,
+    model_config: ModelConfig,
+    n_planets: int = 40,
+    num_games: int = 20,
+    device: str = "cpu",
+) -> Dict:
+    from kaggle_environments import make
+
+    model_agent = InMemoryModelAgent(
+        model_state_dict=model_state_dict,
+        model_config=model_config,
+        n_planets=n_planets,
+        device=device,
+    )
+    sniper_agent = nearest_planet_sniper_agent
+
+    wins = 0
+    losses = 0
+    draws = 0
+    for game_idx in range(num_games):
+        seed = 2026 + game_idx
+        env = make("orbit_wars", configuration={"seed": seed}, debug=False)
+        model_is_p0 = (game_idx % 2 == 0)
+        if model_is_p0:
+            env.run([model_agent, sniper_agent])
+        else:
+            env.run([sniper_agent, model_agent])
+        final = env.steps[-1]
+        p0_reward = final[0].reward
+        p1_reward = final[1].reward
+        model_reward = p0_reward if model_is_p0 else p1_reward
+        sniper_reward = p1_reward if model_is_p0 else p0_reward
+        if model_reward > sniper_reward:
+            wins += 1
+        elif model_reward < sniper_reward:
+            losses += 1
+        else:
+            draws += 1
+    win_rate = wins / max(num_games, 1)
+    return {
+        "win_rate": win_rate,
+        "wins": wins,
+        "losses": losses,
+        "draws": draws,
+        "num_games": num_games,
+    }
+
+
 # ===========================================================================
 # Ray Worker
 # ===========================================================================
@@ -426,6 +499,21 @@ class PretrainingWorker:
                 players.add(owner)
         return max(len(players), 2)  # 至少 2 个玩家
 
+    def _stage_num_players_filter(self) -> int:
+        stage = str(getattr(self.config, "active_stage", "C")).upper().strip()
+        if stage == "A":
+            return int(getattr(self.config, "stage_a_num_players", 0))
+        if stage == "B":
+            return int(getattr(self.config, "stage_b_num_players", 0))
+        return int(getattr(self.config, "stage_c_num_players", 0))
+
+    def _sample_matches_stage(self, sample: dict) -> bool:
+        required = self._stage_num_players_filter()
+        if required <= 0:
+            return True
+        raw_planets = sample.get("observation", {}).get("planets", [])
+        return self._infer_num_players(raw_planets) == required
+
     def train_multi_iterations(
         self,
         model_state_dict: dict,
@@ -451,8 +539,20 @@ class PretrainingWorker:
         total_ship_ratio_mae = 0.0
         total_target_label_valid_ratio = 0.0
         total_action_map_ratio = 0.0
+        total_send_acc = 0.0
+        total_target_top1 = 0.0
+        total_multi_target_source_rate = 0.0
+        total_valid_action_rate = 0.0
+        total_no_op_rate = 0.0
+        total_avg_actions_per_step = 0.0
         total_bc_loss = 0.0
         total_value_loss = 0.0
+        total_send_acc = 0.0
+        total_target_top1 = 0.0
+        total_multi_target_source_rate = 0.0
+        total_valid_action_rate = 0.0
+        total_no_op_rate = 0.0
+        total_avg_actions_per_step = 0.0
 
         for local_iter in range(num_iters):
             it = start_iteration + local_iter
@@ -467,6 +567,8 @@ class PretrainingWorker:
 
             for step in pbar:
                 sample = random.choice(self.train_data)
+                if not self._sample_matches_stage(sample):
+                    continue
                 try:
                     planet_features, fleet_features, global_features, metadata = self.feature_engineer.compute(
                         sample["observation"],
@@ -525,6 +627,15 @@ class PretrainingWorker:
                     total_action_map_ratio += diag.get("action_map_ratio", 0.0)
                     total_bc_loss += diag.get("bc_loss", 0.0)
                     total_value_loss += diag.get("value_loss", 0.0)
+                    total_send_acc += diag.get("send_acc", 0.0)
+                    total_target_top1 += diag.get("target_top1", 0.0)
+                    total_multi_target_source_rate += diag.get("multi_target_source_rate", 0.0)
+                    total_valid_action_rate += diag.get("valid_action_rate", 0.0)
+                    total_no_op_rate += diag.get("no_op_rate", 0.0)
+                    total_avg_actions_per_step += diag.get("avg_actions_per_step", 0.0)
+                    total_valid_action_rate += diag.get("valid_action_rate", 0.0)
+                    total_no_op_rate += diag.get("no_op_rate", 0.0)
+                    total_avg_actions_per_step += diag.get("avg_actions_per_step", 0.0)
 
                     if step % 50 == 0 and iter_valid > 0:
                         pbar.set_postfix(loss=f"{iter_loss / iter_valid:.4f}", valid=iter_valid)
@@ -558,6 +669,12 @@ class PretrainingWorker:
             "action_map_ratio": total_action_map_ratio / max(1, total_valid),
             "bc_loss": total_bc_loss / max(1, total_valid),
             "value_loss": total_value_loss / max(1, total_valid),
+            "send_acc": total_send_acc / max(1, total_valid),
+            "target_top1": total_target_top1 / max(1, total_valid),
+            "multi_target_source_rate": total_multi_target_source_rate / max(1, total_valid),
+            "valid_action_rate": total_valid_action_rate / max(1, total_valid),
+            "no_op_rate": total_no_op_rate / max(1, total_valid),
+            "avg_actions_per_step": total_avg_actions_per_step / max(1, total_valid),
         }
 
     def train_iteration(self, model_state_dict: dict, iteration: int = 0) -> Dict:
@@ -582,6 +699,9 @@ class PretrainingWorker:
         total_ship_ratio_mae = 0.0
         total_target_label_valid_ratio = 0.0
         total_action_map_ratio = 0.0
+        total_send_acc = 0.0
+        total_target_top1 = 0.0
+        total_multi_target_source_rate = 0.0
 
         pbar = tqdm(
             range(steps_per_iter),
@@ -691,9 +811,17 @@ class PretrainingWorker:
         total_ship_ratio_mae = 0.0
         total_target_label_valid_ratio = 0.0
         total_action_map_ratio = 0.0
+        total_send_acc = 0.0
+        total_target_top1 = 0.0
+        total_multi_target_source_rate = 0.0
+        total_valid_action_rate = 0.0
+        total_no_op_rate = 0.0
+        total_avg_actions_per_step = 0.0
 
         with torch.no_grad():
             for sample in val_samples:
+                if not self._sample_matches_stage(sample):
+                    continue
                 try:
                     # 提取特征
                     planet_features, fleet_features, global_features, metadata = self.feature_engineer.compute(
@@ -754,6 +882,9 @@ class PretrainingWorker:
                     total_ship_ratio_mae += diag.get("ship_ratio_mae", 0.0)
                     total_target_label_valid_ratio += diag.get("target_label_valid_ratio", 0.0)
                     total_action_map_ratio += diag.get("action_map_ratio", 0.0)
+                    total_send_acc += diag.get("send_acc", 0.0)
+                    total_target_top1 += diag.get("target_top1", 0.0)
+                    total_multi_target_source_rate += diag.get("multi_target_source_rate", 0.0)
 
                 except Exception:
                     continue
@@ -767,6 +898,12 @@ class PretrainingWorker:
             "val_ship_ratio_mae": total_ship_ratio_mae / max(1, num_valid),
             "val_target_label_valid_ratio": total_target_label_valid_ratio / max(1, num_valid),
             "val_action_map_ratio": total_action_map_ratio / max(1, num_valid),
+            "val_send_acc": total_send_acc / max(1, num_valid),
+            "val_target_top1": total_target_top1 / max(1, num_valid),
+            "val_multi_target_source_rate": total_multi_target_source_rate / max(1, num_valid),
+            "val_valid_action_rate": total_valid_action_rate / max(1, num_valid),
+            "val_no_op_rate": total_no_op_rate / max(1, num_valid),
+            "val_avg_actions_per_step": total_avg_actions_per_step / max(1, num_valid),
         }
 
     def _compute_loss(
@@ -816,7 +953,7 @@ class PretrainingWorker:
         # 2. Value loss 在预训练阶段容易引入噪声，降到很低权重。
         value_loss = self._compute_value_loss(value_pred, reward)
 
-        # 总损失：以行为克隆为主
+        # 总损失：分阶段行为克隆为主（A/B/C）
         total_loss = self.config.behavior_clone_loss_coef * bc_loss + 0.02 * value_loss
         bc_diag["value_loss"] = float(value_loss.detach().item())
         bc_diag["bc_loss"] = float(bc_loss.detach().item())
@@ -834,6 +971,7 @@ class PretrainingWorker:
 
         将专家的 angle 映射到目标行星 ID，然后计算分类损失。
         """
+        stage = str(getattr(self.config, "active_stage", "C")).upper().strip()
         if not expert_actions:
             return torch.tensor(0.0, device=self.device), {
                 "acted_ratio_expert": 0.0,
@@ -841,6 +979,12 @@ class PretrainingWorker:
                 "ship_ratio_mae": 0.0,
                 "target_label_valid_ratio": 0.0,
                 "action_map_ratio": 0.0,
+                "send_acc": 0.0,
+                "target_top1": 0.0,
+                "multi_target_source_rate": 0.0,
+                "valid_action_rate": 0.0,
+                "no_op_rate": 1.0,
+                "avg_actions_per_step": 0.0,
             }
 
         raw_planets = observation.get("planets", [])
@@ -851,6 +995,12 @@ class PretrainingWorker:
                 "ship_ratio_mae": 0.0,
                 "target_label_valid_ratio": 0.0,
                 "action_map_ratio": 0.0,
+                "send_acc": 0.0,
+                "target_top1": 0.0,
+                "multi_target_source_rate": 0.0,
+                "valid_action_rate": 0.0,
+                "no_op_rate": 1.0,
+                "avg_actions_per_step": 0.0,
             }
 
         all_planets = [
@@ -879,6 +1029,12 @@ class PretrainingWorker:
                 "ship_ratio_mae": 0.0,
                 "target_label_valid_ratio": 0.0,
                 "action_map_ratio": 0.0,
+                "send_acc": 0.0,
+                "target_top1": 0.0,
+                "multi_target_source_rate": 0.0,
+                "valid_action_rate": 0.0,
+                "no_op_rate": 1.0,
+                "avg_actions_per_step": 0.0,
             }
 
         # 将专家动作转换为模型格式
@@ -892,7 +1048,19 @@ class PretrainingWorker:
         n_planets = len(all_planets)
 
         if n_owned == 0 or target_logits.size(1) < n_owned:
-            return torch.tensor(0.0, device=self.device)
+            return torch.tensor(0.0, device=self.device), {
+                "acted_ratio_expert": 0.0,
+                "acted_ratio_pred": 0.0,
+                "ship_ratio_mae": 0.0,
+                "target_label_valid_ratio": 0.0,
+                "action_map_ratio": 0.0,
+                "send_acc": 0.0,
+                "target_top1": 0.0,
+                "multi_target_source_rate": 0.0,
+                "valid_action_rate": 0.0,
+                "no_op_rate": 1.0,
+                "avg_actions_per_step": float(len(expert_actions)),
+            }
 
         # 创建源行星 ID 到索引的映射
         owned_id_to_idx = {pid: idx for idx, pid in enumerate(owned_planet_ids)}
@@ -914,6 +1082,18 @@ class PretrainingWorker:
         # 根据专家动作更新
         # 同一 source 行星若有多次发射，保留舰队规模最大的动作，
         # 避免“后写覆盖”随机吞掉主动作标签。
+        actions_by_src = {}
+        for action in expert_actions:
+            if len(action) < 3:
+                continue
+            src = int(action[0])
+            actions_by_src.setdefault(src, []).append(action)
+
+        multi_target_source_rate = 0.0
+        if len(actions_by_src) > 0:
+            multi_target_sources = sum(1 for _, acts in actions_by_src.items() if len(acts) >= 2)
+            multi_target_source_rate = float(multi_target_sources / max(1, len(actions_by_src)))
+
         best_action_by_src = {}
         for action in expert_actions:
             if len(action) < 3:
@@ -983,6 +1163,12 @@ class PretrainingWorker:
                 "ship_ratio_mae": float((pred_owned - tgt_owned).abs().mean().item()),
                 "target_label_valid_ratio": 0.0,
                 "action_map_ratio": float(mapped_count / max(acted_count, 1.0)),
+                "send_acc": float(((pred_owned >= 0.5).float() == act_owned).float().mean().item()),
+                "target_top1": 0.0,
+                "multi_target_source_rate": multi_target_source_rate,
+                "valid_action_rate": float(mapped_count / max(len(best_action_by_src), 1)),
+                "no_op_rate": float(1.0 - act_owned.mean().item()),
+                "avg_actions_per_step": float(len(expert_actions)),
             }
             return torch.tensor(0.0, device=self.device), diag
 
@@ -1003,10 +1189,17 @@ class PretrainingWorker:
                 "ship_ratio_mae": float((pred_owned - tgt_owned).abs().mean().item()),
                 "target_label_valid_ratio": 0.0,
                 "action_map_ratio": float(mapped_count / max(acted_count, 1.0)),
+                "send_acc": float(((pred_owned >= 0.5).float() == act_owned).float().mean().item()),
+                "target_top1": 0.0,
+                "multi_target_source_rate": multi_target_source_rate,
+                "valid_action_rate": float(mapped_count / max(len(best_action_by_src), 1)),
+                "no_op_rate": float(1.0 - act_owned.mean().item()),
+                "avg_actions_per_step": float(len(expert_actions)),
             }
             return torch.tensor(0.0, device=self.device), diag
 
         target_loss = F.cross_entropy(valid_logits, valid_targets)
+        target_top1 = float((valid_logits.argmax(dim=-1) == valid_targets).float().mean().item())
 
         # 2. 出兵比例损失（对所有 owned 星球监督：行动=ratio，不行动=0）
         pred_owned = pred_ships[0, :n_owned, :]  # [n_owned, 1]
@@ -1023,8 +1216,13 @@ class PretrainingWorker:
             act_owned,
         )
 
-        # 总行为克隆损失
-        bc_loss = target_loss + 0.3 * ships_loss + 1.0 * act_bce
+        # 分阶段损失
+        if stage == "A":
+            bc_loss = act_bce
+        elif stage == "B":
+            bc_loss = act_bce + 0.3 * ships_loss
+        else:
+            bc_loss = target_loss + 0.3 * ships_loss + 1.0 * act_bce
 
         acted_count = float(act_owned.sum().item())
         valid_count = float(valid_mask.sum().item())
@@ -1034,6 +1232,12 @@ class PretrainingWorker:
             "ship_ratio_mae": float((pred_owned - tgt_owned).abs().mean().item()),
             "target_label_valid_ratio": float(valid_count / max(acted_count, 1.0)),
             "action_map_ratio": float(mapped_count / max(acted_count, 1.0)),
+            "send_acc": float(((pred_owned >= 0.5).float() == act_owned).float().mean().item()),
+            "target_top1": target_top1,
+            "multi_target_source_rate": multi_target_source_rate,
+            "valid_action_rate": float(mapped_count / max(len(best_action_by_src), 1)),
+            "no_op_rate": float(1.0 - act_owned.mean().item()),
+            "avg_actions_per_step": float(len(expert_actions)),
         }
         return bc_loss, diag
 
@@ -1070,7 +1274,7 @@ class RayDistributedPretrainer:
             swanlab_run: SwanLab 运行实例
         """
         self.config = config
-        self.swanlab = swanlab
+        self.swanlab = swanlab_run
         self.model_config = model.config
         self.n_planets = 40  # 与 PretrainingWorker 一致
 
@@ -1106,9 +1310,15 @@ class RayDistributedPretrainer:
         print(f"{'='*60}\n")
 
         # 优化：按文件分片，每个 worker 只加载自己的文件，并行加载
-        data_dir = Path(config.data_dir)
-        data_files = sorted(list(data_dir.glob("*.jsonl")) + list(data_dir.glob("*.pkl")))
+        data_dirs = [Path(config.data_dir)] + [Path(p) for p in getattr(config, "extra_data_dirs", [])]
+        data_files = []
+        for d in data_dirs:
+            if not d.exists():
+                continue
+            data_files.extend(list(d.glob("*.jsonl")) + list(d.glob("*.pkl")))
+        data_files = sorted(data_files)
         total_workers = config.num_pretrain_workers
+        print(f"数据目录: {[str(d) for d in data_dirs]}")
         print(f"数据文件: {len(data_files)} 个，分配给 {total_workers} 个 workers")
 
         # 按文件均匀分配
@@ -1133,7 +1343,8 @@ class RayDistributedPretrainer:
 
         # 全局模型状态
         self.global_model_state = model.state_dict()
-        self.checkpoint_dir = Path("training/checkpoints")
+        stage_for_dir = str(getattr(config, "active_stage", "AUTO")).upper().strip() if getattr(config, "staged_mode", False) else "AUTO"
+        self.checkpoint_dir = resolve_stage_checkpoint_dir("training/checkpoints", config, stage_for_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     def pretrain(self) -> Dict:
@@ -1172,6 +1383,10 @@ class RayDistributedPretrainer:
             "train_loss": [],
             "val_loss": [],
         }
+        stage_id = str(getattr(self.config, "active_stage", "C")).upper().strip()
+        staged_mode = bool(getattr(self.config, "staged_mode", False))
+        min_iter = int(getattr(self.config, "stage_min_iterations", 0))
+        eval_interval = int(getattr(self.config, "stage_eval_interval", self.config.eval_gate_interval))
 
         sync_interval = self.config.sync_interval
         pbar_sync = tqdm(
@@ -1210,6 +1425,12 @@ class RayDistributedPretrainer:
             avg_action_map_ratio = float(np.mean([r.get("action_map_ratio", 0.0) for r in results]))
             avg_bc_loss = float(np.mean([r.get("bc_loss", 0.0) for r in results]))
             avg_value_loss = float(np.mean([r.get("value_loss", 0.0) for r in results]))
+            avg_send_acc = float(np.mean([r.get("send_acc", 0.0) for r in results]))
+            avg_target_top1 = float(np.mean([r.get("target_top1", 0.0) for r in results]))
+            avg_multi_target_source_rate = float(np.mean([r.get("multi_target_source_rate", 0.0) for r in results]))
+            avg_valid_action_rate = float(np.mean([r.get("valid_action_rate", 0.0) for r in results]))
+            avg_no_op_rate = float(np.mean([r.get("no_op_rate", 0.0) for r in results]))
+            avg_actions_per_step = float(np.mean([r.get("avg_actions_per_step", 0.0) for r in results]))
             sync_time = time.time() - t0
 
             # 4. 验证
@@ -1227,26 +1448,64 @@ class RayDistributedPretrainer:
             avg_val_ship_ratio_mae = float(np.mean([r.get("val_ship_ratio_mae", 0.0) for r in val_results]))
             avg_val_target_label_valid_ratio = float(np.mean([r.get("val_target_label_valid_ratio", 0.0) for r in val_results]))
             avg_val_action_map_ratio = float(np.mean([r.get("val_action_map_ratio", 0.0) for r in val_results]))
+            avg_val_send_acc = float(np.mean([r.get("val_send_acc", 0.0) for r in val_results]))
+            avg_val_target_top1 = float(np.mean([r.get("val_target_top1", 0.0) for r in val_results]))
+            avg_val_multi_target_source_rate = float(np.mean([r.get("val_multi_target_source_rate", 0.0) for r in val_results]))
+            avg_val_valid_action_rate = float(np.mean([r.get("val_valid_action_rate", 0.0) for r in val_results]))
+            avg_val_no_op_rate = float(np.mean([r.get("val_no_op_rate", 0.0) for r in val_results]))
+            avg_val_actions_per_step = float(np.mean([r.get("val_avg_actions_per_step", 0.0) for r in val_results]))
 
             # 记录 SwanLab
             if self.swanlab:
-                self.swanlab.log({
+                base_log = {
                     "pretrain_iteration": sync_end - 1,
-                    "train_loss": avg_train_loss,
+                    "stage_id_idx": {"A":1.0,"B":2.0,"C":3.0}.get(stage_id,0.0),
+                                        "train_loss": avg_train_loss,
                     "val_loss": avg_val_loss,
                     "pretrain_bc_loss": avg_bc_loss,
                     "pretrain_value_loss": avg_value_loss,
                     "pretrain_acted_ratio_expert": avg_acted_ratio_expert,
                     "pretrain_acted_ratio_pred": avg_acted_ratio_pred,
+                    "pretrain_send_acc": avg_send_acc,
                     "pretrain_ship_ratio_mae": avg_ship_ratio_mae,
+                    "pretrain_target_top1": avg_target_top1,
+                    "pretrain_multi_target_source_rate": avg_multi_target_source_rate,
+                    "pretrain_valid_action_rate": avg_valid_action_rate,
+                    "pretrain_no_op_rate": avg_no_op_rate,
+                    "pretrain_avg_actions_per_step": avg_actions_per_step,
                     "pretrain_target_label_valid_ratio": avg_target_label_valid_ratio,
                     "pretrain_action_map_ratio": avg_action_map_ratio,
                     "pretrain_val_acted_ratio_expert": avg_val_acted_ratio_expert,
                     "pretrain_val_acted_ratio_pred": avg_val_acted_ratio_pred,
+                    "pretrain_val_send_acc": avg_val_send_acc,
                     "pretrain_val_ship_ratio_mae": avg_val_ship_ratio_mae,
+                    "pretrain_val_target_top1": avg_val_target_top1,
+                    "pretrain_val_multi_target_source_rate": avg_val_multi_target_source_rate,
+                    "pretrain_val_valid_action_rate": avg_val_valid_action_rate,
+                    "pretrain_val_no_op_rate": avg_val_no_op_rate,
+                    "pretrain_val_avg_actions_per_step": avg_val_actions_per_step,
                     "pretrain_val_target_label_valid_ratio": avg_val_target_label_valid_ratio,
                     "pretrain_val_action_map_ratio": avg_val_action_map_ratio,
-                })
+                }
+                stage_prefix = f"stage_{stage_id}"
+                stage_log = {
+                    f"{stage_prefix}/train_loss": avg_train_loss,
+                    f"{stage_prefix}/val_loss": avg_val_loss,
+                    f"{stage_prefix}/pretrain_send_acc": avg_send_acc,
+                    f"{stage_prefix}/pretrain_ship_ratio_mae": avg_ship_ratio_mae,
+                    f"{stage_prefix}/pretrain_target_top1": avg_target_top1,
+                    f"{stage_prefix}/pretrain_val_send_acc": avg_val_send_acc,
+                    f"{stage_prefix}/pretrain_val_ship_ratio_mae": avg_val_ship_ratio_mae,
+                    f"{stage_prefix}/pretrain_val_target_top1": avg_val_target_top1,
+                    f"{stage_prefix}/pretrain_valid_action_rate": avg_valid_action_rate,
+                    f"{stage_prefix}/pretrain_no_op_rate": avg_no_op_rate,
+                    f"{stage_prefix}/pretrain_avg_actions_per_step": avg_actions_per_step,
+                    f"{stage_prefix}/pretrain_val_valid_action_rate": avg_val_valid_action_rate,
+                    f"{stage_prefix}/pretrain_val_no_op_rate": avg_val_no_op_rate,
+                    f"{stage_prefix}/pretrain_val_avg_actions_per_step": avg_val_actions_per_step,
+                }
+                base_log.update(stage_log)
+                self.swanlab.log(base_log)
 
             # 更新进度条
             pbar_sync.set_postfix(
@@ -1275,9 +1534,56 @@ class RayDistributedPretrainer:
                 self._save_checkpoint(ckpt_path, sync_end)
                 pbar_sync.write(f"  ✓ Checkpoint: {ckpt_path}")
 
-            # 6. 专家策略评估门控
+            # 6. 门控（staged_mode 下优先使用阶段指标）
             gate_passed = False
-            if (
+            stage_eval_interval = max(1, int(getattr(self.config, "stage_eval_interval", self.config.eval_gate_interval)))
+            should_stage_eval = staged_mode and sync_end >= min_iter and sync_end % stage_eval_interval == 0
+
+            if should_stage_eval:
+                opponent = self._stage_eval_opponent(stage_id)
+                games = self._stage_eval_games(stage_id)
+                if opponent != "none" and games > 0:
+                    eval_res = self._evaluate_against_configured_opponent(
+                        opponent=opponent,
+                        num_games=games,
+                    )
+                    stats[f"stage_{stage_id.lower()}_{opponent}_win_rate"] = eval_res["win_rate"]
+                    if self.swanlab:
+                        self.swanlab.log({
+                            "pretrain_iteration": sync_end,
+                            "stage_id_idx": {"A":1.0,"B":2.0,"C":3.0}.get(stage_id,0.0),
+                                                f"stage_{stage_id}/win_rate_vs_{opponent}": eval_res["win_rate"],
+                            f"stage_{stage_id}/wins_vs_{opponent}": eval_res["wins"],
+                            f"stage_{stage_id}/losses_vs_{opponent}": eval_res["losses"],
+                            f"stage_{stage_id}/draws_vs_{opponent}": eval_res["draws"],
+                        })
+                    pbar_sync.write(
+                        f"  [StageEval] vs {opponent}: win_rate={eval_res['win_rate']:.1%} "
+                        f"({eval_res['wins']}/{eval_res['losses']}/{eval_res['draws']})"
+                    )
+
+            if staged_mode and sync_end >= min_iter and sync_end % max(1, eval_interval) == 0:
+                if stage_id == "A":
+                    thr = float(getattr(self.config, "stage_a_send_acc_threshold", 0.9))
+                    gate_passed = avg_val_send_acc >= thr
+                elif stage_id == "B":
+                    thr = float(getattr(self.config, "stage_b_ship_mae_threshold", 0.12))
+                    gate_passed = avg_val_ship_ratio_mae <= thr
+                else:
+                    thr = float(getattr(self.config, "stage_c_target_top1_threshold", 0.65))
+                    gate_passed = avg_val_target_top1 >= thr
+
+                pbar_sync.write(
+                    f"  [StageGate] stage={stage_id} passed={gate_passed} "
+                    f"(send_acc={avg_val_send_acc:.3f}, ship_mae={avg_val_ship_ratio_mae:.3f}, "
+                    f"target_top1={avg_val_target_top1:.3f})"
+                )
+                stats["final_stage_metrics"] = {
+                    "val_send_acc": avg_val_send_acc,
+                    "val_ship_ratio_mae": avg_val_ship_ratio_mae,
+                    "val_target_top1": avg_val_target_top1,
+                }
+            elif (
                 self.config.eval_gate_enabled
                 and sync_end % self.config.eval_gate_interval == 0
                 and sync_end > 0
@@ -1341,7 +1647,41 @@ class RayDistributedPretrainer:
 
         stats.setdefault("gate_passed", False)
         stats.setdefault("final_win_rate", 0.0)
+        stats["stage_id"] = stage_id if staged_mode else "AUTO"
         return stats
+
+    def _stage_eval_opponent(self, stage_id: str) -> str:
+        stage_id = stage_id.upper().strip()
+        if stage_id == "A":
+            return str(getattr(self.config, "stage_a_eval_opponent", "sniper")).lower()
+        if stage_id == "B":
+            return str(getattr(self.config, "stage_b_eval_opponent", "sniper")).lower()
+        return str(getattr(self.config, "stage_c_eval_opponent", "expert")).lower()
+
+    def _stage_eval_games(self, stage_id: str) -> int:
+        stage_id = stage_id.upper().strip()
+        if stage_id == "A":
+            return int(getattr(self.config, "stage_a_eval_games", 12))
+        if stage_id == "B":
+            return int(getattr(self.config, "stage_b_eval_games", 12))
+        return int(getattr(self.config, "stage_c_eval_games", 20))
+
+    def _evaluate_against_configured_opponent(self, opponent: str, num_games: int) -> Dict:
+        if opponent == "sniper":
+            return evaluate_win_rate_against_sniper(
+                model_state_dict=self.global_model_state,
+                model_config=self.model_config,
+                n_planets=self.n_planets,
+                num_games=num_games,
+                device=self.config.eval_gate_device,
+            )
+        return evaluate_win_rate_against_expert(
+            model_state_dict=self.global_model_state,
+            model_config=self.model_config,
+            n_planets=self.n_planets,
+            num_games=num_games,
+            device=self.config.eval_gate_device,
+        )
 
     def _aggregate_models(self, results: List[Dict]):
         """聚合多个 Worker 的模型参数。

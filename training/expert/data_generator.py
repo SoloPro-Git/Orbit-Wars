@@ -247,6 +247,7 @@ class ExpertDataset:
     def __init__(
         self,
         data_dir: str | Path = "data/expert_demonstrations",
+        extra_data_dirs: list[str | Path] | None = None,
         max_samples: int | None = None,
     ):
         """初始化数据集。
@@ -256,15 +257,21 @@ class ExpertDataset:
             max_samples: 最大样本数量，None 表示全部加载。
         """
         self.data_dir = Path(data_dir)
+        self.extra_data_dirs = [Path(p) for p in (extra_data_dirs or [])]
         self.max_samples = max_samples
         self.data = []
         self._load_data()
 
     def _load_data(self):
         """加载所有数据文件。"""
-        jsonl_files = list(self.data_dir.glob("*.jsonl"))
-        pkl_files = list(self.data_dir.glob("*.pkl"))
-        data_files = jsonl_files + pkl_files
+        all_dirs = [self.data_dir] + self.extra_data_dirs
+        data_files = []
+        for d in all_dirs:
+            if not d.exists():
+                continue
+            jsonl_files = list(d.glob("*.jsonl"))
+            pkl_files = list(d.glob("*.pkl"))
+            data_files.extend(jsonl_files + pkl_files)
 
         if self.max_samples:
             print(f"发现 {len(data_files)} 个数据文件（限制加载 {self.max_samples} 样本）")
@@ -342,11 +349,13 @@ class ExpertDataset:
         train_ds.data = train_data
         train_ds.max_samples = None
         train_ds.data_dir = self.data_dir
+        train_ds.extra_data_dirs = self.extra_data_dirs
 
         val_ds = ExpertDataset.__new__(ExpertDataset)
         val_ds.data = val_data
         val_ds.max_samples = None
         val_ds.data_dir = self.data_dir
+        val_ds.extra_data_dirs = self.extra_data_dirs
 
         return train_ds, val_ds
 
@@ -421,6 +430,7 @@ def generate_expert_data(
 
 def load_expert_dataset(
     data_dir: str = "data/expert_demonstrations",
+    extra_data_dirs: list[str] | None = None,
     max_samples: int | None = None,
 ) -> ExpertDataset:
     """加载专家数据集的便捷函数。
@@ -432,4 +442,8 @@ def load_expert_dataset(
     Returns:
         数据集对象。
     """
-    return ExpertDataset(data_dir=data_dir, max_samples=max_samples)
+    return ExpertDataset(
+        data_dir=data_dir,
+        extra_data_dirs=extra_data_dirs,
+        max_samples=max_samples,
+    )

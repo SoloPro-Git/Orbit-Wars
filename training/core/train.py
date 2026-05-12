@@ -147,10 +147,18 @@ def train(config_path: str = "training/config/default.yaml"):
         print("[Train] SwanLab not available, using print logging")
 
     def log_metrics(metrics: dict, step: int):
+        metrics = dict(metrics)
+        metrics.setdefault("stage_id", "E")
         if swanlab:
             swanlab.log(metrics, step=step)
         else:
-            print(f"[Step {step}] " + " | ".join(f"{k}={v:.4f}" for k, v in metrics.items()))
+            fmt = []
+            for k, v in metrics.items():
+                if isinstance(v, (int, float)):
+                    fmt.append(f"{k}={v:.4f}")
+                else:
+                    fmt.append(f"{k}={v}")
+            print(f"[Step {step}] " + " | ".join(fmt))
 
     # 初始化组件
     model = OrbitWarsModel(
