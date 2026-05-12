@@ -18,3 +18,4 @@ training/.ray_temp/
 replay_*.html
 data/expert_demonstrations/*
 training/checkpoints/*
+data/*
