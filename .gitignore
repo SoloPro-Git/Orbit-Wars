@@ -19,3 +19,4 @@ replay_*.html
 data/expert_demonstrations/*
 training/checkpoints/*
 data/*
+rulebase/**/experiments/
