@@ -1,0 +1,195 @@
+{
+  "summary": {
+    "timestamp": "2026-05-13T14:48:47",
+    "games": 20,
+    "public_agent": "rulebase.kaggle_public_strategies.PublicRuleAgent",
+    "baseline_agent": "/data2/solo/Orbit-Wars/rulebase/baseline/orbit-wars-baseline-all-strategies-agent.py",
+    "public_wins": 20,
+    "baseline_wins": 0,
+    "draws": 0,
+    "public_win_rate": 1.0,
+    "public_non_loss_rate": 1.0
+  },
+  "games": [
+    {
+      "seat": "public_p0",
+      "public_outcome": "win",
+      "seed": 42,
+      "p0_reward": 1,
+      "p1_reward": -1,
+      "winner": "p0",
+      "steps": 100
+    },
+    {
+      "seat": "public_p0",
+      "public_outcome": "win",
+      "seed": 43,
+      "p0_reward": 1,
+      "p1_reward": -1,
+      "winner": "p0",
+      "steps": 169
+    },
+    {
+      "seat": "public_p0",
+      "public_outcome": "win",
+      "seed": 44,
+      "p0_reward": 1,
+      "p1_reward": -1,
+      "winner": "p0",
+      "steps": 121
+    },
+    {
+      "seat": "public_p0",
+      "public_outcome": "win",
+      "seed": 45,
+      "p0_reward": 1,
+      "p1_reward": -1,
+      "winner": "p0",
+      "steps": 155
+    },
+    {
+      "seat": "public_p0",
+      "public_outcome": "win",
+      "seed": 46,
+      "p0_reward": 1,
+      "p1_reward": -1,
+      "winner": "p0",
+      "steps": 118
+    },
+    {
+      "seat": "public_p0",
+      "public_outcome": "win",
+      "seed": 47,
+      "p0_reward": 1,
+      "p1_reward": -1,
+      "winner": "p0",
+      "steps": 161
+    },
+    {
+      "seat": "public_p0",
+      "public_outcome": "win",
+      "seed": 48,
+      "p0_reward": 1,
+      "p1_reward": -1,
+      "winner": "p0",
+      "steps": 148
+    },
+    {
+      "seat": "public_p0",
+      "public_outcome": "win",
+      "seed": 49,
+      "p0_reward": 1,
+      "p1_reward": -1,
+      "winner": "p0",
+      "steps": 124
+    },
+    {
+      "seat": "public_p0",
+      "public_outcome": "win",
+      "seed": 50,
+      "p0_reward": 1,
+      "p1_reward": -1,
+      "winner": "p0",
+      "steps": 181
+    },
+    {
+      "seat": "public_p0",
+      "public_outcome": "win",
+      "seed": 51,
+      "p0_reward": 1,
+      "p1_reward": -1,
+      "winner": "p0",
+      "steps": 117
+    },
+    {
+      "seat": "public_p1",
+      "public_outcome": "win",
+      "seed": 1042,
+      "p0_reward": -1,
+      "p1_reward": 1,
+      "winner": "p1",
+      "steps": 169
+    },
+    {
+      "seat": "public_p1",
+      "public_outcome": "win",
+      "seed": 1043,
+      "p0_reward": -1,
+      "p1_reward": 1,
+      "winner": "p1",
+      "steps": 141
+    },
+    {
+      "seat": "public_p1",
+      "public_outcome": "win",
+      "seed": 1044,
+      "p0_reward": -1,
+      "p1_reward": 1,
+      "winner": "p1",
+      "steps": 203
+    },
+    {
+      "seat": "public_p1",
+      "public_outcome": "win",
+      "seed": 1045,
+      "p0_reward": -1,
+      "p1_reward": 1,
+      "winner": "p1",
+      "steps": 120
+    },
+    {
+      "seat": "public_p1",
+      "public_outcome": "win",
+      "seed": 1046,
+      "p0_reward": -1,
+      "p1_reward": 1,
+      "winner": "p1",
+      "steps": 176
+    },
+    {
+      "seat": "public_p1",
+      "public_outcome": "win",
+      "seed": 1047,
+      "p0_reward": -1,
+      "p1_reward": 1,
+      "winner": "p1",
+      "steps": 107
+    },
+    {
+      "seat": "public_p1",
+      "public_outcome": "win",
+      "seed": 1048,
+      "p0_reward": -1,
+      "p1_reward": 1,
+      "winner": "p1",
+      "steps": 153
+    },
+    {
+      "seat": "public_p1",
+      "public_outcome": "win",
+      "seed": 1049,
+      "p0_reward": -1,
+      "p1_reward": 1,
+      "winner": "p1",
+      "steps": 120
+    },
+    {
+      "seat": "public_p1",
+      "public_outcome": "win",
+      "seed": 1050,
+      "p0_reward": -1,
+      "p1_reward": 1,
+      "winner": "p1",
+      "steps": 131
+    },
+    {
+      "seat": "public_p1",
+      "public_outcome": "win",
+      "seed": 1051,
+      "p0_reward": -1,
+      "p1_reward": 1,
+      "winner": "p1",
+      "steps": 87
+    }
+  ]
+}

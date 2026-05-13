@@ -1,0 +1,515 @@
+{
+  "summary": {
+    "agent": "orbit-wars-baseline-all-strategies-agent.py",
+    "opponent": "nearest_planet_agent",
+    "timestamp": "2026-05-13T14:16:34",
+    "seat_breakdown": {
+      "all_as_player0": {
+        "games": 40,
+        "wins": 40,
+        "losses": 0,
+        "draws": 0,
+        "win_rate": 1.0
+      },
+      "all_as_player1": {
+        "games": 40,
+        "wins": 38,
+        "losses": 2,
+        "draws": 0,
+        "win_rate": 0.95
+      }
+    },
+    "overall": {
+      "games": 80,
+      "wins": 78,
+      "losses": 2,
+      "draws": 0,
+      "win_rate": 0.975,
+      "non_loss_rate": 0.975
+    }
+  },
+  "all_as_player0_games": [
+    {
+      "seed": 42,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 43,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 44,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 45,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 46,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 47,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 48,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 49,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 50,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 51,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 52,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 53,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 54,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 55,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 56,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 57,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 58,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 59,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 60,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 61,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 62,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 63,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 64,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 65,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 66,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 67,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 68,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 69,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 70,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 71,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 72,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 73,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 74,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 75,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 76,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 77,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 78,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 79,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 80,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    },
+    {
+      "seed": 81,
+      "reward_a": 1,
+      "reward_b": -1,
+      "outcome": "A_WIN"
+    }
+  ],
+  "all_as_player1_games": [
+    {
+      "seed": 1042,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1043,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1044,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1045,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1046,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1047,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1048,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1049,
+      "reward_nearest_p0": 1,
+      "reward_all_p1": -1,
+      "all_outcome": "LOSE"
+    },
+    {
+      "seed": 1050,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1051,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1052,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1053,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1054,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1055,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1056,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1057,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1058,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1059,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1060,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1061,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1062,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1063,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1064,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1065,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1066,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1067,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1068,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1069,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1070,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1071,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1072,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1073,
+      "reward_nearest_p0": 1,
+      "reward_all_p1": -1,
+      "all_outcome": "LOSE"
+    },
+    {
+      "seed": 1074,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1075,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1076,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1077,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1078,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1079,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1080,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    },
+    {
+      "seed": 1081,
+      "reward_nearest_p0": -1,
+      "reward_all_p1": 1,
+      "all_outcome": "WIN"
+    }
+  ]
+}
