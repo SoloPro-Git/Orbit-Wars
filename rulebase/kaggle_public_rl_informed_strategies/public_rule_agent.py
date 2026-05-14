@@ -153,11 +153,24 @@ class PublicRuleAgent:
     enemy_launch_punish_min_production: float = PUBLIC_EXACT.enemy_launch_punish_min_production
     enemy_launch_punish_bonus_weight: float = PUBLIC_EXACT.enemy_launch_punish_bonus_weight
     enemy_launch_punish_max_targets: int = PUBLIC_EXACT.enemy_launch_punish_max_targets
+    enemy_launch_punish_min_step: int = PUBLIC_EXACT.enemy_launch_punish_min_step
+    enemy_launch_punish_max_step: int = PUBLIC_EXACT.enemy_launch_punish_max_step
+    enemy_launch_punish_min_prod_diff: float = PUBLIC_EXACT.enemy_launch_punish_min_prod_diff
+    enemy_launch_punish_min_planet_diff: int = PUBLIC_EXACT.enemy_launch_punish_min_planet_diff
+    enemy_launch_punish_min_ship_ratio: float = PUBLIC_EXACT.enemy_launch_punish_min_ship_ratio
+    enable_recent_loss_recapture_bias: bool = PUBLIC_EXACT.enable_recent_loss_recapture_bias
+    recent_loss_recapture_min_production: float = PUBLIC_EXACT.recent_loss_recapture_min_production
+    recent_loss_recapture_window: int = PUBLIC_EXACT.recent_loss_recapture_window
+    recent_loss_recapture_min_step: int = PUBLIC_EXACT.recent_loss_recapture_min_step
+    recent_loss_recapture_max_step: int = PUBLIC_EXACT.recent_loss_recapture_max_step
+    recent_loss_recapture_bonus: float = PUBLIC_EXACT.recent_loss_recapture_bonus
+    recent_loss_recapture_prod_weight: float = PUBLIC_EXACT.recent_loss_recapture_prod_weight
     fleet_trajectories: list[dict[str, object]] = field(default_factory=list)
     reinforcement_trajectories: list[dict[str, object]] = field(default_factory=list)
     moving_planets: set[int] = field(default_factory=set)
     previous_owner_by_planet: dict[int, int] = field(default_factory=dict)
     recently_captured_steps: dict[int, int] = field(default_factory=dict)
+    recently_lost_steps: dict[int, int] = field(default_factory=dict)
     did_attack_this_turn: bool = False
     steps_seen: int = 0
 
@@ -231,12 +244,23 @@ class PublicRuleAgent:
             previous_owner = self.previous_owner_by_planet.get(planet.id)
             if previous_owner is not None and previous_owner != local.player and planet.owner == local.player:
                 self.recently_captured_steps[planet.id] = local.step
+                self.recently_lost_steps.pop(planet.id, None)
+            elif (
+                previous_owner == local.player
+                and planet.owner != local.player
+                and planet.production >= self.recent_loss_recapture_min_production
+            ):
+                self.recently_lost_steps[planet.id] = local.step
             self.previous_owner_by_planet[planet.id] = planet.owner
 
         keep_after = local.step - max(1, self.proactive_defense_recent_capture_window)
         for planet_id, step in list(self.recently_captured_steps.items()):
             if step < keep_after:
                 del self.recently_captured_steps[planet_id]
+        keep_lost_after = local.step - max(1, self.recent_loss_recapture_window)
+        for planet_id, step in list(self.recently_lost_steps.items()):
+            if step < keep_lost_after:
+                del self.recently_lost_steps[planet_id]
 
     def _available_ships(
         self,
@@ -684,6 +708,23 @@ class PublicRuleAgent:
     def _enemy_launch_pressure(self, local: LocalObs) -> dict[int, float]:
         if not self.enable_enemy_launch_punish:
             return {}
+        if local.step < self.enemy_launch_punish_min_step or local.step > self.enemy_launch_punish_max_step:
+            return {}
+
+        own_prod = sum(p.production for p in local.planets if p.owner == local.player)
+        enemy_prod = sum(p.production for p in local.planets if p.owner not in (-1, local.player))
+        own_planets = sum(1 for p in local.planets if p.owner == local.player)
+        enemy_planets = sum(1 for p in local.planets if p.owner not in (-1, local.player))
+        own_ships = sum(p.ships for p in local.planets if p.owner == local.player)
+        enemy_ships = sum(p.ships for p in local.planets if p.owner not in (-1, local.player))
+        own_ships += sum(f.ships for f in local.fleets if f.owner == local.player)
+        enemy_ships += sum(f.ships for f in local.fleets if f.owner not in (-1, local.player))
+        if own_prod - enemy_prod < self.enemy_launch_punish_min_prod_diff:
+            return {}
+        if own_planets - enemy_planets < self.enemy_launch_punish_min_planet_diff:
+            return {}
+        if own_ships / max(enemy_ships, 1) < self.enemy_launch_punish_min_ship_ratio:
+            return {}
 
         planet_by_id = {planet.id: planet for planet in local.planets}
         outgoing: dict[int, int] = {}
@@ -898,6 +939,7 @@ class PublicRuleAgent:
     def _target_score(self, source: Planet, target: Planet, local: LocalObs) -> float:
         score = public_custom_score(source, target)
         score += self._early_neutral_score_adjustment(source, target, local)
+        score += self._recent_loss_recapture_score(target, local)
         if not self.enable_holdability_target_score:
             return score
 
@@ -930,6 +972,20 @@ class PublicRuleAgent:
         if self._early_neutral_allowed(source, target, local) and self.early_neutral_holdability_relief < 1.0:
             risk *= max(0.0, self.early_neutral_holdability_relief)
         return score - risk * self.holdability_weight
+
+    def _recent_loss_recapture_score(self, target: Planet, local: LocalObs) -> float:
+        if not self.enable_recent_loss_recapture_bias:
+            return 0.0
+        if local.step < self.recent_loss_recapture_min_step or local.step > self.recent_loss_recapture_max_step:
+            return 0.0
+        lost_step = self.recently_lost_steps.get(target.id)
+        if lost_step is None or local.step - lost_step > self.recent_loss_recapture_window:
+            return 0.0
+        if target.owner in (-1, local.player) or target.production < self.recent_loss_recapture_min_production:
+            return 0.0
+        age = max(0, local.step - lost_step)
+        freshness = 1.0 - age / max(1, self.recent_loss_recapture_window)
+        return self.recent_loss_recapture_bonus * freshness + target.production * self.recent_loss_recapture_prod_weight
 
     def _early_neutral_allowed(self, source: Planet, target: Planet, local: LocalObs) -> bool:
         if target.owner != -1 or local.step > self.early_neutral_step_limit:

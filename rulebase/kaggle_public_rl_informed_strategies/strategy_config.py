@@ -132,6 +132,18 @@ class StrategyConfig:
     enemy_launch_punish_min_production: float = 2.0
     enemy_launch_punish_bonus_weight: float = 0.45
     enemy_launch_punish_max_targets: int = 2
+    enemy_launch_punish_min_step: int = 0
+    enemy_launch_punish_max_step: int = 500
+    enemy_launch_punish_min_prod_diff: float = -999.0
+    enemy_launch_punish_min_planet_diff: int = -999
+    enemy_launch_punish_min_ship_ratio: float = 0.0
+    enable_recent_loss_recapture_bias: bool = False
+    recent_loss_recapture_min_production: float = 3.0
+    recent_loss_recapture_window: int = 60
+    recent_loss_recapture_min_step: int = 0
+    recent_loss_recapture_max_step: int = 500
+    recent_loss_recapture_bonus: float = 25.0
+    recent_loss_recapture_prod_weight: float = 5.0
 
     # RL-informed/custom attack-loop knobs.
     use_custom_attack_loop: bool = False
@@ -225,7 +237,16 @@ LAUNCH_TARGETS4_AGE8_REGULAR_CONFIG = StrategyConfig(
         "enemy_launch_punish_max_targets": 4,
     }
 )
-REGULAR_CONFIG = LAUNCH_TARGETS4_AGE8_REGULAR_CONFIG
+RECENT_LOSS_RECAPTURE_PROD4_B40_REGULAR_CONFIG = StrategyConfig(
+    **{
+        **LAUNCH_TARGETS4_AGE8_REGULAR_CONFIG.to_agent_kwargs(),
+        "enable_recent_loss_recapture_bias": True,
+        "recent_loss_recapture_min_production": 4.0,
+        "recent_loss_recapture_window": 60,
+        "recent_loss_recapture_bonus": 40.0,
+    }
+)
+REGULAR_CONFIG = RECENT_LOSS_RECAPTURE_PROD4_B40_REGULAR_CONFIG
 PRE_HOLDABILITY_REGULAR_CONFIG = StrategyConfig(
     target_candidate_limit=2,
     min_ships_mine_attack=12,
@@ -437,6 +458,7 @@ HISTORICAL_BEST_VARIANTS = {
     "pre_dynamic_cap_regular": PRE_DYNAMIC_CAP_REGULAR_CONFIG.to_agent_kwargs(),
     "cap18_base_regular": CAP18_BASE_REGULAR_CONFIG.to_agent_kwargs(),
     "launch_targets4_age8_regular": LAUNCH_TARGETS4_AGE8_REGULAR_CONFIG.to_agent_kwargs(),
+    "recent_loss_recapture_prod4_b40_regular": RECENT_LOSS_RECAPTURE_PROD4_B40_REGULAR_CONFIG.to_agent_kwargs(),
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
 }
@@ -445,6 +467,7 @@ CHAMPION_OPPONENT_VARIANTS = {
     "public_original": None,
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "recent_loss_recapture_prod4_b40_regular": RECENT_LOSS_RECAPTURE_PROD4_B40_REGULAR_CONFIG.to_agent_kwargs(),
     "launch_targets4_age8_regular": LAUNCH_TARGETS4_AGE8_REGULAR_CONFIG.to_agent_kwargs(),
     "cap18_base_regular": CAP18_BASE_REGULAR_CONFIG.to_agent_kwargs(),
     "pre_dynamic_cap_regular": PRE_DYNAMIC_CAP_REGULAR_CONFIG.to_agent_kwargs(),
@@ -559,6 +582,150 @@ ABLATION_SUITES = {
             REGULAR_CONFIG,
             enable_dynamic_posture=True,
             posture_late_step=180,
+        ),
+    },
+    "champion_dynamic_validate": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "dynamic_more_aggressive": from_base(
+            REGULAR_CONFIG,
+            enable_dynamic_posture=True,
+            aggressive_min_attack_delta=-3,
+            aggressive_target_candidate_bonus=2,
+        ),
+        "dynamic_aggr_bonus1": from_base(
+            REGULAR_CONFIG,
+            enable_dynamic_posture=True,
+            aggressive_min_attack_delta=-3,
+            aggressive_target_candidate_bonus=1,
+        ),
+        "dynamic_aggr_delta2_bonus2": from_base(
+            REGULAR_CONFIG,
+            enable_dynamic_posture=True,
+            aggressive_min_attack_delta=-2,
+            aggressive_target_candidate_bonus=2,
+        ),
+        "dynamic_aggr_delta4_bonus2": from_base(
+            REGULAR_CONFIG,
+            enable_dynamic_posture=True,
+            aggressive_min_attack_delta=-4,
+            aggressive_target_candidate_bonus=2,
+        ),
+        "dynamic_aggr_late180": from_base(
+            REGULAR_CONFIG,
+            enable_dynamic_posture=True,
+            posture_late_step=180,
+            aggressive_min_attack_delta=-3,
+            aggressive_target_candidate_bonus=2,
+        ),
+        "dynamic_aggr_late320": from_base(
+            REGULAR_CONFIG,
+            enable_dynamic_posture=True,
+            posture_late_step=320,
+            aggressive_min_attack_delta=-3,
+            aggressive_target_candidate_bonus=2,
+        ),
+    },
+    "recent_loss_recapture": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "recapture_b20_w40": from_base(
+            REGULAR_CONFIG,
+            enable_recent_loss_recapture_bias=True,
+            recent_loss_recapture_bonus=20.0,
+            recent_loss_recapture_window=40,
+        ),
+        "recapture_b30_w40": from_base(
+            REGULAR_CONFIG,
+            enable_recent_loss_recapture_bias=True,
+            recent_loss_recapture_bonus=30.0,
+            recent_loss_recapture_window=40,
+        ),
+        "recapture_b40_w60": from_base(
+            REGULAR_CONFIG,
+            enable_recent_loss_recapture_bias=True,
+            recent_loss_recapture_bonus=40.0,
+            recent_loss_recapture_window=60,
+        ),
+        "recapture_b60_w60": from_base(
+            REGULAR_CONFIG,
+            enable_recent_loss_recapture_bias=True,
+            recent_loss_recapture_bonus=60.0,
+            recent_loss_recapture_window=60,
+        ),
+        "recapture_prod4_b40": from_base(
+            REGULAR_CONFIG,
+            enable_recent_loss_recapture_bias=True,
+            recent_loss_recapture_min_production=4.0,
+            recent_loss_recapture_bonus=40.0,
+            recent_loss_recapture_window=60,
+        ),
+        "recapture_mid_b40": from_base(
+            REGULAR_CONFIG,
+            enable_recent_loss_recapture_bias=True,
+            recent_loss_recapture_min_step=40,
+            recent_loss_recapture_max_step=220,
+            recent_loss_recapture_bonus=40.0,
+            recent_loss_recapture_window=60,
+        ),
+        "recapture_prod_weight8": from_base(
+            REGULAR_CONFIG,
+            enable_recent_loss_recapture_bias=True,
+            recent_loss_recapture_bonus=30.0,
+            recent_loss_recapture_window=60,
+            recent_loss_recapture_prod_weight=8.0,
+        ),
+    },
+    "recent_loss_recapture_validate": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "recapture_prod4_b40": from_base(
+            REGULAR_CONFIG,
+            enable_recent_loss_recapture_bias=True,
+            recent_loss_recapture_min_production=4.0,
+            recent_loss_recapture_bonus=40.0,
+            recent_loss_recapture_window=60,
+        ),
+        "recapture_prod4_b30": from_base(
+            REGULAR_CONFIG,
+            enable_recent_loss_recapture_bias=True,
+            recent_loss_recapture_min_production=4.0,
+            recent_loss_recapture_bonus=30.0,
+            recent_loss_recapture_window=60,
+        ),
+        "recapture_prod4_b50": from_base(
+            REGULAR_CONFIG,
+            enable_recent_loss_recapture_bias=True,
+            recent_loss_recapture_min_production=4.0,
+            recent_loss_recapture_bonus=50.0,
+            recent_loss_recapture_window=60,
+        ),
+        "recapture_prod4_w40": from_base(
+            REGULAR_CONFIG,
+            enable_recent_loss_recapture_bias=True,
+            recent_loss_recapture_min_production=4.0,
+            recent_loss_recapture_bonus=40.0,
+            recent_loss_recapture_window=40,
+        ),
+        "recapture_prod4_w80": from_base(
+            REGULAR_CONFIG,
+            enable_recent_loss_recapture_bias=True,
+            recent_loss_recapture_min_production=4.0,
+            recent_loss_recapture_bonus=40.0,
+            recent_loss_recapture_window=80,
+        ),
+        "recapture_prod45_b40": from_base(
+            REGULAR_CONFIG,
+            enable_recent_loss_recapture_bias=True,
+            recent_loss_recapture_min_production=4.5,
+            recent_loss_recapture_bonus=40.0,
+            recent_loss_recapture_window=60,
+        ),
+        "recapture_prod4_mid": from_base(
+            REGULAR_CONFIG,
+            enable_recent_loss_recapture_bias=True,
+            recent_loss_recapture_min_production=4.0,
+            recent_loss_recapture_min_step=40,
+            recent_loss_recapture_max_step=260,
+            recent_loss_recapture_bonus=40.0,
+            recent_loss_recapture_window=60,
         ),
     },
     "value_defense": {
@@ -1772,6 +1939,34 @@ ABLATION_SUITES = {
             REGULAR_CONFIG,
             enemy_launch_punish_max_targets=4,
             enemy_launch_punish_bonus_weight=0.70,
+        ),
+    },
+    "champion_launch_context_refine": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "launch_gate_step40": from_base(REGULAR_CONFIG, enemy_launch_punish_min_step=40),
+        "launch_gate_step60": from_base(REGULAR_CONFIG, enemy_launch_punish_min_step=60),
+        "launch_gate_step80": from_base(REGULAR_CONFIG, enemy_launch_punish_min_step=80),
+        "launch_gate_step100": from_base(REGULAR_CONFIG, enemy_launch_punish_min_step=100),
+        "launch_gate_prod_m4": from_base(REGULAR_CONFIG, enemy_launch_punish_min_prod_diff=-4.0),
+        "launch_gate_prod0": from_base(REGULAR_CONFIG, enemy_launch_punish_min_prod_diff=0.0),
+        "launch_gate_planet_m2": from_base(REGULAR_CONFIG, enemy_launch_punish_min_planet_diff=-2),
+        "launch_gate_planet0": from_base(REGULAR_CONFIG, enemy_launch_punish_min_planet_diff=0),
+        "launch_gate_ship080": from_base(REGULAR_CONFIG, enemy_launch_punish_min_ship_ratio=0.80),
+        "launch_gate_ship090": from_base(REGULAR_CONFIG, enemy_launch_punish_min_ship_ratio=0.90),
+        "launch_gate_step60_ship080": from_base(
+            REGULAR_CONFIG,
+            enemy_launch_punish_min_step=60,
+            enemy_launch_punish_min_ship_ratio=0.80,
+        ),
+        "launch_gate_step60_prod0": from_base(
+            REGULAR_CONFIG,
+            enemy_launch_punish_min_step=60,
+            enemy_launch_punish_min_prod_diff=0.0,
+        ),
+        "launch_gate_step80_ship090": from_base(
+            REGULAR_CONFIG,
+            enemy_launch_punish_min_step=80,
+            enemy_launch_punish_min_ship_ratio=0.90,
         ),
     },
     "candidate_refine": {
