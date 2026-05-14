@@ -389,12 +389,24 @@ COMBINED_PROMISING_VARIANTS = {
     ),
 }
 
+HISTORICAL_BEST_VARIANTS = {
+    "public_exact": PUBLIC_EXACT.to_agent_kwargs(),
+    "pre_contested_regular": PRE_CONTESTED_REGULAR_CONFIG.to_agent_kwargs(),
+    "pre_arrival_regular": PRE_ARRIVAL_REGULAR_CONFIG.to_agent_kwargs(),
+    "pre_value_defense_regular": PRE_VALUE_DEFENSE_REGULAR_CONFIG.to_agent_kwargs(),
+    "pre_holdability_regular": PRE_HOLDABILITY_REGULAR_CONFIG.to_agent_kwargs(),
+    "pre_launch_regular": PRE_LAUNCH_REGULAR_CONFIG.to_agent_kwargs(),
+    "pre_early_neutral_regular": PRE_EARLY_NEUTRAL_REGULAR_CONFIG.to_agent_kwargs(),
+    "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
+}
+
 ABLATION_SUITES = {
     "additive": ADDITIVE_VARIANTS,
     "public_knobs": PUBLIC_KNOB_VARIANTS,
     "front_support": FRONT_SUPPORT_GRID_VARIANTS,
     "rl_score": RL_SCORE_GRID_VARIANTS,
     "combined": COMBINED_PROMISING_VARIANTS,
+    "historical_best": HISTORICAL_BEST_VARIANTS,
     "regular_verify": {
         "public_exact": PUBLIC_EXACT.to_agent_kwargs(),
         "candidate2": cfg(target_candidate_limit=2),
@@ -1215,8 +1227,7 @@ ABLATION_SUITES = {
         ),
     },
     "early_neutral_coarse_search": {
-        "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
-        "pre_early_neutral_regular": PRE_EARLY_NEUTRAL_REGULAR_CONFIG.to_agent_kwargs(),
+        **HISTORICAL_BEST_VARIANTS,
         "step30": from_base(REGULAR_CONFIG, early_neutral_step_limit=30),
         "step50": from_base(REGULAR_CONFIG, early_neutral_step_limit=50),
         "step60": from_base(REGULAR_CONFIG, early_neutral_step_limit=60),
