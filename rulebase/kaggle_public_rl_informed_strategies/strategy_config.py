@@ -1325,6 +1325,46 @@ ABLATION_SUITES = {
             early_neutral_contested_penalty=18.0,
         ),
     },
+    "early_neutral_balanced_validate": {
+        "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
+        "reaction_gap4": from_base(REGULAR_CONFIG, early_neutral_reaction_margin=4),
+        "reaction_gap5": from_base(REGULAR_CONFIG, early_neutral_reaction_margin=5),
+        "max16": from_base(REGULAR_CONFIG, early_neutral_max_ships=16),
+        "max17": from_base(REGULAR_CONFIG, early_neutral_max_ships=17),
+        "max18": from_base(REGULAR_CONFIG, early_neutral_max_ships=18),
+        "max19": from_base(REGULAR_CONFIG, early_neutral_max_ships=19),
+        "max20": from_base(REGULAR_CONFIG, early_neutral_max_ships=20),
+        "max16_gap4": from_base(
+            REGULAR_CONFIG,
+            early_neutral_max_ships=16,
+            early_neutral_reaction_margin=4,
+        ),
+        "max17_gap4": from_base(
+            REGULAR_CONFIG,
+            early_neutral_max_ships=17,
+            early_neutral_reaction_margin=4,
+        ),
+        "max18_gap4": from_base(
+            REGULAR_CONFIG,
+            early_neutral_max_ships=18,
+            early_neutral_reaction_margin=4,
+        ),
+        "max19_gap4": from_base(
+            REGULAR_CONFIG,
+            early_neutral_max_ships=19,
+            early_neutral_reaction_margin=4,
+        ),
+        "max20_gap4": from_base(
+            REGULAR_CONFIG,
+            early_neutral_max_ships=20,
+            early_neutral_reaction_margin=4,
+        ),
+        "max18_gap5": from_base(
+            REGULAR_CONFIG,
+            early_neutral_max_ships=18,
+            early_neutral_reaction_margin=5,
+        ),
+    },
     "candidate_refine": {
         "public_exact": PUBLIC_EXACT.to_agent_kwargs(),
         "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
