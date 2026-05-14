@@ -181,13 +181,19 @@ PRE_EARLY_NEUTRAL_REGULAR_CONFIG = StrategyConfig(
     enemy_launch_punish_min_production=3.0,
     enemy_launch_punish_bonus_weight=0.45,
 )
-REGULAR_CONFIG = StrategyConfig(
+PRE_REACTION_MARGIN_REGULAR_CONFIG = StrategyConfig(
     **{
         **PRE_EARLY_NEUTRAL_REGULAR_CONFIG.to_agent_kwargs(),
         "enable_early_neutral_bias": True,
         "early_neutral_bonus": 4.0,
         "early_neutral_safe_bonus": 20.0,
         "early_neutral_contested_penalty": 16.0,
+    }
+)
+REGULAR_CONFIG = StrategyConfig(
+    **{
+        **PRE_REACTION_MARGIN_REGULAR_CONFIG.to_agent_kwargs(),
+        "early_neutral_reaction_margin": 3,
     }
 )
 PRE_HOLDABILITY_REGULAR_CONFIG = StrategyConfig(
@@ -397,6 +403,7 @@ HISTORICAL_BEST_VARIANTS = {
     "pre_holdability_regular": PRE_HOLDABILITY_REGULAR_CONFIG.to_agent_kwargs(),
     "pre_launch_regular": PRE_LAUNCH_REGULAR_CONFIG.to_agent_kwargs(),
     "pre_early_neutral_regular": PRE_EARLY_NEUTRAL_REGULAR_CONFIG.to_agent_kwargs(),
+    "pre_reaction_margin_regular": PRE_REACTION_MARGIN_REGULAR_CONFIG.to_agent_kwargs(),
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
 }
 
