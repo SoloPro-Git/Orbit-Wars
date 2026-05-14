@@ -114,6 +114,11 @@ class StrategyConfig:
     early_neutral_dynamic_min_production: float = 4.0
     early_neutral_dynamic_min_enemy_gap: int = 4
     early_neutral_dynamic_source_min_after: int = 10
+    early_neutral_dynamic_check_source_safety: bool = False
+    early_neutral_dynamic_source_threat_radius: float = 45.0
+    early_neutral_dynamic_source_safety_margin: int = 4
+    early_neutral_dynamic_check_target_hold: bool = False
+    early_neutral_dynamic_target_hold_margin: int = 4
     enable_opening_rotating_neutral_filter: bool = False
     opening_rotating_step_limit: int = 80
     opening_rotating_max_eta: int = 13
@@ -1428,6 +1433,81 @@ ABLATION_SUITES = {
             early_neutral_dynamic_min_enemy_gap=4,
             early_neutral_dynamic_source_min_after=10,
             early_neutral_reaction_margin=4,
+        ),
+    },
+    "early_neutral_dynamic_cap_safety": {
+        "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
+        "cap18_base": from_base(
+            REGULAR_CONFIG,
+            enable_early_neutral_dynamic_max_ships=True,
+            early_neutral_dynamic_max_ships=18,
+            early_neutral_dynamic_min_production=4.0,
+            early_neutral_dynamic_min_enemy_gap=4,
+            early_neutral_dynamic_source_min_after=10,
+        ),
+        "cap18_source_safe_m4": from_base(
+            REGULAR_CONFIG,
+            enable_early_neutral_dynamic_max_ships=True,
+            early_neutral_dynamic_max_ships=18,
+            early_neutral_dynamic_min_production=4.0,
+            early_neutral_dynamic_min_enemy_gap=4,
+            early_neutral_dynamic_source_min_after=10,
+            early_neutral_dynamic_check_source_safety=True,
+            early_neutral_dynamic_source_safety_margin=4,
+        ),
+        "cap18_source_safe_m8": from_base(
+            REGULAR_CONFIG,
+            enable_early_neutral_dynamic_max_ships=True,
+            early_neutral_dynamic_max_ships=18,
+            early_neutral_dynamic_min_production=4.0,
+            early_neutral_dynamic_min_enemy_gap=4,
+            early_neutral_dynamic_source_min_after=10,
+            early_neutral_dynamic_check_source_safety=True,
+            early_neutral_dynamic_source_safety_margin=8,
+        ),
+        "cap18_target_hold_m4": from_base(
+            REGULAR_CONFIG,
+            enable_early_neutral_dynamic_max_ships=True,
+            early_neutral_dynamic_max_ships=18,
+            early_neutral_dynamic_min_production=4.0,
+            early_neutral_dynamic_min_enemy_gap=4,
+            early_neutral_dynamic_source_min_after=10,
+            early_neutral_dynamic_check_target_hold=True,
+            early_neutral_dynamic_target_hold_margin=4,
+        ),
+        "cap18_source_and_hold_m4": from_base(
+            REGULAR_CONFIG,
+            enable_early_neutral_dynamic_max_ships=True,
+            early_neutral_dynamic_max_ships=18,
+            early_neutral_dynamic_min_production=4.0,
+            early_neutral_dynamic_min_enemy_gap=4,
+            early_neutral_dynamic_source_min_after=10,
+            early_neutral_dynamic_check_source_safety=True,
+            early_neutral_dynamic_source_safety_margin=4,
+            early_neutral_dynamic_check_target_hold=True,
+            early_neutral_dynamic_target_hold_margin=4,
+        ),
+        "cap20_prod5_source_safe": from_base(
+            REGULAR_CONFIG,
+            enable_early_neutral_dynamic_max_ships=True,
+            early_neutral_dynamic_max_ships=20,
+            early_neutral_dynamic_min_production=5.0,
+            early_neutral_dynamic_min_enemy_gap=4,
+            early_neutral_dynamic_source_min_after=10,
+            early_neutral_dynamic_check_source_safety=True,
+            early_neutral_dynamic_source_safety_margin=4,
+        ),
+        "cap20_prod5_source_and_hold": from_base(
+            REGULAR_CONFIG,
+            enable_early_neutral_dynamic_max_ships=True,
+            early_neutral_dynamic_max_ships=20,
+            early_neutral_dynamic_min_production=5.0,
+            early_neutral_dynamic_min_enemy_gap=4,
+            early_neutral_dynamic_source_min_after=10,
+            early_neutral_dynamic_check_source_safety=True,
+            early_neutral_dynamic_source_safety_margin=4,
+            early_neutral_dynamic_check_target_hold=True,
+            early_neutral_dynamic_target_hold_margin=4,
         ),
     },
     "candidate_refine": {

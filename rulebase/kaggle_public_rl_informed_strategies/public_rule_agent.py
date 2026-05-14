@@ -135,6 +135,11 @@ class PublicRuleAgent:
     early_neutral_dynamic_min_production: float = PUBLIC_EXACT.early_neutral_dynamic_min_production
     early_neutral_dynamic_min_enemy_gap: int = PUBLIC_EXACT.early_neutral_dynamic_min_enemy_gap
     early_neutral_dynamic_source_min_after: int = PUBLIC_EXACT.early_neutral_dynamic_source_min_after
+    early_neutral_dynamic_check_source_safety: bool = PUBLIC_EXACT.early_neutral_dynamic_check_source_safety
+    early_neutral_dynamic_source_threat_radius: float = PUBLIC_EXACT.early_neutral_dynamic_source_threat_radius
+    early_neutral_dynamic_source_safety_margin: int = PUBLIC_EXACT.early_neutral_dynamic_source_safety_margin
+    early_neutral_dynamic_check_target_hold: bool = PUBLIC_EXACT.early_neutral_dynamic_check_target_hold
+    early_neutral_dynamic_target_hold_margin: int = PUBLIC_EXACT.early_neutral_dynamic_target_hold_margin
     enable_opening_rotating_neutral_filter: bool = PUBLIC_EXACT.enable_opening_rotating_neutral_filter
     opening_rotating_step_limit: int = PUBLIC_EXACT.opening_rotating_step_limit
     opening_rotating_max_eta: int = PUBLIC_EXACT.opening_rotating_max_eta
@@ -954,7 +959,46 @@ class PublicRuleAgent:
         if eta > self.early_neutral_max_eta:
             return False
         enemy_eta = self._nearest_enemy_eta(target, local)
-        return enemy_eta - eta >= self.early_neutral_dynamic_min_enemy_gap
+        if enemy_eta - eta < self.early_neutral_dynamic_min_enemy_gap:
+            return False
+        if self.early_neutral_dynamic_check_source_safety and not self._early_neutral_source_safe_after_send(source, needed, local):
+            return False
+        if self.early_neutral_dynamic_check_target_hold and not self._early_neutral_target_holdable(target, needed, eta, local):
+            return False
+        return True
+
+    def _early_neutral_source_safe_after_send(self, source: Planet, needed: int, local: LocalObs) -> bool:
+        remaining = source.ships - needed
+        for enemy in local.planets:
+            if enemy.owner in (-1, local.player):
+                continue
+            if distance(enemy, source) > self.early_neutral_dynamic_source_threat_radius:
+                continue
+            sendable = self._project_enemy_sendable(enemy)
+            if sendable < self.min_ships_mine_attack:
+                continue
+            arrival = travel_ticks(enemy, source, sendable)
+            projected = remaining + int(source.production * max(0, arrival))
+            if projected < sendable + self.early_neutral_dynamic_source_safety_margin:
+                return False
+        return True
+
+    def _early_neutral_target_holdable(self, target: Planet, sent: int, capture_eta: int, local: LocalObs) -> bool:
+        post_capture = max(1, sent - target.ships)
+        for enemy in local.planets:
+            if enemy.owner in (-1, local.player):
+                continue
+            sendable = self._project_enemy_sendable(enemy)
+            if sendable < self.min_ships_mine_attack:
+                continue
+            recapture_eta = travel_ticks(enemy, target, sendable)
+            if recapture_eta <= capture_eta:
+                continue
+            produced_after_capture = max(0, recapture_eta - capture_eta)
+            projected = post_capture + int(target.production * produced_after_capture)
+            if projected < sendable + self.early_neutral_dynamic_target_hold_margin:
+                return False
+        return True
 
     def _early_neutral_score_adjustment(self, source: Planet, target: Planet, local: LocalObs) -> float:
         if target.owner != -1:
