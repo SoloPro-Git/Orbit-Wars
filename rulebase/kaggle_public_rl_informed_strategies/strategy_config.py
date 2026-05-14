@@ -1245,6 +1245,37 @@ ABLATION_SUITES = {
         "static_mult14": from_base(REGULAR_CONFIG, early_neutral_static_multiplier=1.40),
         "holdability_relief075": from_base(REGULAR_CONFIG, early_neutral_holdability_relief=0.75),
     },
+    "early_neutral_promising_validate": {
+        "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
+        "pre_value_defense_regular": PRE_VALUE_DEFENSE_REGULAR_CONFIG.to_agent_kwargs(),
+        "pre_early_neutral_regular": PRE_EARLY_NEUTRAL_REGULAR_CONFIG.to_agent_kwargs(),
+        "step30": from_base(REGULAR_CONFIG, early_neutral_step_limit=30),
+        "step50": from_base(REGULAR_CONFIG, early_neutral_step_limit=50),
+        "max_ships20": from_base(REGULAR_CONFIG, early_neutral_max_ships=20),
+        "reaction_gap3": from_base(REGULAR_CONFIG, early_neutral_reaction_margin=3),
+        "safe_bonus16": from_base(REGULAR_CONFIG, early_neutral_safe_bonus=16.0),
+        "holdability_relief075": from_base(REGULAR_CONFIG, early_neutral_holdability_relief=0.75),
+        "step30_reaction_gap3": from_base(
+            REGULAR_CONFIG,
+            early_neutral_step_limit=30,
+            early_neutral_reaction_margin=3,
+        ),
+        "step30_holdability075": from_base(
+            REGULAR_CONFIG,
+            early_neutral_step_limit=30,
+            early_neutral_holdability_relief=0.75,
+        ),
+        "reaction_gap3_holdability075": from_base(
+            REGULAR_CONFIG,
+            early_neutral_reaction_margin=3,
+            early_neutral_holdability_relief=0.75,
+        ),
+        "max20_reaction_gap3": from_base(
+            REGULAR_CONFIG,
+            early_neutral_max_ships=20,
+            early_neutral_reaction_margin=3,
+        ),
+    },
     "candidate_refine": {
         "public_exact": PUBLIC_EXACT.to_agent_kwargs(),
         "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
