@@ -109,6 +109,11 @@ class StrategyConfig:
     early_neutral_contested_penalty: float = 8.0
     early_neutral_reaction_margin: int = 2
     early_neutral_holdability_relief: float = 0.50
+    enable_early_neutral_dynamic_max_ships: bool = False
+    early_neutral_dynamic_max_ships: int = 20
+    early_neutral_dynamic_min_production: float = 4.0
+    early_neutral_dynamic_min_enemy_gap: int = 4
+    early_neutral_dynamic_source_min_after: int = 10
     enable_opening_rotating_neutral_filter: bool = False
     opening_rotating_step_limit: int = 80
     opening_rotating_max_eta: int = 13
@@ -1363,6 +1368,66 @@ ABLATION_SUITES = {
             REGULAR_CONFIG,
             early_neutral_max_ships=18,
             early_neutral_reaction_margin=5,
+        ),
+    },
+    "early_neutral_dynamic_cap": {
+        "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
+        "dynamic_cap18_prod4_gap4_after10": from_base(
+            REGULAR_CONFIG,
+            enable_early_neutral_dynamic_max_ships=True,
+            early_neutral_dynamic_max_ships=18,
+            early_neutral_dynamic_min_production=4.0,
+            early_neutral_dynamic_min_enemy_gap=4,
+            early_neutral_dynamic_source_min_after=10,
+        ),
+        "dynamic_cap20_prod4_gap4_after10": from_base(
+            REGULAR_CONFIG,
+            enable_early_neutral_dynamic_max_ships=True,
+            early_neutral_dynamic_max_ships=20,
+            early_neutral_dynamic_min_production=4.0,
+            early_neutral_dynamic_min_enemy_gap=4,
+            early_neutral_dynamic_source_min_after=10,
+        ),
+        "dynamic_cap20_prod5_gap4_after10": from_base(
+            REGULAR_CONFIG,
+            enable_early_neutral_dynamic_max_ships=True,
+            early_neutral_dynamic_max_ships=20,
+            early_neutral_dynamic_min_production=5.0,
+            early_neutral_dynamic_min_enemy_gap=4,
+            early_neutral_dynamic_source_min_after=10,
+        ),
+        "dynamic_cap20_prod4_gap6_after10": from_base(
+            REGULAR_CONFIG,
+            enable_early_neutral_dynamic_max_ships=True,
+            early_neutral_dynamic_max_ships=20,
+            early_neutral_dynamic_min_production=4.0,
+            early_neutral_dynamic_min_enemy_gap=6,
+            early_neutral_dynamic_source_min_after=10,
+        ),
+        "dynamic_cap20_prod4_gap4_after15": from_base(
+            REGULAR_CONFIG,
+            enable_early_neutral_dynamic_max_ships=True,
+            early_neutral_dynamic_max_ships=20,
+            early_neutral_dynamic_min_production=4.0,
+            early_neutral_dynamic_min_enemy_gap=4,
+            early_neutral_dynamic_source_min_after=15,
+        ),
+        "dynamic_cap18_prod4_gap6_after15": from_base(
+            REGULAR_CONFIG,
+            enable_early_neutral_dynamic_max_ships=True,
+            early_neutral_dynamic_max_ships=18,
+            early_neutral_dynamic_min_production=4.0,
+            early_neutral_dynamic_min_enemy_gap=6,
+            early_neutral_dynamic_source_min_after=15,
+        ),
+        "dynamic_cap20_gap4_reaction4": from_base(
+            REGULAR_CONFIG,
+            enable_early_neutral_dynamic_max_ships=True,
+            early_neutral_dynamic_max_ships=20,
+            early_neutral_dynamic_min_production=4.0,
+            early_neutral_dynamic_min_enemy_gap=4,
+            early_neutral_dynamic_source_min_after=10,
+            early_neutral_reaction_margin=4,
         ),
     },
     "candidate_refine": {

@@ -130,6 +130,11 @@ class PublicRuleAgent:
     early_neutral_contested_penalty: float = PUBLIC_EXACT.early_neutral_contested_penalty
     early_neutral_reaction_margin: int = PUBLIC_EXACT.early_neutral_reaction_margin
     early_neutral_holdability_relief: float = PUBLIC_EXACT.early_neutral_holdability_relief
+    enable_early_neutral_dynamic_max_ships: bool = PUBLIC_EXACT.enable_early_neutral_dynamic_max_ships
+    early_neutral_dynamic_max_ships: int = PUBLIC_EXACT.early_neutral_dynamic_max_ships
+    early_neutral_dynamic_min_production: float = PUBLIC_EXACT.early_neutral_dynamic_min_production
+    early_neutral_dynamic_min_enemy_gap: int = PUBLIC_EXACT.early_neutral_dynamic_min_enemy_gap
+    early_neutral_dynamic_source_min_after: int = PUBLIC_EXACT.early_neutral_dynamic_source_min_after
     enable_opening_rotating_neutral_filter: bool = PUBLIC_EXACT.enable_opening_rotating_neutral_filter
     opening_rotating_step_limit: int = PUBLIC_EXACT.opening_rotating_step_limit
     opening_rotating_max_eta: int = PUBLIC_EXACT.opening_rotating_max_eta
@@ -920,10 +925,36 @@ class PublicRuleAgent:
     def _early_neutral_allowed(self, source: Planet, target: Planet, local: LocalObs) -> bool:
         if target.owner != -1 or local.step > self.early_neutral_step_limit:
             return False
-        if target.production < self.early_neutral_min_production or target.ships > self.early_neutral_max_ships:
+        if target.production < self.early_neutral_min_production:
             return False
+        needed = target.ships + 1
+        if target.ships > self.early_neutral_max_ships:
+            if not self._early_neutral_dynamic_cap_allowed(source, target, needed, local):
+                return False
         eta = self._estimate_arrival_for_requirement(source, target, target.ships + 1, local)
         return eta <= self.early_neutral_max_eta
+
+    def _early_neutral_dynamic_cap_allowed(
+        self,
+        source: Planet,
+        target: Planet,
+        needed: int,
+        local: LocalObs,
+    ) -> bool:
+        if not self.enable_early_neutral_dynamic_max_ships:
+            return False
+        if target.ships > self.early_neutral_dynamic_max_ships:
+            return False
+        if target.production < self.early_neutral_dynamic_min_production:
+            return False
+        if source.ships - needed < self.early_neutral_dynamic_source_min_after:
+            return False
+
+        eta = self._estimate_arrival_for_requirement(source, target, needed, local)
+        if eta > self.early_neutral_max_eta:
+            return False
+        enemy_eta = self._nearest_enemy_eta(target, local)
+        return enemy_eta - eta >= self.early_neutral_dynamic_min_enemy_gap
 
     def _early_neutral_score_adjustment(self, source: Planet, target: Planet, local: LocalObs) -> float:
         if target.owner != -1:
