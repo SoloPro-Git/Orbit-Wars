@@ -163,7 +163,7 @@ PRE_LAUNCH_REGULAR_CONFIG = StrategyConfig(
     holdability_weight=0.50,
     holdability_radius=35.0,
 )
-REGULAR_CONFIG = StrategyConfig(
+PRE_EARLY_NEUTRAL_REGULAR_CONFIG = StrategyConfig(
     target_candidate_limit=2,
     min_ships_mine_attack=12,
     enemy_owned_production_buffer_turns=4,
@@ -180,6 +180,15 @@ REGULAR_CONFIG = StrategyConfig(
     enable_enemy_launch_punish=True,
     enemy_launch_punish_min_production=3.0,
     enemy_launch_punish_bonus_weight=0.45,
+)
+REGULAR_CONFIG = StrategyConfig(
+    **{
+        **PRE_EARLY_NEUTRAL_REGULAR_CONFIG.to_agent_kwargs(),
+        "enable_early_neutral_bias": True,
+        "early_neutral_bonus": 4.0,
+        "early_neutral_safe_bonus": 20.0,
+        "early_neutral_contested_penalty": 16.0,
+    }
 )
 PRE_HOLDABILITY_REGULAR_CONFIG = StrategyConfig(
     target_candidate_limit=2,
@@ -1153,40 +1162,56 @@ ABLATION_SUITES = {
     },
     "notebook_early_neutral": {
         "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
+        "pre_early_neutral_regular": PRE_EARLY_NEUTRAL_REGULAR_CONFIG.to_agent_kwargs(),
         "early_neutral_bias": from_base(
-            REGULAR_CONFIG,
+            PRE_EARLY_NEUTRAL_REGULAR_CONFIG,
             enable_early_neutral_bias=True,
         ),
         "early_neutral_prod4": from_base(
-            REGULAR_CONFIG,
+            PRE_EARLY_NEUTRAL_REGULAR_CONFIG,
             enable_early_neutral_bias=True,
             early_neutral_min_production=4.0,
         ),
         "early_neutral_static_heavy": from_base(
-            REGULAR_CONFIG,
+            PRE_EARLY_NEUTRAL_REGULAR_CONFIG,
             enable_early_neutral_bias=True,
             early_neutral_static_multiplier=1.60,
         ),
         "early_neutral_safe_only": from_base(
-            REGULAR_CONFIG,
+            PRE_EARLY_NEUTRAL_REGULAR_CONFIG,
             enable_early_neutral_bias=True,
             early_neutral_bonus=4.0,
             early_neutral_safe_bonus=20.0,
             early_neutral_contested_penalty=16.0,
         ),
         "early_neutral_relief_light": from_base(
-            REGULAR_CONFIG,
+            PRE_EARLY_NEUTRAL_REGULAR_CONFIG,
             enable_early_neutral_bias=True,
             early_neutral_holdability_relief=0.75,
         ),
         "opening_rotating_filter": from_base(
-            REGULAR_CONFIG,
+            PRE_EARLY_NEUTRAL_REGULAR_CONFIG,
             enable_opening_rotating_neutral_filter=True,
         ),
         "early_bias_plus_rotating_filter": from_base(
-            REGULAR_CONFIG,
+            PRE_EARLY_NEUTRAL_REGULAR_CONFIG,
             enable_early_neutral_bias=True,
             enable_opening_rotating_neutral_filter=True,
+        ),
+    },
+    "notebook_early_neutral_validate": {
+        "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
+        "pre_early_neutral_regular": PRE_EARLY_NEUTRAL_REGULAR_CONFIG.to_agent_kwargs(),
+        "early_neutral_bias": from_base(
+            PRE_EARLY_NEUTRAL_REGULAR_CONFIG,
+            enable_early_neutral_bias=True,
+        ),
+        "early_neutral_safe_only": from_base(
+            PRE_EARLY_NEUTRAL_REGULAR_CONFIG,
+            enable_early_neutral_bias=True,
+            early_neutral_bonus=4.0,
+            early_neutral_safe_bonus=20.0,
+            early_neutral_contested_penalty=16.0,
         ),
     },
     "candidate_refine": {
