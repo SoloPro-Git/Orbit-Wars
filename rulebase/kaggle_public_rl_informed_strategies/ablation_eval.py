@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from rulebase.kaggle_public_rl_informed_strategies.rl_informed_agent import RLInformedPublicRuleAgent
-from rulebase.kaggle_public_rl_informed_strategies.strategy_config import ABLATION_SUITES
+from rulebase.kaggle_public_rl_informed_strategies.strategy_config import ABLATION_SUITES, REGULAR_CONFIG
 from rulebase.kaggle_public_strategies.public_rule_agent import PublicRuleAgent
 
 OUT_DIR = ROOT / "rulebase/kaggle_public_rl_informed_strategies/experiments"
@@ -44,24 +44,41 @@ def make_public_agent():
     return agent
 
 
-def run_one(seed: int, variant_as_p0: bool, params: dict) -> dict:
+def make_regular_agent():
+    instance = RLInformedPublicRuleAgent(**REGULAR_CONFIG.to_agent_kwargs())
+
+    def agent(obs, configuration=None):
+        return instance.act(obs)
+
+    return agent
+
+
+def make_opponent_agent(opponent: str):
+    if opponent == "public_original":
+        return make_public_agent()
+    if opponent == "regular_config":
+        return make_regular_agent()
+    raise ValueError(f"Unknown opponent: {opponent}")
+
+
+def run_one(seed: int, variant_as_p0: bool, params: dict, opponent: str) -> dict:
     variant = make_variant_agent(params)
-    public = make_public_agent()
+    opponent_agent = make_opponent_agent(opponent)
     env = make("orbit_wars", configuration={"seed": seed}, debug=True)
     if variant_as_p0:
-        env.run([variant, public])
+        env.run([variant, opponent_agent])
         variant_reward = env.steps[-1][0].reward
-        public_reward = env.steps[-1][1].reward
+        opponent_reward = env.steps[-1][1].reward
         seat = "variant_p0"
     else:
-        env.run([public, variant])
-        public_reward = env.steps[-1][0].reward
+        env.run([opponent_agent, variant])
+        opponent_reward = env.steps[-1][0].reward
         variant_reward = env.steps[-1][1].reward
         seat = "variant_p1"
 
-    if variant_reward > public_reward:
+    if variant_reward > opponent_reward:
         outcome = "win"
-    elif variant_reward < public_reward:
+    elif variant_reward < opponent_reward:
         outcome = "loss"
     else:
         outcome = "draw"
@@ -70,7 +87,8 @@ def run_one(seed: int, variant_as_p0: bool, params: dict) -> dict:
         "seed": seed,
         "seat": seat,
         "variant_reward": variant_reward,
-        "public_reward": public_reward,
+        "opponent": opponent,
+        "opponent_reward": opponent_reward,
         "outcome": outcome,
         "steps": len(env.steps),
     }
@@ -81,6 +99,7 @@ def run_task(task: dict) -> dict:
         seed=int(task["seed"]),
         variant_as_p0=bool(task["variant_as_p0"]),
         params=dict(task["params"]),
+        opponent=str(task["opponent"]),
     )
     return {"variant": task["variant"], **row}
 
@@ -101,7 +120,7 @@ def summarize_variant(name: str, params: dict, rows: list[dict]) -> dict:
     }
 
 
-def build_tasks(variants: dict[str, dict], games_per_seat: int) -> list[dict]:
+def build_tasks(variants: dict[str, dict], games_per_seat: int, opponent: str) -> list[dict]:
     tasks = []
     for name, params in variants.items():
         for i in range(games_per_seat):
@@ -111,6 +130,7 @@ def build_tasks(variants: dict[str, dict], games_per_seat: int) -> list[dict]:
                     "params": params,
                     "seed": 42 + i,
                     "variant_as_p0": True,
+                    "opponent": opponent,
                 }
             )
         for i in range(games_per_seat):
@@ -120,6 +140,7 @@ def build_tasks(variants: dict[str, dict], games_per_seat: int) -> list[dict]:
                     "params": params,
                     "seed": 1042 + i,
                     "variant_as_p0": False,
+                    "opponent": opponent,
                 }
             )
     return tasks
@@ -128,19 +149,20 @@ def build_tasks(variants: dict[str, dict], games_per_seat: int) -> list[dict]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--suite", choices=sorted(ABLATION_SUITES), default="additive")
+    parser.add_argument("--opponent", choices=["regular_config", "public_original"], default="regular_config")
     parser.add_argument("--games-per-seat", type=int, default=5)
     parser.add_argument("--workers", type=int, default=min(8, max(1, (os.cpu_count() or 2) // 2)))
     return parser.parse_args()
 
 
-def main(suite: str, games_per_seat: int, workers: int):
+def main(suite: str, games_per_seat: int, workers: int, opponent: str):
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     variants = ABLATION_SUITES[suite]
-    tasks = build_tasks(variants, games_per_seat)
+    tasks = build_tasks(variants, games_per_seat, opponent)
     all_rows = []
 
     print(
-        f"Running suite={suite}: {len(tasks)} games, {len(variants)} variants, "
+        f"Running suite={suite}, opponent={opponent}: {len(tasks)} games, {len(variants)} variants, "
         f"workers={workers}, games_per_seat={games_per_seat}",
         flush=True,
     )
@@ -171,6 +193,7 @@ def main(suite: str, games_per_seat: int, workers: int):
     payload = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "suite": suite,
+        "opponent": opponent,
         "games_per_seat": games_per_seat,
         "workers": workers,
         "summaries": summaries,
@@ -198,4 +221,4 @@ def main(suite: str, games_per_seat: int, workers: int):
 
 if __name__ == "__main__":
     args = parse_args()
-    main(suite=args.suite, games_per_seat=args.games_per_seat, workers=args.workers)
+    main(suite=args.suite, games_per_seat=args.games_per_seat, workers=args.workers, opponent=args.opponent)
