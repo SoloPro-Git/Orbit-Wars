@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
@@ -165,6 +166,11 @@ def run_game(seed: int, variant_as_p0: bool, variant_params: dict, opponent_para
     }
 
 
+def run_task(task: tuple[int, bool, dict, dict]) -> dict:
+    seed, variant_as_p0, variant_params, opponent_params = task
+    return run_game(seed, variant_as_p0, variant_params, opponent_params)
+
+
 def load_loss_tasks(results_json: Path, variant: str) -> list[tuple[int, bool]]:
     payload = json.loads(results_json.read_text())
     tasks = []
@@ -180,6 +186,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--opponent", default="regular")
     parser.add_argument("--results-json", type=Path)
     parser.add_argument("--seeds", nargs="*", type=int)
+    parser.add_argument("--workers", type=int, default=1)
     return parser.parse_args()
 
 
@@ -194,10 +201,20 @@ def main() -> None:
         seeds = args.seeds or [42]
         tasks = [(seed, True) for seed in seeds]
 
-    rows = [
-        run_game(seed, variant_as_p0, variant_params, opponent_params)
-        for seed, variant_as_p0 in tasks
-    ]
+    if args.workers <= 1 or len(tasks) <= 1:
+        rows = [
+            run_game(seed, variant_as_p0, variant_params, opponent_params)
+            for seed, variant_as_p0 in tasks
+        ]
+    else:
+        rows = []
+        pool_tasks = [(seed, variant_as_p0, variant_params, opponent_params) for seed, variant_as_p0 in tasks]
+        with ProcessPoolExecutor(max_workers=args.workers) as pool:
+            futures = [pool.submit(run_task, task) for task in pool_tasks]
+            for idx, future in enumerate(as_completed(futures), start=1):
+                row = future.result()
+                rows.append(row)
+                print(f"[{idx}/{len(futures)}] {row['seat']} seed={row['seed']} -> {row['outcome']}", flush=True)
     summary = {
         "variant": args.variant,
         "opponent": args.opponent,
