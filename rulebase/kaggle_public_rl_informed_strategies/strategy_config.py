@@ -200,10 +200,20 @@ PRE_REACTION_MARGIN_REGULAR_CONFIG = StrategyConfig(
         "early_neutral_contested_penalty": 16.0,
     }
 )
-REGULAR_CONFIG = StrategyConfig(
+PRE_DYNAMIC_CAP_REGULAR_CONFIG = StrategyConfig(
     **{
         **PRE_REACTION_MARGIN_REGULAR_CONFIG.to_agent_kwargs(),
         "early_neutral_reaction_margin": 3,
+    }
+)
+REGULAR_CONFIG = StrategyConfig(
+    **{
+        **PRE_DYNAMIC_CAP_REGULAR_CONFIG.to_agent_kwargs(),
+        "enable_early_neutral_dynamic_max_ships": True,
+        "early_neutral_dynamic_max_ships": 18,
+        "early_neutral_dynamic_min_production": 4.0,
+        "early_neutral_dynamic_min_enemy_gap": 4,
+        "early_neutral_dynamic_source_min_after": 10,
     }
 )
 PRE_HOLDABILITY_REGULAR_CONFIG = StrategyConfig(
@@ -414,6 +424,7 @@ HISTORICAL_BEST_VARIANTS = {
     "pre_launch_regular": PRE_LAUNCH_REGULAR_CONFIG.to_agent_kwargs(),
     "pre_early_neutral_regular": PRE_EARLY_NEUTRAL_REGULAR_CONFIG.to_agent_kwargs(),
     "pre_reaction_margin_regular": PRE_REACTION_MARGIN_REGULAR_CONFIG.to_agent_kwargs(),
+    "pre_dynamic_cap_regular": PRE_DYNAMIC_CAP_REGULAR_CONFIG.to_agent_kwargs(),
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
 }
 
@@ -1376,9 +1387,10 @@ ABLATION_SUITES = {
         ),
     },
     "early_neutral_dynamic_cap": {
+        "pre_dynamic_cap_regular": PRE_DYNAMIC_CAP_REGULAR_CONFIG.to_agent_kwargs(),
         "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
         "dynamic_cap18_prod4_gap4_after10": from_base(
-            REGULAR_CONFIG,
+            PRE_DYNAMIC_CAP_REGULAR_CONFIG,
             enable_early_neutral_dynamic_max_ships=True,
             early_neutral_dynamic_max_ships=18,
             early_neutral_dynamic_min_production=4.0,
@@ -1386,7 +1398,7 @@ ABLATION_SUITES = {
             early_neutral_dynamic_source_min_after=10,
         ),
         "dynamic_cap20_prod4_gap4_after10": from_base(
-            REGULAR_CONFIG,
+            PRE_DYNAMIC_CAP_REGULAR_CONFIG,
             enable_early_neutral_dynamic_max_ships=True,
             early_neutral_dynamic_max_ships=20,
             early_neutral_dynamic_min_production=4.0,
@@ -1394,7 +1406,7 @@ ABLATION_SUITES = {
             early_neutral_dynamic_source_min_after=10,
         ),
         "dynamic_cap20_prod5_gap4_after10": from_base(
-            REGULAR_CONFIG,
+            PRE_DYNAMIC_CAP_REGULAR_CONFIG,
             enable_early_neutral_dynamic_max_ships=True,
             early_neutral_dynamic_max_ships=20,
             early_neutral_dynamic_min_production=5.0,
@@ -1402,7 +1414,7 @@ ABLATION_SUITES = {
             early_neutral_dynamic_source_min_after=10,
         ),
         "dynamic_cap20_prod4_gap6_after10": from_base(
-            REGULAR_CONFIG,
+            PRE_DYNAMIC_CAP_REGULAR_CONFIG,
             enable_early_neutral_dynamic_max_ships=True,
             early_neutral_dynamic_max_ships=20,
             early_neutral_dynamic_min_production=4.0,
@@ -1410,7 +1422,7 @@ ABLATION_SUITES = {
             early_neutral_dynamic_source_min_after=10,
         ),
         "dynamic_cap20_prod4_gap4_after15": from_base(
-            REGULAR_CONFIG,
+            PRE_DYNAMIC_CAP_REGULAR_CONFIG,
             enable_early_neutral_dynamic_max_ships=True,
             early_neutral_dynamic_max_ships=20,
             early_neutral_dynamic_min_production=4.0,
@@ -1418,7 +1430,7 @@ ABLATION_SUITES = {
             early_neutral_dynamic_source_min_after=15,
         ),
         "dynamic_cap18_prod4_gap6_after15": from_base(
-            REGULAR_CONFIG,
+            PRE_DYNAMIC_CAP_REGULAR_CONFIG,
             enable_early_neutral_dynamic_max_ships=True,
             early_neutral_dynamic_max_ships=18,
             early_neutral_dynamic_min_production=4.0,
@@ -1426,7 +1438,7 @@ ABLATION_SUITES = {
             early_neutral_dynamic_source_min_after=15,
         ),
         "dynamic_cap20_gap4_reaction4": from_base(
-            REGULAR_CONFIG,
+            PRE_DYNAMIC_CAP_REGULAR_CONFIG,
             enable_early_neutral_dynamic_max_ships=True,
             early_neutral_dynamic_max_ships=20,
             early_neutral_dynamic_min_production=4.0,
@@ -1436,9 +1448,10 @@ ABLATION_SUITES = {
         ),
     },
     "early_neutral_dynamic_cap_safety": {
+        "pre_dynamic_cap_regular": PRE_DYNAMIC_CAP_REGULAR_CONFIG.to_agent_kwargs(),
         "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
         "cap18_base": from_base(
-            REGULAR_CONFIG,
+            PRE_DYNAMIC_CAP_REGULAR_CONFIG,
             enable_early_neutral_dynamic_max_ships=True,
             early_neutral_dynamic_max_ships=18,
             early_neutral_dynamic_min_production=4.0,
@@ -1446,7 +1459,7 @@ ABLATION_SUITES = {
             early_neutral_dynamic_source_min_after=10,
         ),
         "cap18_source_safe_m4": from_base(
-            REGULAR_CONFIG,
+            PRE_DYNAMIC_CAP_REGULAR_CONFIG,
             enable_early_neutral_dynamic_max_ships=True,
             early_neutral_dynamic_max_ships=18,
             early_neutral_dynamic_min_production=4.0,
@@ -1456,7 +1469,7 @@ ABLATION_SUITES = {
             early_neutral_dynamic_source_safety_margin=4,
         ),
         "cap18_source_safe_m8": from_base(
-            REGULAR_CONFIG,
+            PRE_DYNAMIC_CAP_REGULAR_CONFIG,
             enable_early_neutral_dynamic_max_ships=True,
             early_neutral_dynamic_max_ships=18,
             early_neutral_dynamic_min_production=4.0,
@@ -1466,7 +1479,7 @@ ABLATION_SUITES = {
             early_neutral_dynamic_source_safety_margin=8,
         ),
         "cap18_target_hold_m4": from_base(
-            REGULAR_CONFIG,
+            PRE_DYNAMIC_CAP_REGULAR_CONFIG,
             enable_early_neutral_dynamic_max_ships=True,
             early_neutral_dynamic_max_ships=18,
             early_neutral_dynamic_min_production=4.0,
@@ -1476,7 +1489,7 @@ ABLATION_SUITES = {
             early_neutral_dynamic_target_hold_margin=4,
         ),
         "cap18_source_and_hold_m4": from_base(
-            REGULAR_CONFIG,
+            PRE_DYNAMIC_CAP_REGULAR_CONFIG,
             enable_early_neutral_dynamic_max_ships=True,
             early_neutral_dynamic_max_ships=18,
             early_neutral_dynamic_min_production=4.0,
@@ -1488,7 +1501,7 @@ ABLATION_SUITES = {
             early_neutral_dynamic_target_hold_margin=4,
         ),
         "cap20_prod5_source_safe": from_base(
-            REGULAR_CONFIG,
+            PRE_DYNAMIC_CAP_REGULAR_CONFIG,
             enable_early_neutral_dynamic_max_ships=True,
             early_neutral_dynamic_max_ships=20,
             early_neutral_dynamic_min_production=5.0,
@@ -1498,7 +1511,7 @@ ABLATION_SUITES = {
             early_neutral_dynamic_source_safety_margin=4,
         ),
         "cap20_prod5_source_and_hold": from_base(
-            REGULAR_CONFIG,
+            PRE_DYNAMIC_CAP_REGULAR_CONFIG,
             enable_early_neutral_dynamic_max_ships=True,
             early_neutral_dynamic_max_ships=20,
             early_neutral_dynamic_min_production=5.0,
