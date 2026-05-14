@@ -1283,6 +1283,48 @@ ABLATION_SUITES = {
             early_neutral_reaction_margin=3,
         ),
     },
+    "early_neutral_reaction_refine": {
+        "pre_reaction_margin_regular": PRE_REACTION_MARGIN_REGULAR_CONFIG.to_agent_kwargs(),
+        "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
+        "reaction_gap4": from_base(REGULAR_CONFIG, early_neutral_reaction_margin=4),
+        "reaction_gap5": from_base(REGULAR_CONFIG, early_neutral_reaction_margin=5),
+        "step30": from_base(REGULAR_CONFIG, early_neutral_step_limit=30),
+        "step35": from_base(REGULAR_CONFIG, early_neutral_step_limit=35),
+        "step45": from_base(REGULAR_CONFIG, early_neutral_step_limit=45),
+        "step50": from_base(REGULAR_CONFIG, early_neutral_step_limit=50),
+        "step30_gap4": from_base(
+            REGULAR_CONFIG,
+            early_neutral_step_limit=30,
+            early_neutral_reaction_margin=4,
+        ),
+        "step35_gap4": from_base(
+            REGULAR_CONFIG,
+            early_neutral_step_limit=35,
+            early_neutral_reaction_margin=4,
+        ),
+        "step50_gap4": from_base(
+            REGULAR_CONFIG,
+            early_neutral_step_limit=50,
+            early_neutral_reaction_margin=4,
+        ),
+        "max20": from_base(REGULAR_CONFIG, early_neutral_max_ships=20),
+        "max20_gap4": from_base(
+            REGULAR_CONFIG,
+            early_neutral_max_ships=20,
+            early_neutral_reaction_margin=4,
+        ),
+        "max18": from_base(REGULAR_CONFIG, early_neutral_max_ships=18),
+        "safe18_contested18": from_base(
+            REGULAR_CONFIG,
+            early_neutral_safe_bonus=18.0,
+            early_neutral_contested_penalty=18.0,
+        ),
+        "safe22_contested18": from_base(
+            REGULAR_CONFIG,
+            early_neutral_safe_bonus=22.0,
+            early_neutral_contested_penalty=18.0,
+        ),
+    },
     "candidate_refine": {
         "public_exact": PUBLIC_EXACT.to_agent_kwargs(),
         "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
