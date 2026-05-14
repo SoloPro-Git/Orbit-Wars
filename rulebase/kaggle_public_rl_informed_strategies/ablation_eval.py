@@ -20,7 +20,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from rulebase.kaggle_public_rl_informed_strategies.rl_informed_agent import RLInformedPublicRuleAgent
-from rulebase.kaggle_public_rl_informed_strategies.strategy_config import ABLATION_SUITES, REGULAR_CONFIG
+from rulebase.kaggle_public_rl_informed_strategies.strategy_config import (
+    ABLATION_SUITES,
+    CHAMPION_OPPONENT_VARIANTS,
+    REGULAR_CONFIG,
+)
 from rulebase.kaggle_public_strategies.public_rule_agent import PublicRuleAgent
 
 OUT_DIR = ROOT / "rulebase/kaggle_public_rl_informed_strategies/experiments"
@@ -53,11 +57,23 @@ def make_regular_agent():
     return agent
 
 
+def make_config_agent(params: dict):
+    instance = RLInformedPublicRuleAgent(**params)
+
+    def agent(obs, configuration=None):
+        return instance.act(obs)
+
+    return agent
+
+
 def make_opponent_agent(opponent: str):
     if opponent == "public_original":
         return make_public_agent()
-    if opponent == "regular_config":
-        return make_regular_agent()
+    if opponent in CHAMPION_OPPONENT_VARIANTS:
+        params = CHAMPION_OPPONENT_VARIANTS[opponent]
+        if params is None:
+            return make_public_agent()
+        return make_config_agent(params)
     raise ValueError(f"Unknown opponent: {opponent}")
 
 
@@ -149,7 +165,7 @@ def build_tasks(variants: dict[str, dict], games_per_seat: int, opponent: str) -
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--suite", choices=sorted(ABLATION_SUITES), default="additive")
-    parser.add_argument("--opponent", choices=["regular_config", "public_original"], default="regular_config")
+    parser.add_argument("--opponent", choices=sorted(CHAMPION_OPPONENT_VARIANTS), default="regular")
     parser.add_argument("--games-per-seat", type=int, default=5)
     parser.add_argument("--workers", type=int, default=min(8, max(1, (os.cpu_count() or 2) // 2)))
     return parser.parse_args()

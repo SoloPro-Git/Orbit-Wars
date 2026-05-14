@@ -107,6 +107,8 @@ class PublicRuleAgent:
     proactive_defense_source_front_distance: float = PUBLIC_EXACT.proactive_defense_source_front_distance
     proactive_defense_source_front_bonus: int = PUBLIC_EXACT.proactive_defense_source_front_bonus
     enable_local_source_reserve: bool = PUBLIC_EXACT.enable_local_source_reserve
+    local_reserve_min_step: int = PUBLIC_EXACT.local_reserve_min_step
+    local_reserve_max_step: int = PUBLIC_EXACT.local_reserve_max_step
     local_reserve_min_production: float = PUBLIC_EXACT.local_reserve_min_production
     local_reserve_enemy_distance: float = PUBLIC_EXACT.local_reserve_enemy_distance
     local_reserve_turns: int = PUBLIC_EXACT.local_reserve_turns
@@ -319,6 +321,8 @@ class PublicRuleAgent:
 
     def _local_source_reserve(self, planet: Planet, local: LocalObs) -> int:
         if not self.enable_local_source_reserve:
+            return 0
+        if local.step < self.local_reserve_min_step or local.step > self.local_reserve_max_step:
             return 0
 
         enemy_planets = [p for p in local.planets if p.owner not in (-1, local.player)]

@@ -86,6 +86,8 @@ class StrategyConfig:
     proactive_defense_source_front_distance: float = 35.0
     proactive_defense_source_front_bonus: int = 0
     enable_local_source_reserve: bool = False
+    local_reserve_min_step: int = 0
+    local_reserve_max_step: int = 500
     local_reserve_min_production: float = 3.0
     local_reserve_enemy_distance: float = 35.0
     local_reserve_turns: int = 2
@@ -206,7 +208,7 @@ PRE_DYNAMIC_CAP_REGULAR_CONFIG = StrategyConfig(
         "early_neutral_reaction_margin": 3,
     }
 )
-REGULAR_CONFIG = StrategyConfig(
+CAP18_BASE_REGULAR_CONFIG = StrategyConfig(
     **{
         **PRE_DYNAMIC_CAP_REGULAR_CONFIG.to_agent_kwargs(),
         "enable_early_neutral_dynamic_max_ships": True,
@@ -216,6 +218,14 @@ REGULAR_CONFIG = StrategyConfig(
         "early_neutral_dynamic_source_min_after": 10,
     }
 )
+LAUNCH_TARGETS4_AGE8_REGULAR_CONFIG = StrategyConfig(
+    **{
+        **CAP18_BASE_REGULAR_CONFIG.to_agent_kwargs(),
+        "enemy_launch_punish_max_fleet_age": 8,
+        "enemy_launch_punish_max_targets": 4,
+    }
+)
+REGULAR_CONFIG = LAUNCH_TARGETS4_AGE8_REGULAR_CONFIG
 PRE_HOLDABILITY_REGULAR_CONFIG = StrategyConfig(
     target_candidate_limit=2,
     min_ships_mine_attack=12,
@@ -425,7 +435,19 @@ HISTORICAL_BEST_VARIANTS = {
     "pre_early_neutral_regular": PRE_EARLY_NEUTRAL_REGULAR_CONFIG.to_agent_kwargs(),
     "pre_reaction_margin_regular": PRE_REACTION_MARGIN_REGULAR_CONFIG.to_agent_kwargs(),
     "pre_dynamic_cap_regular": PRE_DYNAMIC_CAP_REGULAR_CONFIG.to_agent_kwargs(),
+    "cap18_base_regular": CAP18_BASE_REGULAR_CONFIG.to_agent_kwargs(),
+    "launch_targets4_age8_regular": LAUNCH_TARGETS4_AGE8_REGULAR_CONFIG.to_agent_kwargs(),
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+}
+
+CHAMPION_OPPONENT_VARIANTS = {
+    "public_original": None,
+    "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "launch_targets4_age8_regular": LAUNCH_TARGETS4_AGE8_REGULAR_CONFIG.to_agent_kwargs(),
+    "cap18_base_regular": CAP18_BASE_REGULAR_CONFIG.to_agent_kwargs(),
+    "pre_dynamic_cap_regular": PRE_DYNAMIC_CAP_REGULAR_CONFIG.to_agent_kwargs(),
 }
 
 ABLATION_SUITES = {
@@ -1450,6 +1472,7 @@ ABLATION_SUITES = {
     "early_neutral_dynamic_cap_safety": {
         "pre_dynamic_cap_regular": PRE_DYNAMIC_CAP_REGULAR_CONFIG.to_agent_kwargs(),
         "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
+        "cap18_base_regular": CAP18_BASE_REGULAR_CONFIG.to_agent_kwargs(),
         "cap18_base": from_base(
             PRE_DYNAMIC_CAP_REGULAR_CONFIG,
             enable_early_neutral_dynamic_max_ships=True,
@@ -1521,6 +1544,234 @@ ABLATION_SUITES = {
             early_neutral_dynamic_source_safety_margin=4,
             early_neutral_dynamic_check_target_hold=True,
             early_neutral_dynamic_target_hold_margin=4,
+        ),
+    },
+    "champion_refine": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "cap18_base_regular": CAP18_BASE_REGULAR_CONFIG.to_agent_kwargs(),
+        "cap18_gap5": from_base(
+            PRE_DYNAMIC_CAP_REGULAR_CONFIG,
+            enable_early_neutral_dynamic_max_ships=True,
+            early_neutral_dynamic_max_ships=18,
+            early_neutral_dynamic_min_production=4.0,
+            early_neutral_dynamic_min_enemy_gap=5,
+            early_neutral_dynamic_source_min_after=10,
+        ),
+        "cap18_after12": from_base(
+            PRE_DYNAMIC_CAP_REGULAR_CONFIG,
+            enable_early_neutral_dynamic_max_ships=True,
+            early_neutral_dynamic_max_ships=18,
+            early_neutral_dynamic_min_production=4.0,
+            early_neutral_dynamic_min_enemy_gap=4,
+            early_neutral_dynamic_source_min_after=12,
+        ),
+        "cap18_step35": from_base(REGULAR_CONFIG, early_neutral_step_limit=35),
+        "cap18_step45": from_base(REGULAR_CONFIG, early_neutral_step_limit=45),
+        "cap18_holdability_w025": from_base(REGULAR_CONFIG, holdability_weight=0.25),
+        "cap18_holdability_w075": from_base(REGULAR_CONFIG, holdability_weight=0.75),
+        "cap18_safe_bonus24": from_base(REGULAR_CONFIG, early_neutral_safe_bonus=24.0),
+        "cap18_contested_penalty20": from_base(REGULAR_CONFIG, early_neutral_contested_penalty=20.0),
+        "cap19_prod4_gap4": from_base(
+            PRE_DYNAMIC_CAP_REGULAR_CONFIG,
+            enable_early_neutral_dynamic_max_ships=True,
+            early_neutral_dynamic_max_ships=19,
+            early_neutral_dynamic_min_production=4.0,
+            early_neutral_dynamic_min_enemy_gap=4,
+            early_neutral_dynamic_source_min_after=10,
+        ),
+        "cap20_prod4_gap4": from_base(
+            PRE_DYNAMIC_CAP_REGULAR_CONFIG,
+            enable_early_neutral_dynamic_max_ships=True,
+            early_neutral_dynamic_max_ships=20,
+            early_neutral_dynamic_min_production=4.0,
+            early_neutral_dynamic_min_enemy_gap=4,
+            early_neutral_dynamic_source_min_after=10,
+        ),
+        "cap18_target_hold_m0": from_base(
+            PRE_DYNAMIC_CAP_REGULAR_CONFIG,
+            enable_early_neutral_dynamic_max_ships=True,
+            early_neutral_dynamic_max_ships=18,
+            early_neutral_dynamic_min_production=4.0,
+            early_neutral_dynamic_min_enemy_gap=4,
+            early_neutral_dynamic_source_min_after=10,
+            early_neutral_dynamic_check_target_hold=True,
+            early_neutral_dynamic_target_hold_margin=0,
+        ),
+        "cap18_target_hold_m2": from_base(
+            PRE_DYNAMIC_CAP_REGULAR_CONFIG,
+            enable_early_neutral_dynamic_max_ships=True,
+            early_neutral_dynamic_max_ships=18,
+            early_neutral_dynamic_min_production=4.0,
+            early_neutral_dynamic_min_enemy_gap=4,
+            early_neutral_dynamic_source_min_after=10,
+            early_neutral_dynamic_check_target_hold=True,
+            early_neutral_dynamic_target_hold_margin=2,
+        ),
+    },
+    "champion_validate": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "cap18_base_regular": CAP18_BASE_REGULAR_CONFIG.to_agent_kwargs(),
+        "cap18_gap5": from_base(
+            PRE_DYNAMIC_CAP_REGULAR_CONFIG,
+            enable_early_neutral_dynamic_max_ships=True,
+            early_neutral_dynamic_max_ships=18,
+            early_neutral_dynamic_min_production=4.0,
+            early_neutral_dynamic_min_enemy_gap=5,
+            early_neutral_dynamic_source_min_after=10,
+        ),
+        "cap18_safe_bonus24": from_base(REGULAR_CONFIG, early_neutral_safe_bonus=24.0),
+        "cap18_gap5_safe_bonus24": from_base(
+            PRE_DYNAMIC_CAP_REGULAR_CONFIG,
+            enable_early_neutral_dynamic_max_ships=True,
+            early_neutral_dynamic_max_ships=18,
+            early_neutral_dynamic_min_production=4.0,
+            early_neutral_dynamic_min_enemy_gap=5,
+            early_neutral_dynamic_source_min_after=10,
+            early_neutral_safe_bonus=24.0,
+        ),
+        "cap18_gap5_after12": from_base(
+            PRE_DYNAMIC_CAP_REGULAR_CONFIG,
+            enable_early_neutral_dynamic_max_ships=True,
+            early_neutral_dynamic_max_ships=18,
+            early_neutral_dynamic_min_production=4.0,
+            early_neutral_dynamic_min_enemy_gap=5,
+            early_neutral_dynamic_source_min_after=12,
+        ),
+        "cap18_gap5_target_hold_m0": from_base(
+            PRE_DYNAMIC_CAP_REGULAR_CONFIG,
+            enable_early_neutral_dynamic_max_ships=True,
+            early_neutral_dynamic_max_ships=18,
+            early_neutral_dynamic_min_production=4.0,
+            early_neutral_dynamic_min_enemy_gap=5,
+            early_neutral_dynamic_source_min_after=10,
+            early_neutral_dynamic_check_target_hold=True,
+            early_neutral_dynamic_target_hold_margin=0,
+        ),
+    },
+    "midgame_source_reserve": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "mid180_tiny_highprod": from_base(
+            REGULAR_CONFIG,
+            enable_local_source_reserve=True,
+            local_reserve_min_step=180,
+            local_reserve_min_production=3.0,
+            local_reserve_enemy_distance=0.0,
+            local_reserve_turns=1,
+            local_reserve_min_garrison=2,
+            local_reserve_front_bonus=0,
+        ),
+        "mid220_tiny_highprod": from_base(
+            REGULAR_CONFIG,
+            enable_local_source_reserve=True,
+            local_reserve_min_step=220,
+            local_reserve_min_production=3.0,
+            local_reserve_enemy_distance=0.0,
+            local_reserve_turns=1,
+            local_reserve_min_garrison=2,
+            local_reserve_front_bonus=0,
+        ),
+        "mid250_tiny_highprod": from_base(
+            REGULAR_CONFIG,
+            enable_local_source_reserve=True,
+            local_reserve_min_step=250,
+            local_reserve_min_production=3.0,
+            local_reserve_enemy_distance=0.0,
+            local_reserve_turns=1,
+            local_reserve_min_garrison=2,
+            local_reserve_front_bonus=0,
+        ),
+        "mid220_front25_soft": from_base(
+            REGULAR_CONFIG,
+            enable_local_source_reserve=True,
+            local_reserve_min_step=220,
+            local_reserve_min_production=4.0,
+            local_reserve_enemy_distance=25.0,
+            local_reserve_turns=1,
+            local_reserve_min_garrison=2,
+            local_reserve_front_bonus=2,
+        ),
+        "mid220_front35_soft": from_base(
+            REGULAR_CONFIG,
+            enable_local_source_reserve=True,
+            local_reserve_min_step=220,
+            local_reserve_min_production=4.0,
+            local_reserve_enemy_distance=35.0,
+            local_reserve_turns=1,
+            local_reserve_min_garrison=2,
+            local_reserve_front_bonus=2,
+        ),
+        "mid220_tiny_until320": from_base(
+            REGULAR_CONFIG,
+            enable_local_source_reserve=True,
+            local_reserve_min_step=220,
+            local_reserve_max_step=320,
+            local_reserve_min_production=3.0,
+            local_reserve_enemy_distance=0.0,
+            local_reserve_turns=1,
+            local_reserve_min_garrison=2,
+            local_reserve_front_bonus=0,
+        ),
+    },
+    "champion_launch_punish_refine": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "cap18_base_regular": CAP18_BASE_REGULAR_CONFIG.to_agent_kwargs(),
+        "launch_age8": from_base(REGULAR_CONFIG, enemy_launch_punish_max_fleet_age=8),
+        "launch_age16": from_base(REGULAR_CONFIG, enemy_launch_punish_max_fleet_age=16),
+        "launch_age20": from_base(REGULAR_CONFIG, enemy_launch_punish_max_fleet_age=20),
+        "launch_outgoing8": from_base(REGULAR_CONFIG, enemy_launch_punish_min_outgoing=8),
+        "launch_outgoing16": from_base(REGULAR_CONFIG, enemy_launch_punish_min_outgoing=16),
+        "launch_outgoing20": from_base(REGULAR_CONFIG, enemy_launch_punish_min_outgoing=20),
+        "launch_bonus025": from_base(REGULAR_CONFIG, enemy_launch_punish_bonus_weight=0.25),
+        "launch_bonus070": from_base(REGULAR_CONFIG, enemy_launch_punish_bonus_weight=0.70),
+        "launch_bonus100": from_base(REGULAR_CONFIG, enemy_launch_punish_bonus_weight=1.00),
+        "launch_targets3": from_base(REGULAR_CONFIG, enemy_launch_punish_max_targets=3),
+        "launch_targets4": from_base(REGULAR_CONFIG, enemy_launch_punish_max_targets=4),
+        "launch_age16_targets3": from_base(
+            REGULAR_CONFIG,
+            enemy_launch_punish_max_fleet_age=16,
+            enemy_launch_punish_max_targets=3,
+        ),
+        "launch_age16_bonus070_targets3": from_base(
+            REGULAR_CONFIG,
+            enemy_launch_punish_max_fleet_age=16,
+            enemy_launch_punish_bonus_weight=0.70,
+            enemy_launch_punish_max_targets=3,
+        ),
+        "launch_outgoing8_age16": from_base(
+            REGULAR_CONFIG,
+            enemy_launch_punish_min_outgoing=8,
+            enemy_launch_punish_max_fleet_age=16,
+        ),
+        "launch_outgoing16_bonus070": from_base(
+            REGULAR_CONFIG,
+            enemy_launch_punish_min_outgoing=16,
+            enemy_launch_punish_bonus_weight=0.70,
+        ),
+    },
+    "champion_launch_punish_validate": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "cap18_base_regular": CAP18_BASE_REGULAR_CONFIG.to_agent_kwargs(),
+        "launch_targets4": from_base(REGULAR_CONFIG, enemy_launch_punish_max_targets=4),
+        "launch_age8": from_base(REGULAR_CONFIG, enemy_launch_punish_max_fleet_age=8),
+        "launch_targets4_age8": from_base(
+            REGULAR_CONFIG,
+            enemy_launch_punish_max_targets=4,
+            enemy_launch_punish_max_fleet_age=8,
+        ),
+        "launch_targets4_outgoing16": from_base(
+            REGULAR_CONFIG,
+            enemy_launch_punish_max_targets=4,
+            enemy_launch_punish_min_outgoing=16,
+        ),
+        "launch_targets4_bonus025": from_base(
+            REGULAR_CONFIG,
+            enemy_launch_punish_max_targets=4,
+            enemy_launch_punish_bonus_weight=0.25,
+        ),
+        "launch_targets4_bonus070": from_base(
+            REGULAR_CONFIG,
+            enemy_launch_punish_max_targets=4,
+            enemy_launch_punish_bonus_weight=0.70,
         ),
     },
     "candidate_refine": {
