@@ -961,6 +961,37 @@ MYREPLAY_TERRITORY_FOLLOWUP_VARIANTS = {
     ),
 }
 
+MYREPLAY_TERRITORY_TOP_VALIDATE_VARIANTS = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "terr30_step35": from_base(
+        REGULAR_CONFIG,
+        opening_territory_step_limit=35,
+    ),
+    "home_anchor_soft_late": from_base(
+        REGULAR_CONFIG,
+        enable_home_anchor_source_reserve=True,
+        home_anchor_min_active_players=4,
+        home_anchor_step_min=60,
+        home_anchor_step_max=130,
+        home_anchor_home_radius=45.0,
+        home_anchor_min_after=6,
+        home_anchor_prod_turns_after=1,
+        home_anchor_front_threat_bonus=4,
+    ),
+    "terr30_step35_plus_home_anchor_soft": from_base(
+        REGULAR_CONFIG,
+        opening_territory_step_limit=35,
+        enable_home_anchor_source_reserve=True,
+        home_anchor_min_active_players=4,
+        home_anchor_step_min=60,
+        home_anchor_step_max=130,
+        home_anchor_home_radius=45.0,
+        home_anchor_min_after=6,
+        home_anchor_prod_turns_after=1,
+        home_anchor_front_threat_bonus=4,
+    ),
+}
+
 CHAMPION_OPPONENT_VARIANTS = {
     "public_original": None,
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
@@ -992,6 +1023,7 @@ ABLATION_SUITES = {
     "myreplay_repair": MYREPLAY_REPAIR_VARIANTS,
     "myreplay_territory_validate": MYREPLAY_TERRITORY_VALIDATE_VARIANTS,
     "myreplay_territory_followup": MYREPLAY_TERRITORY_FOLLOWUP_VARIANTS,
+    "myreplay_territory_top_validate": MYREPLAY_TERRITORY_TOP_VALIDATE_VARIANTS,
     "regular_verify": {
         "public_exact": PUBLIC_EXACT.to_agent_kwargs(),
         "candidate2": cfg(target_candidate_limit=2),
