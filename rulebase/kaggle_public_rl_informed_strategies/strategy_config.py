@@ -144,6 +144,17 @@ class StrategyConfig:
     recent_loss_recapture_max_step: int = 500
     recent_loss_recapture_bonus: float = 25.0
     recent_loss_recapture_prod_weight: float = 5.0
+    enable_global_attack_priority: bool = False
+    global_attack_roi_weight: float = 0.0
+    global_attack_arrival_penalty: float = 0.0
+    global_attack_max_failed_pairs: int = 64
+    enable_multiplayer_diplomacy_score: bool = False
+    multiplayer_min_active_players: int = 4
+    multiplayer_far_enemy_distance: float = 45.0
+    multiplayer_far_enemy_penalty: float = 18.0
+    multiplayer_local_enemy_bonus: float = 8.0
+    multiplayer_leader_prod_bonus: float = 2.0
+    multiplayer_neutral_bonus: float = 4.0
 
     # RL-informed/custom attack-loop knobs.
     use_custom_attack_loop: bool = False
@@ -261,7 +272,17 @@ RECAPTURE_S45_E160_W50_B40_REGULAR_CONFIG = StrategyConfig(
         "recent_loss_recapture_max_step": 160,
     }
 )
-REGULAR_CONFIG = RECAPTURE_S45_E160_W50_B40_REGULAR_CONFIG
+MP_SOFT_4P_REGULAR_CONFIG = StrategyConfig(
+    **{
+        **RECAPTURE_S45_E160_W50_B40_REGULAR_CONFIG.to_agent_kwargs(),
+        "enable_multiplayer_diplomacy_score": True,
+        "multiplayer_far_enemy_penalty": 10.0,
+        "multiplayer_local_enemy_bonus": 5.0,
+        "multiplayer_leader_prod_bonus": 1.0,
+        "multiplayer_neutral_bonus": 3.0,
+    }
+)
+REGULAR_CONFIG = MP_SOFT_4P_REGULAR_CONFIG
 PRE_HOLDABILITY_REGULAR_CONFIG = StrategyConfig(
     target_candidate_limit=2,
     min_ships_mine_attack=12,
@@ -476,6 +497,7 @@ HISTORICAL_BEST_VARIANTS = {
     "recent_loss_recapture_prod4_b40_regular": RECENT_LOSS_RECAPTURE_PROD4_B40_REGULAR_CONFIG.to_agent_kwargs(),
     "recapture_s45_e180_w50_b40_regular": RECAPTURE_S45_E180_W50_B40_REGULAR_CONFIG.to_agent_kwargs(),
     "recapture_s45_e160_w50_b40_regular": RECAPTURE_S45_E160_W50_B40_REGULAR_CONFIG.to_agent_kwargs(),
+    "mp_soft_4p_regular": MP_SOFT_4P_REGULAR_CONFIG.to_agent_kwargs(),
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
 }
@@ -484,6 +506,7 @@ CHAMPION_OPPONENT_VARIANTS = {
     "public_original": None,
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "mp_soft_4p_regular": MP_SOFT_4P_REGULAR_CONFIG.to_agent_kwargs(),
     "recapture_s45_e160_w50_b40_regular": RECAPTURE_S45_E160_W50_B40_REGULAR_CONFIG.to_agent_kwargs(),
     "recapture_s45_e180_w50_b40_regular": RECAPTURE_S45_E180_W50_B40_REGULAR_CONFIG.to_agent_kwargs(),
     "recent_loss_recapture_prod4_b40_regular": RECENT_LOSS_RECAPTURE_PROD4_B40_REGULAR_CONFIG.to_agent_kwargs(),
@@ -1077,6 +1100,177 @@ ABLATION_SUITES = {
             value_defense_horizon=70,
             value_defense_max_send=45,
             value_defense_min_margin=12,
+        ),
+    },
+    "global_attack_priority": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "global_priority_plain": from_base(
+            REGULAR_CONFIG,
+            enable_global_attack_priority=True,
+        ),
+        "global_priority_roi05": from_base(
+            REGULAR_CONFIG,
+            enable_global_attack_priority=True,
+            global_attack_roi_weight=0.5,
+        ),
+        "global_priority_roi10": from_base(
+            REGULAR_CONFIG,
+            enable_global_attack_priority=True,
+            global_attack_roi_weight=1.0,
+        ),
+        "global_priority_eta005": from_base(
+            REGULAR_CONFIG,
+            enable_global_attack_priority=True,
+            global_attack_arrival_penalty=0.05,
+        ),
+        "global_priority_roi05_eta005": from_base(
+            REGULAR_CONFIG,
+            enable_global_attack_priority=True,
+            global_attack_roi_weight=0.5,
+            global_attack_arrival_penalty=0.05,
+        ),
+        "global_priority_roi10_eta010": from_base(
+            REGULAR_CONFIG,
+            enable_global_attack_priority=True,
+            global_attack_roi_weight=1.0,
+            global_attack_arrival_penalty=0.10,
+        ),
+    },
+    "multiplayer_diplomacy": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "mp_local_enemy": from_base(
+            REGULAR_CONFIG,
+            enable_multiplayer_diplomacy_score=True,
+            multiplayer_far_enemy_penalty=18.0,
+            multiplayer_local_enemy_bonus=8.0,
+            multiplayer_leader_prod_bonus=0.0,
+            multiplayer_neutral_bonus=0.0,
+        ),
+        "mp_local_leader": from_base(
+            REGULAR_CONFIG,
+            enable_multiplayer_diplomacy_score=True,
+            multiplayer_far_enemy_penalty=18.0,
+            multiplayer_local_enemy_bonus=8.0,
+            multiplayer_leader_prod_bonus=2.0,
+            multiplayer_neutral_bonus=0.0,
+        ),
+        "mp_neutral_first": from_base(
+            REGULAR_CONFIG,
+            enable_multiplayer_diplomacy_score=True,
+            multiplayer_far_enemy_penalty=18.0,
+            multiplayer_local_enemy_bonus=4.0,
+            multiplayer_leader_prod_bonus=1.0,
+            multiplayer_neutral_bonus=6.0,
+        ),
+        "mp_soft": from_base(
+            REGULAR_CONFIG,
+            enable_multiplayer_diplomacy_score=True,
+            multiplayer_far_enemy_penalty=10.0,
+            multiplayer_local_enemy_bonus=5.0,
+            multiplayer_leader_prod_bonus=1.0,
+            multiplayer_neutral_bonus=3.0,
+        ),
+        "mp_neutral_n6_local0": from_base(
+            REGULAR_CONFIG,
+            enable_multiplayer_diplomacy_score=True,
+            multiplayer_far_enemy_penalty=18.0,
+            multiplayer_local_enemy_bonus=0.0,
+            multiplayer_leader_prod_bonus=1.0,
+            multiplayer_neutral_bonus=6.0,
+        ),
+    },
+    "multiplayer_diplomacy_validate": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "mp_neutral_first": from_base(
+            REGULAR_CONFIG,
+            enable_multiplayer_diplomacy_score=True,
+            multiplayer_far_enemy_penalty=18.0,
+            multiplayer_local_enemy_bonus=4.0,
+            multiplayer_leader_prod_bonus=1.0,
+            multiplayer_neutral_bonus=6.0,
+        ),
+        "mp_soft": from_base(
+            REGULAR_CONFIG,
+            enable_multiplayer_diplomacy_score=True,
+            multiplayer_far_enemy_penalty=10.0,
+            multiplayer_local_enemy_bonus=5.0,
+            multiplayer_leader_prod_bonus=1.0,
+            multiplayer_neutral_bonus=3.0,
+        ),
+        "mp_neutral_n6_local0": from_base(
+            REGULAR_CONFIG,
+            enable_multiplayer_diplomacy_score=True,
+            multiplayer_far_enemy_penalty=18.0,
+            multiplayer_local_enemy_bonus=0.0,
+            multiplayer_leader_prod_bonus=1.0,
+            multiplayer_neutral_bonus=6.0,
+        ),
+    },
+    "multiplayer_diplomacy_search": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "mp_neutral_n4_far18": from_base(
+            REGULAR_CONFIG,
+            enable_multiplayer_diplomacy_score=True,
+            multiplayer_far_enemy_penalty=18.0,
+            multiplayer_local_enemy_bonus=4.0,
+            multiplayer_leader_prod_bonus=1.0,
+            multiplayer_neutral_bonus=4.0,
+        ),
+        "mp_neutral_n6_far18": from_base(
+            REGULAR_CONFIG,
+            enable_multiplayer_diplomacy_score=True,
+            multiplayer_far_enemy_penalty=18.0,
+            multiplayer_local_enemy_bonus=4.0,
+            multiplayer_leader_prod_bonus=1.0,
+            multiplayer_neutral_bonus=6.0,
+        ),
+        "mp_neutral_n8_far18": from_base(
+            REGULAR_CONFIG,
+            enable_multiplayer_diplomacy_score=True,
+            multiplayer_far_enemy_penalty=18.0,
+            multiplayer_local_enemy_bonus=4.0,
+            multiplayer_leader_prod_bonus=1.0,
+            multiplayer_neutral_bonus=8.0,
+        ),
+        "mp_neutral_n6_far10": from_base(
+            REGULAR_CONFIG,
+            enable_multiplayer_diplomacy_score=True,
+            multiplayer_far_enemy_penalty=10.0,
+            multiplayer_local_enemy_bonus=4.0,
+            multiplayer_leader_prod_bonus=1.0,
+            multiplayer_neutral_bonus=6.0,
+        ),
+        "mp_neutral_n6_far25": from_base(
+            REGULAR_CONFIG,
+            enable_multiplayer_diplomacy_score=True,
+            multiplayer_far_enemy_penalty=25.0,
+            multiplayer_local_enemy_bonus=4.0,
+            multiplayer_leader_prod_bonus=1.0,
+            multiplayer_neutral_bonus=6.0,
+        ),
+        "mp_neutral_n6_local0": from_base(
+            REGULAR_CONFIG,
+            enable_multiplayer_diplomacy_score=True,
+            multiplayer_far_enemy_penalty=18.0,
+            multiplayer_local_enemy_bonus=0.0,
+            multiplayer_leader_prod_bonus=1.0,
+            multiplayer_neutral_bonus=6.0,
+        ),
+        "mp_neutral_n6_leader0": from_base(
+            REGULAR_CONFIG,
+            enable_multiplayer_diplomacy_score=True,
+            multiplayer_far_enemy_penalty=18.0,
+            multiplayer_local_enemy_bonus=4.0,
+            multiplayer_leader_prod_bonus=0.0,
+            multiplayer_neutral_bonus=6.0,
+        ),
+        "mp_neutral_n8_far25_local0": from_base(
+            REGULAR_CONFIG,
+            enable_multiplayer_diplomacy_score=True,
+            multiplayer_far_enemy_penalty=25.0,
+            multiplayer_local_enemy_bonus=0.0,
+            multiplayer_leader_prod_bonus=1.0,
+            multiplayer_neutral_bonus=8.0,
         ),
     },
     "value_defense": {

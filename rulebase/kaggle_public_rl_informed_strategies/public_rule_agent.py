@@ -165,6 +165,17 @@ class PublicRuleAgent:
     recent_loss_recapture_max_step: int = PUBLIC_EXACT.recent_loss_recapture_max_step
     recent_loss_recapture_bonus: float = PUBLIC_EXACT.recent_loss_recapture_bonus
     recent_loss_recapture_prod_weight: float = PUBLIC_EXACT.recent_loss_recapture_prod_weight
+    enable_global_attack_priority: bool = PUBLIC_EXACT.enable_global_attack_priority
+    global_attack_roi_weight: float = PUBLIC_EXACT.global_attack_roi_weight
+    global_attack_arrival_penalty: float = PUBLIC_EXACT.global_attack_arrival_penalty
+    global_attack_max_failed_pairs: int = PUBLIC_EXACT.global_attack_max_failed_pairs
+    enable_multiplayer_diplomacy_score: bool = PUBLIC_EXACT.enable_multiplayer_diplomacy_score
+    multiplayer_min_active_players: int = PUBLIC_EXACT.multiplayer_min_active_players
+    multiplayer_far_enemy_distance: float = PUBLIC_EXACT.multiplayer_far_enemy_distance
+    multiplayer_far_enemy_penalty: float = PUBLIC_EXACT.multiplayer_far_enemy_penalty
+    multiplayer_local_enemy_bonus: float = PUBLIC_EXACT.multiplayer_local_enemy_bonus
+    multiplayer_leader_prod_bonus: float = PUBLIC_EXACT.multiplayer_leader_prod_bonus
+    multiplayer_neutral_bonus: float = PUBLIC_EXACT.multiplayer_neutral_bonus
     fleet_trajectories: list[dict[str, object]] = field(default_factory=list)
     reinforcement_trajectories: list[dict[str, object]] = field(default_factory=list)
     moving_planets: set[int] = field(default_factory=set)
@@ -686,6 +697,10 @@ class PublicRuleAgent:
         moves: list[list[float | int]],
     ) -> None:
         launch_pressure = self._enemy_launch_pressure(local)
+        if self.enable_global_attack_priority:
+            self._append_global_priority_attacks(local, under_attack, exhausted_planet_ids, moves, launch_pressure)
+            return
+
         for source in sorted(local.mine, key=lambda p: p.ships, reverse=True):
             if source.id in exhausted_planet_ids:
                 continue
@@ -704,6 +719,65 @@ class PublicRuleAgent:
                     break
                 if self.enable_coop_attacks and self._try_coop_attack(source, target, local, under_attack, exhausted_planet_ids, moves):
                     break
+
+    def _append_global_priority_attacks(
+        self,
+        local: LocalObs,
+        under_attack: dict[int, dict[str, object]],
+        exhausted_planet_ids: set[int],
+        moves: list[list[float | int]],
+        launch_pressure: dict[int, float],
+    ) -> None:
+        failed_pairs: set[tuple[int, int]] = set()
+        while len(failed_pairs) < self.global_attack_max_failed_pairs:
+            best: tuple[float, Planet, Planet] | None = None
+            for source in local.mine:
+                if source.id in exhausted_planet_ids:
+                    continue
+                if self._available_local_attack_ships(source, local, under_attack) < self._dynamic_min_attack(local):
+                    continue
+                for target in local.targets:
+                    if self.skip_comet_targets and target.id in local.comet_planet_ids:
+                        continue
+                    if (source.id, target.id) in failed_pairs:
+                        continue
+                    score = self._global_attack_score(source, target, local, launch_pressure)
+                    if best is None or score > best[0]:
+                        best = (score, source, target)
+
+            if best is None:
+                return
+
+            _, source, target = best
+            before_moves = len(moves)
+            if self.enable_single_attacks and self._try_single_attack(source, target, local, under_attack, exhausted_planet_ids, moves):
+                continue
+            if self.enable_coop_attacks and self._try_coop_attack(source, target, local, under_attack, exhausted_planet_ids, moves):
+                continue
+
+            if len(moves) == before_moves:
+                failed_pairs.add((source.id, target.id))
+
+    def _global_attack_score(
+        self,
+        source: Planet,
+        target: Planet,
+        local: LocalObs,
+        launch_pressure: dict[int, float],
+    ) -> float:
+        base_ships = self._base_ships_needed(target, local, source=source)
+        if base_ships is None:
+            return -1e12
+        arrival = self._estimate_arrival_for_requirement(source, target, base_ships, local)
+        score = self._target_score(source, target, local) + launch_pressure.get(target.id, 0.0)
+        if self.global_attack_roi_weight:
+            remaining_value = target.production * max(0, 500 - local.step - arrival)
+            if target.owner not in (-1, local.player):
+                remaining_value *= 1.6
+            score += self.global_attack_roi_weight * remaining_value / max(1, base_ships)
+        if self.global_attack_arrival_penalty:
+            score -= self.global_attack_arrival_penalty * arrival
+        return score
 
     def _enemy_launch_pressure(self, local: LocalObs) -> dict[int, float]:
         if not self.enable_enemy_launch_punish:
@@ -940,6 +1014,7 @@ class PublicRuleAgent:
         score = public_custom_score(source, target)
         score += self._early_neutral_score_adjustment(source, target, local)
         score += self._recent_loss_recapture_score(target, local)
+        score += self._multiplayer_diplomacy_score(source, target, local)
         if not self.enable_holdability_target_score:
             return score
 
@@ -972,6 +1047,53 @@ class PublicRuleAgent:
         if self._early_neutral_allowed(source, target, local) and self.early_neutral_holdability_relief < 1.0:
             risk *= max(0.0, self.early_neutral_holdability_relief)
         return score - risk * self.holdability_weight
+
+    def _multiplayer_diplomacy_score(self, source: Planet, target: Planet, local: LocalObs) -> float:
+        if not self.enable_multiplayer_diplomacy_score:
+            return 0.0
+
+        active_players = {
+            planet.owner
+            for planet in local.planets
+            if planet.owner != -1
+        } | {
+            fleet.owner
+            for fleet in local.fleets
+            if fleet.owner != -1
+        }
+        if len(active_players) < self.multiplayer_min_active_players:
+            return 0.0
+
+        if target.owner == -1:
+            return self.multiplayer_neutral_bonus * target.production
+        if target.owner == local.player:
+            return 0.0
+
+        my_planets = [planet for planet in local.planets if planet.owner == local.player]
+        enemy_planets = [planet for planet in local.planets if planet.owner == target.owner]
+        if not my_planets or not enemy_planets:
+            return 0.0
+
+        border_distance = min(distance(mine, enemy) for mine in my_planets for enemy in enemy_planets)
+        adjustment = 0.0
+        if border_distance > self.multiplayer_far_enemy_distance:
+            gap = border_distance - self.multiplayer_far_enemy_distance
+            adjustment -= self.multiplayer_far_enemy_penalty * gap / max(self.multiplayer_far_enemy_distance, 1.0)
+        else:
+            closeness = 1.0 - border_distance / max(self.multiplayer_far_enemy_distance, 1.0)
+            adjustment += self.multiplayer_local_enemy_bonus * closeness
+
+        prod_by_owner: dict[int, float] = {}
+        for planet in local.planets:
+            if planet.owner == -1:
+                continue
+            prod_by_owner[planet.owner] = prod_by_owner.get(planet.owner, 0.0) + planet.production
+        if prod_by_owner:
+            leader_prod = max(prod_by_owner.values())
+            target_owner_prod = prod_by_owner.get(target.owner, 0.0)
+            if leader_prod > 0 and target_owner_prod >= leader_prod:
+                adjustment += self.multiplayer_leader_prod_bonus * target.production
+        return adjustment
 
     def _recent_loss_recapture_score(self, target: Planet, local: LocalObs) -> float:
         if not self.enable_recent_loss_recapture_bias:
