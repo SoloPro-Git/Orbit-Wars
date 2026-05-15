@@ -61,6 +61,7 @@ class StrategyConfig:
     capture_hold_enemy_max_arrival: int = 45
     capture_hold_margin: int = 6
     capture_hold_allow_extra_send: bool = True
+    capture_hold_use_post_capture_window: bool = False
     enable_contested_target_adjustment: bool = False
     contested_arrival_margin: int = 3
     contested_enemy_weight: float = 1.0
@@ -249,6 +250,15 @@ class StrategyConfig:
     recent_loss_recapture_max_step: int = 500
     recent_loss_recapture_bonus: float = 25.0
     recent_loss_recapture_prod_weight: float = 5.0
+    enable_recent_loss_recapture_hold_gate: bool = False
+    recent_loss_recapture_hold_min_active_players: int = 4
+    recent_loss_recapture_hold_min_step: int = 45
+    recent_loss_recapture_hold_max_step: int = 180
+    recent_loss_recapture_hold_window: int = 50
+    recent_loss_recapture_hold_min_production: float = 4.0
+    recent_loss_recapture_hold_enemy_radius: float = 45.0
+    recent_loss_recapture_hold_margin: int = 8
+    recent_loss_recapture_hold_allow_extra_send: bool = True
     enable_global_attack_priority: bool = False
     global_attack_roi_weight: float = 0.0
     global_attack_arrival_penalty: float = 0.0
@@ -1228,6 +1238,63 @@ MYREPLAY_PROACTIVE_REPAIR_VARIANTS = {
     ),
 }
 
+MYREPLAY_RECAPTURE_HOLD_REPAIR_VARIANTS = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "capture_hold_post_window": from_base(
+        REGULAR_CONFIG,
+        capture_hold_use_post_capture_window=True,
+    ),
+    "recent_loss_hold_m8_post": from_base(
+        REGULAR_CONFIG,
+        capture_hold_use_post_capture_window=True,
+        enable_recent_loss_recapture_hold_gate=True,
+        recent_loss_recapture_hold_min_active_players=4,
+        recent_loss_recapture_hold_min_step=55,
+        recent_loss_recapture_hold_max_step=170,
+        recent_loss_recapture_hold_window=50,
+        recent_loss_recapture_hold_min_production=4.0,
+        recent_loss_recapture_hold_enemy_radius=45.0,
+        recent_loss_recapture_hold_margin=8,
+    ),
+    "recent_loss_hold_m12_post": from_base(
+        REGULAR_CONFIG,
+        capture_hold_use_post_capture_window=True,
+        enable_recent_loss_recapture_hold_gate=True,
+        recent_loss_recapture_hold_min_active_players=4,
+        recent_loss_recapture_hold_min_step=55,
+        recent_loss_recapture_hold_max_step=170,
+        recent_loss_recapture_hold_window=50,
+        recent_loss_recapture_hold_min_production=4.0,
+        recent_loss_recapture_hold_enemy_radius=45.0,
+        recent_loss_recapture_hold_margin=12,
+    ),
+    "recent_loss_hold_w70_m8_post": from_base(
+        REGULAR_CONFIG,
+        capture_hold_use_post_capture_window=True,
+        enable_recent_loss_recapture_hold_gate=True,
+        recent_loss_recapture_hold_min_active_players=4,
+        recent_loss_recapture_hold_min_step=45,
+        recent_loss_recapture_hold_max_step=190,
+        recent_loss_recapture_hold_window=70,
+        recent_loss_recapture_hold_min_production=4.0,
+        recent_loss_recapture_hold_enemy_radius=45.0,
+        recent_loss_recapture_hold_margin=8,
+    ),
+    "recent_loss_hold_m8_no_extra": from_base(
+        REGULAR_CONFIG,
+        capture_hold_use_post_capture_window=True,
+        enable_recent_loss_recapture_hold_gate=True,
+        recent_loss_recapture_hold_min_active_players=4,
+        recent_loss_recapture_hold_min_step=55,
+        recent_loss_recapture_hold_max_step=170,
+        recent_loss_recapture_hold_window=50,
+        recent_loss_recapture_hold_min_production=4.0,
+        recent_loss_recapture_hold_enemy_radius=45.0,
+        recent_loss_recapture_hold_margin=8,
+        recent_loss_recapture_hold_allow_extra_send=False,
+    ),
+}
+
 CHAMPION_OPPONENT_VARIANTS = {
     "public_original": None,
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
@@ -1263,6 +1330,7 @@ ABLATION_SUITES = {
     "myreplay_territory_top_validate": MYREPLAY_TERRITORY_TOP_VALIDATE_VARIANTS,
     "myreplay_unused_feature_probe": MYREPLAY_UNUSED_FEATURE_PROBE_VARIANTS,
     "myreplay_proactive_repair": MYREPLAY_PROACTIVE_REPAIR_VARIANTS,
+    "myreplay_recapture_hold_repair": MYREPLAY_RECAPTURE_HOLD_REPAIR_VARIANTS,
     "regular_verify": {
         "public_exact": PUBLIC_EXACT.to_agent_kwargs(),
         "candidate2": cfg(target_candidate_limit=2),

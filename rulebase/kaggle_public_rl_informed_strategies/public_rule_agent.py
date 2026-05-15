@@ -85,6 +85,7 @@ class PublicRuleAgent:
     capture_hold_enemy_max_arrival: int = PUBLIC_EXACT.capture_hold_enemy_max_arrival
     capture_hold_margin: int = PUBLIC_EXACT.capture_hold_margin
     capture_hold_allow_extra_send: bool = PUBLIC_EXACT.capture_hold_allow_extra_send
+    capture_hold_use_post_capture_window: bool = PUBLIC_EXACT.capture_hold_use_post_capture_window
     enable_contested_target_adjustment: bool = PUBLIC_EXACT.enable_contested_target_adjustment
     contested_arrival_margin: int = PUBLIC_EXACT.contested_arrival_margin
     contested_enemy_weight: float = PUBLIC_EXACT.contested_enemy_weight
@@ -273,6 +274,15 @@ class PublicRuleAgent:
     recent_loss_recapture_max_step: int = PUBLIC_EXACT.recent_loss_recapture_max_step
     recent_loss_recapture_bonus: float = PUBLIC_EXACT.recent_loss_recapture_bonus
     recent_loss_recapture_prod_weight: float = PUBLIC_EXACT.recent_loss_recapture_prod_weight
+    enable_recent_loss_recapture_hold_gate: bool = PUBLIC_EXACT.enable_recent_loss_recapture_hold_gate
+    recent_loss_recapture_hold_min_active_players: int = PUBLIC_EXACT.recent_loss_recapture_hold_min_active_players
+    recent_loss_recapture_hold_min_step: int = PUBLIC_EXACT.recent_loss_recapture_hold_min_step
+    recent_loss_recapture_hold_max_step: int = PUBLIC_EXACT.recent_loss_recapture_hold_max_step
+    recent_loss_recapture_hold_window: int = PUBLIC_EXACT.recent_loss_recapture_hold_window
+    recent_loss_recapture_hold_min_production: float = PUBLIC_EXACT.recent_loss_recapture_hold_min_production
+    recent_loss_recapture_hold_enemy_radius: float = PUBLIC_EXACT.recent_loss_recapture_hold_enemy_radius
+    recent_loss_recapture_hold_margin: int = PUBLIC_EXACT.recent_loss_recapture_hold_margin
+    recent_loss_recapture_hold_allow_extra_send: bool = PUBLIC_EXACT.recent_loss_recapture_hold_allow_extra_send
     enable_global_attack_priority: bool = PUBLIC_EXACT.enable_global_attack_priority
     global_attack_roi_weight: float = PUBLIC_EXACT.global_attack_roi_weight
     global_attack_arrival_penalty: float = PUBLIC_EXACT.global_attack_arrival_penalty
@@ -745,10 +755,7 @@ class PublicRuleAgent:
         ):
             return total_ships
 
-        post_capture = int(total_ships - target.ships)
-        if target.owner != -1:
-            post_capture -= self._enemy_production_buffer(source, target, local, total_ships)
-        post_capture = max(0, post_capture)
+        post_capture = self._post_capture_ships(source, target, total_ships, local)
 
         extra_needed = 0
         for enemy in local.planets:
@@ -762,7 +769,8 @@ class PublicRuleAgent:
             enemy_arrival = travel_ticks(enemy, target, sendable)
             if enemy_arrival > self.capture_hold_enemy_max_arrival:
                 continue
-            projected_defense = post_capture + int(target.production * enemy_arrival)
+            production_ticks = self._capture_hold_production_ticks(arrive_tick, enemy_arrival)
+            projected_defense = post_capture + int(target.production * production_ticks)
             required_defense = sendable + self.capture_hold_margin
             if projected_defense < required_defense:
                 extra_needed = max(extra_needed, required_defense - projected_defense)
@@ -779,6 +787,67 @@ class PublicRuleAgent:
         sendable += int(enemy.production * self.capture_hold_enemy_launch_window)
         sendable -= int(enemy.production * self.capture_hold_enemy_reserve_turns)
         return max(0, sendable)
+
+    def _post_capture_ships(self, source: Planet, target: Planet, total_ships: int, local: LocalObs) -> int:
+        post_capture = int(total_ships - target.ships)
+        if target.owner != -1:
+            post_capture -= self._enemy_production_buffer(source, target, local, total_ships)
+        return max(0, post_capture)
+
+    def _capture_hold_production_ticks(self, arrive_tick: int, enemy_arrival: int) -> int:
+        if not self.capture_hold_use_post_capture_window:
+            return enemy_arrival
+        return max(0, enemy_arrival - arrive_tick)
+
+    def _recent_loss_recapture_hold_adjusted_ships(
+        self,
+        source: Planet,
+        target: Planet,
+        total_ships: int,
+        arrive_tick: int,
+        available: int,
+        local: LocalObs,
+    ) -> int | None:
+        if not self.enable_recent_loss_recapture_hold_gate:
+            return total_ships
+        if target.owner in (-1, local.player) or target.production < self.recent_loss_recapture_hold_min_production:
+            return total_ships
+        if local.step < self.recent_loss_recapture_hold_min_step or local.step > self.recent_loss_recapture_hold_max_step:
+            return total_ships
+        if (
+            self.recent_loss_recapture_hold_min_active_players > 0
+            and self._active_player_count(local) < self.recent_loss_recapture_hold_min_active_players
+        ):
+            return total_ships
+        lost_step = self.recently_lost_steps.get(target.id)
+        if lost_step is None or local.step - lost_step > self.recent_loss_recapture_hold_window:
+            return total_ships
+
+        post_capture = self._post_capture_ships(source, target, total_ships, local)
+        extra_needed = 0
+        for enemy in local.planets:
+            if enemy.owner in (-1, local.player) or enemy.id == target.id:
+                continue
+            if distance(enemy, target) > self.recent_loss_recapture_hold_enemy_radius:
+                continue
+            sendable = self._project_enemy_sendable_for_capture_hold(enemy)
+            if sendable < self.min_ships_mine_attack:
+                continue
+            enemy_arrival = travel_ticks(enemy, target, sendable)
+            if enemy_arrival > self.capture_hold_enemy_max_arrival:
+                continue
+            production_ticks = self._capture_hold_production_ticks(arrive_tick, enemy_arrival)
+            projected_defense = post_capture + int(target.production * production_ticks)
+            required_defense = sendable + self.recent_loss_recapture_hold_margin
+            if projected_defense < required_defense:
+                extra_needed = max(extra_needed, required_defense - projected_defense)
+
+        if extra_needed <= 0:
+            return total_ships
+        adjusted = total_ships + extra_needed
+        if adjusted <= available and self.recent_loss_recapture_hold_allow_extra_send:
+            return adjusted
+        return None
 
     def _opening_hold_adjusted_ships(
         self,
@@ -1677,6 +1746,26 @@ class PublicRuleAgent:
             return False
         if adjusted_hold_ships > total_ships:
             total_ships = adjusted_hold_ships
+            angle, arrive_tick = self._angle_and_arrival(source, target, total_ships, local)
+            if angle is None or arrive_tick is None:
+                return False
+            if self.enable_sun_avoidance and sun_collision(source, total_ships, angle):
+                return False
+            if not self._path_hits_target(source, target, total_ships, angle, arrive_tick, local):
+                return False
+
+        adjusted_recapture_hold_ships = self._recent_loss_recapture_hold_adjusted_ships(
+            source,
+            target,
+            total_ships,
+            arrive_tick,
+            available,
+            local,
+        )
+        if adjusted_recapture_hold_ships is None:
+            return False
+        if adjusted_recapture_hold_ships > total_ships:
+            total_ships = adjusted_recapture_hold_ships
             angle, arrive_tick = self._angle_and_arrival(source, target, total_ships, local)
             if angle is None or arrive_tick is None:
                 return False
