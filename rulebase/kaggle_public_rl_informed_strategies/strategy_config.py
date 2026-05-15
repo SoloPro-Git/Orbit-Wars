@@ -443,7 +443,21 @@ MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_REGULAR_CONFIG = StrategyConfig(
         "opening_territory_enemy_closer_margin": 8.0,
     }
 )
-REGULAR_CONFIG = MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_REGULAR_CONFIG
+MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_S35_HOME6_REGULAR_CONFIG = StrategyConfig(
+    **{
+        **MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_REGULAR_CONFIG.to_agent_kwargs(),
+        "opening_territory_step_limit": 35,
+        "enable_home_anchor_source_reserve": True,
+        "home_anchor_min_active_players": 4,
+        "home_anchor_step_min": 60,
+        "home_anchor_step_max": 130,
+        "home_anchor_home_radius": 45.0,
+        "home_anchor_min_after": 6,
+        "home_anchor_prod_turns_after": 1,
+        "home_anchor_front_threat_bonus": 4,
+    }
+)
+REGULAR_CONFIG = MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_S35_HOME6_REGULAR_CONFIG
 PRE_HOLDABILITY_REGULAR_CONFIG = StrategyConfig(
     target_candidate_limit=2,
     min_ships_mine_attack=12,
@@ -664,6 +678,7 @@ HISTORICAL_BEST_VARIANTS = {
     "mp_local3_neu5_comet12_path4p_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_local3_neu5_comet12_path4p_hold4_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_local3_neu5_comet12_path4p_hold4_terr30_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_REGULAR_CONFIG.to_agent_kwargs(),
+    "mp_local3_neu5_comet12_path4p_hold4_terr30_s35_home6_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_S35_HOME6_REGULAR_CONFIG.to_agent_kwargs(),
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
 }
@@ -962,13 +977,13 @@ MYREPLAY_TERRITORY_FOLLOWUP_VARIANTS = {
 }
 
 MYREPLAY_TERRITORY_TOP_VALIDATE_VARIANTS = {
-    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_REGULAR_CONFIG.to_agent_kwargs(),
     "terr30_step35": from_base(
-        REGULAR_CONFIG,
+        MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_REGULAR_CONFIG,
         opening_territory_step_limit=35,
     ),
     "home_anchor_soft_late": from_base(
-        REGULAR_CONFIG,
+        MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_REGULAR_CONFIG,
         enable_home_anchor_source_reserve=True,
         home_anchor_min_active_players=4,
         home_anchor_step_min=60,
@@ -979,7 +994,7 @@ MYREPLAY_TERRITORY_TOP_VALIDATE_VARIANTS = {
         home_anchor_front_threat_bonus=4,
     ),
     "terr30_step35_plus_home_anchor_soft": from_base(
-        REGULAR_CONFIG,
+        MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_REGULAR_CONFIG,
         opening_territory_step_limit=35,
         enable_home_anchor_source_reserve=True,
         home_anchor_min_active_players=4,
@@ -996,6 +1011,7 @@ CHAMPION_OPPONENT_VARIANTS = {
     "public_original": None,
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "mp_local3_neu5_comet12_path4p_hold4_terr30_s35_home6_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_S35_HOME6_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_local3_neu5_comet12_path4p_hold4_terr30_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_local3_neu5_comet12_path4p_hold4_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_local3_neu5_comet12_path4p_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_REGULAR_CONFIG.to_agent_kwargs(),
