@@ -294,7 +294,14 @@ MP_SOFT_LEADER0_4P_REGULAR_CONFIG = StrategyConfig(
         "multiplayer_leader_prod_bonus": 0.0,
     }
 )
-REGULAR_CONFIG = MP_SOFT_LEADER0_4P_REGULAR_CONFIG
+MP_LOCAL3_NEU5_REGULAR_CONFIG = StrategyConfig(
+    **{
+        **MP_SOFT_LEADER0_4P_REGULAR_CONFIG.to_agent_kwargs(),
+        "multiplayer_local_enemy_bonus": 3.0,
+        "multiplayer_neutral_bonus": 5.0,
+    }
+)
+REGULAR_CONFIG = MP_LOCAL3_NEU5_REGULAR_CONFIG
 PRE_HOLDABILITY_REGULAR_CONFIG = StrategyConfig(
     target_candidate_limit=2,
     min_ships_mine_attack=12,
@@ -511,6 +518,7 @@ HISTORICAL_BEST_VARIANTS = {
     "recapture_s45_e160_w50_b40_regular": RECAPTURE_S45_E160_W50_B40_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_soft_4p_regular": MP_SOFT_4P_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_soft_leader0_4p_regular": MP_SOFT_LEADER0_4P_REGULAR_CONFIG.to_agent_kwargs(),
+    "mp_local3_neu5_regular": MP_LOCAL3_NEU5_REGULAR_CONFIG.to_agent_kwargs(),
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
 }
@@ -519,6 +527,7 @@ CHAMPION_OPPONENT_VARIANTS = {
     "public_original": None,
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "mp_local3_neu5_regular": MP_LOCAL3_NEU5_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_soft_leader0_4p_regular": MP_SOFT_LEADER0_4P_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_soft_4p_regular": MP_SOFT_4P_REGULAR_CONFIG.to_agent_kwargs(),
     "recapture_s45_e160_w50_b40_regular": RECAPTURE_S45_E160_W50_B40_REGULAR_CONFIG.to_agent_kwargs(),
@@ -2891,5 +2900,89 @@ ABLATION_SUITES = {
             min_ships_mine_attack=12,
             enemy_owned_production_buffer_turns=4,
         ),
+    },
+    "online_replay_followup_config": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "mp_local4": from_base(REGULAR_CONFIG, multiplayer_local_enemy_bonus=4.0),
+        "mp_local3": from_base(REGULAR_CONFIG, multiplayer_local_enemy_bonus=3.0),
+        "mp_local2": from_base(REGULAR_CONFIG, multiplayer_local_enemy_bonus=2.0),
+        "mp_local0": from_base(REGULAR_CONFIG, multiplayer_local_enemy_bonus=0.0),
+        "mp_local3_neu4": from_base(
+            REGULAR_CONFIG,
+            multiplayer_local_enemy_bonus=3.0,
+            multiplayer_neutral_bonus=4.0,
+        ),
+        "mp_local3_neu5": from_base(
+            REGULAR_CONFIG,
+            multiplayer_local_enemy_bonus=3.0,
+            multiplayer_neutral_bonus=5.0,
+        ),
+        "early_dyn22_after7": from_base(
+            REGULAR_CONFIG,
+            early_neutral_dynamic_max_ships=22,
+            early_neutral_dynamic_source_min_after=7,
+        ),
+        "early_dyn25_after5": from_base(
+            REGULAR_CONFIG,
+            early_neutral_dynamic_max_ships=25,
+            early_neutral_dynamic_source_min_after=5,
+        ),
+        "early_dyn30_after3": from_base(
+            REGULAR_CONFIG,
+            early_neutral_dynamic_max_ships=30,
+            early_neutral_dynamic_source_min_after=3,
+        ),
+        "front_support_soft": from_base(
+            REGULAR_CONFIG,
+            enable_front_support=True,
+            support_distance_factor=1.6,
+            support_min_available=35,
+            support_fraction=0.35,
+            support_max_arrival=20,
+        ),
+        "front_support_medium": from_base(
+            REGULAR_CONFIG,
+            enable_front_support=True,
+            support_distance_factor=1.45,
+            support_min_available=28,
+            support_fraction=0.50,
+            support_max_arrival=28,
+        ),
+        "mp_local3_early25_after5": from_base(
+            REGULAR_CONFIG,
+            multiplayer_local_enemy_bonus=3.0,
+            early_neutral_dynamic_max_ships=25,
+            early_neutral_dynamic_source_min_after=5,
+        ),
+        "mp_local3_front_soft": from_base(
+            REGULAR_CONFIG,
+            multiplayer_local_enemy_bonus=3.0,
+            enable_front_support=True,
+            support_distance_factor=1.6,
+            support_min_available=35,
+            support_fraction=0.35,
+            support_max_arrival=20,
+        ),
+    },
+    "online_replay_followup_validate": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "mp_local3_neu5": from_base(
+            REGULAR_CONFIG,
+            multiplayer_local_enemy_bonus=3.0,
+            multiplayer_neutral_bonus=5.0,
+        ),
+        "early_dyn30_after3": from_base(
+            REGULAR_CONFIG,
+            early_neutral_dynamic_max_ships=30,
+            early_neutral_dynamic_source_min_after=3,
+        ),
+        "mp_local3_neu5_early30_after3": from_base(
+            REGULAR_CONFIG,
+            multiplayer_local_enemy_bonus=3.0,
+            multiplayer_neutral_bonus=5.0,
+            early_neutral_dynamic_max_ships=30,
+            early_neutral_dynamic_source_min_after=3,
+        ),
+        "mp_local4": from_base(REGULAR_CONFIG, multiplayer_local_enemy_bonus=4.0),
     },
 }
