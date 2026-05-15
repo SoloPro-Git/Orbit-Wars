@@ -31,14 +31,25 @@ Entrypoint:
 from rulebase.kaggle_public_rl_informed_strategies import agent
 ```
 
-Current smoke test notes:
+Current best submission candidate:
 
-- `RLInformedPublicRuleAgent` vs `baseline all-strategies`: 5-0 on seeds 42-46.
-- `RLInformedPublicRuleAgent` vs original `PublicRuleAgent`: 1-4 on seeds 42-46.
+- Config name: `mp_local3_neu5_comet12_path4p_hold4_regular`
+- Alias: `regular`
+- Code commit: `8ba9ca5`
+- Base: `mp_local3_neu5_comet12_path4p_regular`
+- Added regular feature: `enable_capture_hold_margin_gate=True`,
+  `capture_hold_margin=4`
+- Validation: `recent_loss_validate_4p_ablation_20260515_181359_331711_0a162cd6`
+- 4P result against recent champions: `23-57-0`, win rate `28.7%`,
+  average rank `1.71`
+- Previous `regular` in the same validation: `20-60-0`, win rate `25.0%`,
+  average rank `1.75`
+- 2P validation against `regular`: same non-loss as previous `regular`
+  (`2-5-33`, non-loss `87.5%`), so no obvious 2P regression signal.
 
-So this package should be treated as an experiment bed for RL-derived rule ideas,
-not as the current best submission candidate. The strongest submission candidate
-remains `rulebase/kaggle_public_strategies` until ablation proves otherwise.
+Historical best configs are intentionally kept in `HISTORICAL_BEST_VARIANTS`
+and `CHAMPION_OPPONENT_VARIANTS`; do not delete named champion configs when
+moving the `regular` alias forward.
 
 The strategy package is designed for local testing and for selectively merging ideas
 back into `rulebase/baseline`. If submitting to Kaggle as multiple files, package the
