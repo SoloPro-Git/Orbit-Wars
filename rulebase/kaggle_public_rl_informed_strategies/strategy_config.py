@@ -28,8 +28,19 @@ class StrategyConfig:
     enable_reinforcements: bool = True
     enable_sun_avoidance: bool = True
     enable_path_first_hit_check: bool = False
+    enable_path_first_hit_redirect: bool = True
+    path_first_hit_min_active_players: int = 0
     path_first_hit_padding: float = 0.8
     path_block_wait_penalty: float = 12.0
+    enable_comet_evacuation: bool = False
+    comet_evacuation_remaining_turns: int = 12
+    comet_evacuation_min_ships: int = 8
+    comet_evacuation_front_distance: float = 45.0
+    comet_evacuation_own_prod_weight: float = 16.0
+    comet_evacuation_front_bonus: float = 12.0
+    comet_evacuation_target_roi: float = 1.10
+    comet_evacuation_target_prod_weight: float = 18.0
+    comet_evacuation_target_enemy_bonus: float = 20.0
     enable_contested_target_adjustment: bool = False
     contested_arrival_margin: int = 3
     contested_enemy_weight: float = 1.0
@@ -131,6 +142,18 @@ class StrategyConfig:
     source_threat_send_trade_ratio: float = 1.0
     enable_source_threat_target_penalty: bool = False
     source_threat_target_penalty_weight: float = 0.05
+    enable_local_source_defense_gate: bool = False
+    local_source_defense_gate_min_active_players: int = 0
+    local_source_defense_gate_min_step: int = 0
+    local_source_defense_gate_max_step: int = 500
+    local_source_defense_gate_min_production: float = 3.0
+    local_source_defense_gate_front_distance: float = 45.0
+    local_source_defense_gate_enemy_fraction: float = 0.85
+    local_source_defense_gate_enemy_launch_window: int = 8
+    local_source_defense_gate_enemy_reserve_turns: int = 2
+    local_source_defense_gate_max_arrival: int = 45
+    local_source_defense_gate_margin: int = 8
+    local_source_defense_gate_use_arrival_production: bool = True
     enable_holdability_target_score: bool = False
     holdability_radius: float = 35.0
     holdability_weight: float = 0.8
@@ -333,7 +356,19 @@ MP_LOCAL3_NEU5_REGULAR_CONFIG = StrategyConfig(
         "multiplayer_neutral_bonus": 5.0,
     }
 )
-REGULAR_CONFIG = MP_LOCAL3_NEU5_REGULAR_CONFIG
+MP_LOCAL3_NEU5_COMET12_PATH4P_REGULAR_CONFIG = StrategyConfig(
+    **{
+        **MP_LOCAL3_NEU5_REGULAR_CONFIG.to_agent_kwargs(),
+        "enable_comet_evacuation": True,
+        "comet_evacuation_remaining_turns": 12,
+        "enable_path_first_hit_check": True,
+        "enable_path_first_hit_redirect": True,
+        "path_first_hit_min_active_players": 4,
+        "path_first_hit_padding": 0.8,
+        "path_block_wait_penalty": 12.0,
+    }
+)
+REGULAR_CONFIG = MP_LOCAL3_NEU5_COMET12_PATH4P_REGULAR_CONFIG
 PRE_HOLDABILITY_REGULAR_CONFIG = StrategyConfig(
     target_candidate_limit=2,
     min_ships_mine_attack=12,
@@ -551,6 +586,7 @@ HISTORICAL_BEST_VARIANTS = {
     "mp_soft_4p_regular": MP_SOFT_4P_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_soft_leader0_4p_regular": MP_SOFT_LEADER0_4P_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_local3_neu5_regular": MP_LOCAL3_NEU5_REGULAR_CONFIG.to_agent_kwargs(),
+    "mp_local3_neu5_comet12_path4p_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_REGULAR_CONFIG.to_agent_kwargs(),
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
 }
@@ -559,6 +595,7 @@ CHAMPION_OPPONENT_VARIANTS = {
     "public_original": None,
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "mp_local3_neu5_comet12_path4p_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_local3_neu5_regular": MP_LOCAL3_NEU5_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_soft_leader0_4p_regular": MP_SOFT_LEADER0_4P_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_soft_4p_regular": MP_SOFT_4P_REGULAR_CONFIG.to_agent_kwargs(),
@@ -3284,6 +3321,114 @@ ABLATION_SUITES = {
             source_threat_send_roi_multiplier=1.50,
             source_threat_send_min_net_value=30.0,
             source_threat_target_penalty_weight=0.05,
+        ),
+    },
+    "path_comet_source_gate_refine": {
+        "regular": MP_LOCAL3_NEU5_REGULAR_CONFIG.to_agent_kwargs(),
+        "current_regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "A_first_hit_skip": from_base(
+            MP_LOCAL3_NEU5_REGULAR_CONFIG,
+            enable_path_first_hit_check=True,
+            enable_path_first_hit_redirect=False,
+            path_first_hit_padding=0.8,
+        ),
+        "B_first_hit_redirect": from_base(
+            MP_LOCAL3_NEU5_REGULAR_CONFIG,
+            enable_path_first_hit_check=True,
+            enable_path_first_hit_redirect=True,
+            path_first_hit_padding=0.8,
+            path_block_wait_penalty=12.0,
+        ),
+        "B_first_hit_redirect_4p": from_base(
+            MP_LOCAL3_NEU5_REGULAR_CONFIG,
+            enable_path_first_hit_check=True,
+            enable_path_first_hit_redirect=True,
+            path_first_hit_min_active_players=4,
+            path_first_hit_padding=0.8,
+            path_block_wait_penalty=12.0,
+        ),
+        "C_comet_evac_8": from_base(
+            MP_LOCAL3_NEU5_REGULAR_CONFIG,
+            enable_comet_evacuation=True,
+            comet_evacuation_remaining_turns=8,
+        ),
+        "C_comet_evac_12": from_base(
+            MP_LOCAL3_NEU5_REGULAR_CONFIG,
+            enable_comet_evacuation=True,
+            comet_evacuation_remaining_turns=12,
+        ),
+        "C_comet_evac_16": from_base(
+            MP_LOCAL3_NEU5_REGULAR_CONFIG,
+            enable_comet_evacuation=True,
+            comet_evacuation_remaining_turns=16,
+        ),
+        "D_source_gate_soft": from_base(
+            MP_LOCAL3_NEU5_REGULAR_CONFIG,
+            enable_local_source_defense_gate=True,
+            local_source_defense_gate_min_production=3.0,
+            local_source_defense_gate_front_distance=45.0,
+            local_source_defense_gate_margin=6,
+            local_source_defense_gate_use_arrival_production=True,
+        ),
+        "D_source_gate_4p": from_base(
+            MP_LOCAL3_NEU5_REGULAR_CONFIG,
+            enable_local_source_defense_gate=True,
+            local_source_defense_gate_min_active_players=4,
+            local_source_defense_gate_min_step=60,
+            local_source_defense_gate_min_production=3.0,
+            local_source_defense_gate_front_distance=45.0,
+            local_source_defense_gate_margin=6,
+            local_source_defense_gate_use_arrival_production=True,
+        ),
+        "D_source_gate_strict": from_base(
+            MP_LOCAL3_NEU5_REGULAR_CONFIG,
+            enable_local_source_defense_gate=True,
+            local_source_defense_gate_min_active_players=4,
+            local_source_defense_gate_min_step=60,
+            local_source_defense_gate_min_production=4.0,
+            local_source_defense_gate_front_distance=35.0,
+            local_source_defense_gate_margin=10,
+            local_source_defense_gate_use_arrival_production=False,
+        ),
+        "E_first_hit_source_gate": from_base(
+            MP_LOCAL3_NEU5_REGULAR_CONFIG,
+            enable_path_first_hit_check=True,
+            enable_path_first_hit_redirect=False,
+            path_first_hit_padding=0.8,
+            enable_local_source_defense_gate=True,
+            local_source_defense_gate_min_active_players=4,
+            local_source_defense_gate_min_step=60,
+            local_source_defense_gate_min_production=3.0,
+            local_source_defense_gate_front_distance=45.0,
+            local_source_defense_gate_margin=6,
+            local_source_defense_gate_use_arrival_production=True,
+        ),
+    },
+    "path_comet_source_gate_validate": {
+        "regular": MP_LOCAL3_NEU5_REGULAR_CONFIG.to_agent_kwargs(),
+        "current_regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "B_first_hit_redirect_4p": from_base(
+            MP_LOCAL3_NEU5_REGULAR_CONFIG,
+            enable_path_first_hit_check=True,
+            enable_path_first_hit_redirect=True,
+            path_first_hit_min_active_players=4,
+            path_first_hit_padding=0.8,
+            path_block_wait_penalty=12.0,
+        ),
+        "C_comet_evac_12": from_base(
+            MP_LOCAL3_NEU5_REGULAR_CONFIG,
+            enable_comet_evacuation=True,
+            comet_evacuation_remaining_turns=12,
+        ),
+        "B4p_plus_C12": from_base(
+            MP_LOCAL3_NEU5_REGULAR_CONFIG,
+            enable_path_first_hit_check=True,
+            enable_path_first_hit_redirect=True,
+            path_first_hit_min_active_players=4,
+            path_first_hit_padding=0.8,
+            path_block_wait_penalty=12.0,
+            enable_comet_evacuation=True,
+            comet_evacuation_remaining_turns=12,
         ),
     },
 }

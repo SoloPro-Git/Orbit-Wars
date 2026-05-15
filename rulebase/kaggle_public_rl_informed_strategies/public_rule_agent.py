@@ -16,6 +16,7 @@ from .geometry import (
     sun_collision,
     travel_ticks,
 )
+from .rl_signals import comet_remaining_from_obs
 from .scoring import closest_planets_to_target, public_custom_score
 from .ship_requirements import calculate_required_ships, calculate_required_ships_moving
 from .state import LocalObs, Planet, parse_observation
@@ -51,8 +52,19 @@ class PublicRuleAgent:
     enable_reinforcements: bool = PUBLIC_EXACT.enable_reinforcements
     enable_sun_avoidance: bool = PUBLIC_EXACT.enable_sun_avoidance
     enable_path_first_hit_check: bool = PUBLIC_EXACT.enable_path_first_hit_check
+    enable_path_first_hit_redirect: bool = PUBLIC_EXACT.enable_path_first_hit_redirect
+    path_first_hit_min_active_players: int = PUBLIC_EXACT.path_first_hit_min_active_players
     path_first_hit_padding: float = PUBLIC_EXACT.path_first_hit_padding
     path_block_wait_penalty: float = PUBLIC_EXACT.path_block_wait_penalty
+    enable_comet_evacuation: bool = PUBLIC_EXACT.enable_comet_evacuation
+    comet_evacuation_remaining_turns: int = PUBLIC_EXACT.comet_evacuation_remaining_turns
+    comet_evacuation_min_ships: int = PUBLIC_EXACT.comet_evacuation_min_ships
+    comet_evacuation_front_distance: float = PUBLIC_EXACT.comet_evacuation_front_distance
+    comet_evacuation_own_prod_weight: float = PUBLIC_EXACT.comet_evacuation_own_prod_weight
+    comet_evacuation_front_bonus: float = PUBLIC_EXACT.comet_evacuation_front_bonus
+    comet_evacuation_target_roi: float = PUBLIC_EXACT.comet_evacuation_target_roi
+    comet_evacuation_target_prod_weight: float = PUBLIC_EXACT.comet_evacuation_target_prod_weight
+    comet_evacuation_target_enemy_bonus: float = PUBLIC_EXACT.comet_evacuation_target_enemy_bonus
     enable_contested_target_adjustment: bool = PUBLIC_EXACT.enable_contested_target_adjustment
     contested_arrival_margin: int = PUBLIC_EXACT.contested_arrival_margin
     contested_enemy_weight: float = PUBLIC_EXACT.contested_enemy_weight
@@ -154,6 +166,18 @@ class PublicRuleAgent:
     source_threat_send_trade_ratio: float = PUBLIC_EXACT.source_threat_send_trade_ratio
     enable_source_threat_target_penalty: bool = PUBLIC_EXACT.enable_source_threat_target_penalty
     source_threat_target_penalty_weight: float = PUBLIC_EXACT.source_threat_target_penalty_weight
+    enable_local_source_defense_gate: bool = PUBLIC_EXACT.enable_local_source_defense_gate
+    local_source_defense_gate_min_active_players: int = PUBLIC_EXACT.local_source_defense_gate_min_active_players
+    local_source_defense_gate_min_step: int = PUBLIC_EXACT.local_source_defense_gate_min_step
+    local_source_defense_gate_max_step: int = PUBLIC_EXACT.local_source_defense_gate_max_step
+    local_source_defense_gate_min_production: float = PUBLIC_EXACT.local_source_defense_gate_min_production
+    local_source_defense_gate_front_distance: float = PUBLIC_EXACT.local_source_defense_gate_front_distance
+    local_source_defense_gate_enemy_fraction: float = PUBLIC_EXACT.local_source_defense_gate_enemy_fraction
+    local_source_defense_gate_enemy_launch_window: int = PUBLIC_EXACT.local_source_defense_gate_enemy_launch_window
+    local_source_defense_gate_enemy_reserve_turns: int = PUBLIC_EXACT.local_source_defense_gate_enemy_reserve_turns
+    local_source_defense_gate_max_arrival: int = PUBLIC_EXACT.local_source_defense_gate_max_arrival
+    local_source_defense_gate_margin: int = PUBLIC_EXACT.local_source_defense_gate_margin
+    local_source_defense_gate_use_arrival_production: bool = PUBLIC_EXACT.local_source_defense_gate_use_arrival_production
     enable_holdability_target_score: bool = PUBLIC_EXACT.enable_holdability_target_score
     holdability_radius: float = PUBLIC_EXACT.holdability_radius
     holdability_weight: float = PUBLIC_EXACT.holdability_weight
@@ -222,6 +246,7 @@ class PublicRuleAgent:
     previous_owner_by_planet: dict[int, int] = field(default_factory=dict)
     recently_captured_steps: dict[int, int] = field(default_factory=dict)
     recently_lost_steps: dict[int, int] = field(default_factory=dict)
+    comet_remaining_by_planet: dict[int, int] = field(default_factory=dict)
     did_attack_this_turn: bool = False
     steps_seen: int = 0
 
@@ -234,6 +259,10 @@ class PublicRuleAgent:
             return []
 
         local = parse_observation(obs)
+        self.comet_remaining_by_planet = {
+            planet_id: comet_remaining_from_obs(obs, planet_id)
+            for planet_id in local.comet_planet_ids
+        }
         if self.steps_seen == self.warmup_steps + 1:
             self._fill_moving_planets(local)
 
@@ -256,6 +285,8 @@ class PublicRuleAgent:
 
         if self.enable_reinforcements:
             self._append_reinforcements(local, under_attack, exhausted_planet_ids, moves)
+        if self.enable_comet_evacuation:
+            self._append_comet_evacuation(local, under_attack, exhausted_planet_ids, moves)
         attack_count_before = len(self.fleet_trajectories)
         self._append_attacks(local, under_attack, exhausted_planet_ids, moves)
         self.did_attack_this_turn = len(self.fleet_trajectories) > attack_count_before
@@ -484,9 +515,50 @@ class PublicRuleAgent:
         arrive_tick: int,
         local: LocalObs,
     ) -> bool:
-        if not self.enable_source_threat_send_filter:
+        if self.enable_local_source_defense_gate and self._local_source_defense_gate_blocks(source, sent_ships, local):
+            return True
+        if self.enable_source_threat_send_filter:
+            return self._source_threat_after_send_gap(source, target, sent_ships, arrive_tick, local) > 0.0
+        return False
+
+    def _local_source_defense_gate_blocks(self, source: Planet, sent_ships: int, local: LocalObs) -> bool:
+        if local.step < self.local_source_defense_gate_min_step or local.step > self.local_source_defense_gate_max_step:
             return False
-        return self._source_threat_after_send_gap(source, target, sent_ships, arrive_tick, local) > 0.0
+        if (
+            self.local_source_defense_gate_min_active_players > 0
+            and self._active_player_count(local) < self.local_source_defense_gate_min_active_players
+        ):
+            return False
+
+        enemy_planets = [planet for planet in local.planets if planet.owner not in (-1, local.player)]
+        if not enemy_planets:
+            return False
+        nearest_enemy = min(distance(source, enemy) for enemy in enemy_planets)
+        is_high_prod = source.production >= self.local_source_defense_gate_min_production
+        is_front = nearest_enemy <= self.local_source_defense_gate_front_distance
+        if not is_high_prod and not is_front:
+            return False
+
+        source_after_send = max(0, int(source.ships) - int(sent_ships))
+        for enemy in enemy_planets:
+            sendable = self._project_enemy_sendable_for_local_gate(enemy)
+            if sendable < self.min_ships_mine_attack:
+                continue
+            arrival = travel_ticks(enemy, source, sendable)
+            if arrival > self.local_source_defense_gate_max_arrival:
+                continue
+            projected_source = source_after_send
+            if self.local_source_defense_gate_use_arrival_production:
+                projected_source += int(source.production * arrival)
+            if projected_source < sendable + self.local_source_defense_gate_margin:
+                return True
+        return False
+
+    def _project_enemy_sendable_for_local_gate(self, enemy: Planet) -> int:
+        sendable = int(enemy.ships * self.local_source_defense_gate_enemy_fraction)
+        sendable += int(enemy.production * self.local_source_defense_gate_enemy_launch_window)
+        sendable -= int(enemy.production * self.local_source_defense_gate_enemy_reserve_turns)
+        return max(0, sendable)
 
     def _source_threat_target_penalty(self, source: Planet, target: Planet, local: LocalObs) -> float:
         if not self.enable_source_threat_target_penalty:
@@ -621,6 +693,103 @@ class PublicRuleAgent:
                     }
                 )
                 break
+
+    def _append_comet_evacuation(
+        self,
+        local: LocalObs,
+        under_attack: dict[int, dict[str, object]],
+        exhausted_planet_ids: set[int],
+        moves: list[list[float | int]],
+    ) -> None:
+        expiring_comets = [
+            planet
+            for planet in local.mine
+            if planet.id in local.comet_planet_ids
+            and planet.id not in exhausted_planet_ids
+            and 0 < self.comet_remaining_by_planet.get(planet.id, 10**9) <= self.comet_evacuation_remaining_turns
+        ]
+        expiring_comets.sort(key=lambda planet: self.comet_remaining_by_planet.get(planet.id, 10**9))
+
+        for source in expiring_comets:
+            ships = self._available_ships(source, under_attack, reserve_outgoing_reinforcements=True)
+            if ships < self.comet_evacuation_min_ships:
+                continue
+
+            target = self._best_comet_evacuation_target(source, ships, local)
+            if target is None:
+                continue
+            angle, arrive_tick = self._angle_and_arrival(source, target, ships, local)
+            if angle is None or arrive_tick is None:
+                continue
+            if self.enable_sun_avoidance and sun_collision(source, ships, angle):
+                continue
+            if not self._path_hits_target(source, target, ships, angle, arrive_tick, local):
+                continue
+
+            moves.append([source.id, angle, ships])
+            exhausted_planet_ids.add(source.id)
+            if target.owner == local.player:
+                self.reinforcement_trajectories.append(
+                    {
+                        "source_id": source.id,
+                        "target": target,
+                        "angle": angle,
+                        "total_ships": ships,
+                        "arrive_tick": arrive_tick,
+                    }
+                )
+            else:
+                self._track_attack(source, target, angle, ships, arrive_tick)
+
+    def _best_comet_evacuation_target(self, source: Planet, ships: int, local: LocalObs) -> Planet | None:
+        scored: list[tuple[float, Planet]] = []
+        for target in local.planets:
+            if target.id == source.id:
+                continue
+            angle, arrive_tick = self._angle_and_arrival(source, target, ships, local)
+            if angle is None or arrive_tick is None:
+                continue
+
+            if target.owner == local.player:
+                score = self._comet_evacuation_own_target_score(source, target, local, arrive_tick)
+                scored.append((score, target))
+                continue
+
+            needed = self._base_ships_needed(target, local, source=source)
+            if needed is None or ships < needed:
+                continue
+            remaining_value = target.production * max(0, 500 - local.step - arrive_tick)
+            if target.owner not in (-1, local.player):
+                remaining_value *= 1.5
+            if remaining_value < ships * self.comet_evacuation_target_roi:
+                continue
+            score = (
+                self._target_score(source, target, local)
+                + target.production * self.comet_evacuation_target_prod_weight
+                + (self.comet_evacuation_target_enemy_bonus if target.owner not in (-1, local.player) else 0.0)
+                - arrive_tick
+            )
+            scored.append((score, target))
+
+        if not scored:
+            return None
+        scored.sort(key=lambda row: row[0], reverse=True)
+        return scored[0][1]
+
+    def _comet_evacuation_own_target_score(
+        self,
+        source: Planet,
+        target: Planet,
+        local: LocalObs,
+        arrive_tick: int,
+    ) -> float:
+        enemy_planets = [planet for planet in local.planets if planet.owner not in (-1, local.player)]
+        nearest_enemy = min((distance(target, enemy) for enemy in enemy_planets), default=10**9)
+        front_bonus = 0.0
+        if nearest_enemy <= self.comet_evacuation_front_distance:
+            pressure = 1.0 - nearest_enemy / max(self.comet_evacuation_front_distance, 1.0)
+            front_bonus = self.comet_evacuation_front_bonus * pressure
+        return target.production * self.comet_evacuation_own_prod_weight + front_bonus - arrive_tick
         if self.enable_value_defense:
             self._append_value_defense(local, under_attack, exhausted_planet_ids, moves)
         if self.enable_proactive_value_defense and not self.proactive_defense_after_attacks:
@@ -1623,11 +1792,13 @@ class PublicRuleAgent:
         arrive_tick: int,
         local: LocalObs,
     ) -> Planet | None:
-        if not self.enable_path_first_hit_check:
+        if not self._path_first_hit_enabled(local):
             return intended
         first_hit = self._first_planet_hit(source, angle, ships, max(1, arrive_tick), local)
         if first_hit is None or first_hit.id == intended.id:
             return intended
+        if not self.enable_path_first_hit_redirect:
+            return None
         if first_hit.owner == local.player:
             return None
         redirected_score = self._target_score(source, first_hit, local)
@@ -1645,10 +1816,17 @@ class PublicRuleAgent:
         arrive_tick: int,
         local: LocalObs,
     ) -> bool:
-        if not self.enable_path_first_hit_check:
+        if not self._path_first_hit_enabled(local):
             return True
         first_hit = self._first_planet_hit(source, angle, ships, max(1, arrive_tick), local)
         return first_hit is None or first_hit.id == target.id
+
+    def _path_first_hit_enabled(self, local: LocalObs) -> bool:
+        if not self.enable_path_first_hit_check:
+            return False
+        if self.path_first_hit_min_active_players <= 0:
+            return True
+        return self._active_player_count(local) >= self.path_first_hit_min_active_players
 
     def _first_planet_hit(
         self,
