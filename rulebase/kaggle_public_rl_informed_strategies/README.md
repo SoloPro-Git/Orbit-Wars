@@ -33,21 +33,25 @@ from rulebase.kaggle_public_rl_informed_strategies import agent
 
 Current best submission candidate:
 
-- Config name: `mp_local3_neu5_comet12_path4p_hold4_terr30_regular`
+- Config name: `mp_local3_neu5_comet12_path4p_hold4_terr30_s35_home6_regular`
 - Alias: `regular`
-- Code commit: `4d0654e`
-- Base: `mp_local3_neu5_comet12_path4p_hold4_regular`
+- Code commit: `48254b1`
+- Base: `mp_local3_neu5_comet12_path4p_hold4_terr30_regular`
 - Added regular feature: `enable_capture_hold_margin_gate=True`,
   `capture_hold_margin=4`, plus `enable_opening_neutral_territory_score=True`,
   `opening_territory_penalty=30.0`,
-  `opening_territory_enemy_closer_margin=8.0`
-- Validation: `myreplay_territory_validate_4p_ablation_20260515_183840_798875_e6a1823a`
-- 4P result against recent champions: `34-46-0`, win rate `42.5%`,
-  average rank `1.57`
-- Previous `regular` in the same validation: `27-53-0`, win rate `33.8%`,
+  `opening_territory_enemy_closer_margin=8.0`,
+  `opening_territory_step_limit=35`, and a soft late home-anchor source
+  reserve (`enable_home_anchor_source_reserve=True`,
+  `home_anchor_step_min=60`, `home_anchor_min_after=6`,
+  `home_anchor_prod_turns_after=1`)
+- Validation: `myreplay_territory_top_validate_4p_ablation_20260515_185314_530542_e6a1823a`
+- 4P result against recent champions: `54-106-0`, win rate `33.8%`,
   average rank `1.66`
+- Previous `regular` in the same validation: `49-111-0`, win rate `30.6%`,
+  average rank `1.69`
 - 2P validation against `regular`: same non-loss as previous `regular`
-  (`2-5-33`, non-loss `87.5%`), so no obvious 2P regression signal.
+  (`4-6-70`, non-loss `92.5%`), so no obvious 2P regression signal.
 
 Historical best configs are intentionally kept in `HISTORICAL_BEST_VARIANTS`
 and `CHAMPION_OPPONENT_VARIANTS`; do not delete named champion configs when
