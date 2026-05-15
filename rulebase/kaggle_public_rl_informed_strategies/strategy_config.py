@@ -255,7 +255,13 @@ RECAPTURE_S45_E180_W50_B40_REGULAR_CONFIG = StrategyConfig(
         "recent_loss_recapture_bonus": 40.0,
     }
 )
-REGULAR_CONFIG = RECAPTURE_S45_E180_W50_B40_REGULAR_CONFIG
+RECAPTURE_S45_E160_W50_B40_REGULAR_CONFIG = StrategyConfig(
+    **{
+        **RECAPTURE_S45_E180_W50_B40_REGULAR_CONFIG.to_agent_kwargs(),
+        "recent_loss_recapture_max_step": 160,
+    }
+)
+REGULAR_CONFIG = RECAPTURE_S45_E160_W50_B40_REGULAR_CONFIG
 PRE_HOLDABILITY_REGULAR_CONFIG = StrategyConfig(
     target_candidate_limit=2,
     min_ships_mine_attack=12,
@@ -469,6 +475,7 @@ HISTORICAL_BEST_VARIANTS = {
     "launch_targets4_age8_regular": LAUNCH_TARGETS4_AGE8_REGULAR_CONFIG.to_agent_kwargs(),
     "recent_loss_recapture_prod4_b40_regular": RECENT_LOSS_RECAPTURE_PROD4_B40_REGULAR_CONFIG.to_agent_kwargs(),
     "recapture_s45_e180_w50_b40_regular": RECAPTURE_S45_E180_W50_B40_REGULAR_CONFIG.to_agent_kwargs(),
+    "recapture_s45_e160_w50_b40_regular": RECAPTURE_S45_E160_W50_B40_REGULAR_CONFIG.to_agent_kwargs(),
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
 }
@@ -477,6 +484,7 @@ CHAMPION_OPPONENT_VARIANTS = {
     "public_original": None,
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "recapture_s45_e160_w50_b40_regular": RECAPTURE_S45_E160_W50_B40_REGULAR_CONFIG.to_agent_kwargs(),
     "recapture_s45_e180_w50_b40_regular": RECAPTURE_S45_E180_W50_B40_REGULAR_CONFIG.to_agent_kwargs(),
     "recent_loss_recapture_prod4_b40_regular": RECENT_LOSS_RECAPTURE_PROD4_B40_REGULAR_CONFIG.to_agent_kwargs(),
     "launch_targets4_age8_regular": LAUNCH_TARGETS4_AGE8_REGULAR_CONFIG.to_agent_kwargs(),
@@ -943,6 +951,129 @@ ABLATION_SUITES = {
             recent_loss_recapture_max_step=180,
             recent_loss_recapture_window=50,
             recent_loss_recapture_bonus=40.0,
+            value_defense_horizon=70,
+            value_defense_max_send=45,
+            value_defense_min_margin=12,
+        ),
+    },
+    "champion_recap_window_refine": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "recap_s30_e180_w50_b40": from_base(
+            REGULAR_CONFIG,
+            recent_loss_recapture_min_step=30,
+            recent_loss_recapture_max_step=180,
+            recent_loss_recapture_window=50,
+            recent_loss_recapture_bonus=40.0,
+        ),
+        "recap_s35_e180_w50_b40": from_base(
+            REGULAR_CONFIG,
+            recent_loss_recapture_min_step=35,
+            recent_loss_recapture_max_step=180,
+            recent_loss_recapture_window=50,
+            recent_loss_recapture_bonus=40.0,
+        ),
+        "recap_s40_e180_w50_b40": from_base(
+            REGULAR_CONFIG,
+            recent_loss_recapture_min_step=40,
+            recent_loss_recapture_max_step=180,
+            recent_loss_recapture_window=50,
+            recent_loss_recapture_bonus=40.0,
+        ),
+        "recap_s45_e160_w50_b40": from_base(
+            REGULAR_CONFIG,
+            recent_loss_recapture_min_step=45,
+            recent_loss_recapture_max_step=160,
+            recent_loss_recapture_window=50,
+            recent_loss_recapture_bonus=40.0,
+        ),
+        "recap_s45_e200_w50_b40": from_base(
+            REGULAR_CONFIG,
+            recent_loss_recapture_min_step=45,
+            recent_loss_recapture_max_step=200,
+            recent_loss_recapture_window=50,
+            recent_loss_recapture_bonus=40.0,
+        ),
+        "recap_s45_e180_w40_b45": from_base(
+            REGULAR_CONFIG,
+            recent_loss_recapture_min_step=45,
+            recent_loss_recapture_max_step=180,
+            recent_loss_recapture_window=40,
+            recent_loss_recapture_bonus=45.0,
+        ),
+        "recap_s45_e180_w60_b35": from_base(
+            REGULAR_CONFIG,
+            recent_loss_recapture_min_step=45,
+            recent_loss_recapture_max_step=180,
+            recent_loss_recapture_window=60,
+            recent_loss_recapture_bonus=35.0,
+        ),
+        "recap_s45_e180_w50_b35": from_base(
+            REGULAR_CONFIG,
+            recent_loss_recapture_min_step=45,
+            recent_loss_recapture_max_step=180,
+            recent_loss_recapture_window=50,
+            recent_loss_recapture_bonus=35.0,
+        ),
+        "recap_s45_e180_w50_b45": from_base(
+            REGULAR_CONFIG,
+            recent_loss_recapture_min_step=45,
+            recent_loss_recapture_max_step=180,
+            recent_loss_recapture_window=50,
+            recent_loss_recapture_bonus=45.0,
+        ),
+        "recap_prod_weight7": from_base(
+            REGULAR_CONFIG,
+            recent_loss_recapture_prod_weight=7.0,
+        ),
+        "recap_prod_weight9": from_base(
+            REGULAR_CONFIG,
+            recent_loss_recapture_prod_weight=9.0,
+        ),
+        "recap_min_prod35": from_base(
+            REGULAR_CONFIG,
+            recent_loss_recapture_min_production=3.5,
+        ),
+        "recap_min_prod45": from_base(
+            REGULAR_CONFIG,
+            recent_loss_recapture_min_production=4.5,
+        ),
+        "recap_vd_h65_m10": from_base(
+            REGULAR_CONFIG,
+            value_defense_horizon=65,
+            value_defense_max_send=45,
+            value_defense_min_margin=10,
+        ),
+        "recap_vd_h70_m12": from_base(
+            REGULAR_CONFIG,
+            value_defense_horizon=70,
+            value_defense_max_send=45,
+            value_defense_min_margin=12,
+        ),
+    },
+    "champion_recap_window_validate": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "recap_s45_e160_w50_b40": from_base(
+            REGULAR_CONFIG,
+            recent_loss_recapture_min_step=45,
+            recent_loss_recapture_max_step=160,
+            recent_loss_recapture_window=50,
+            recent_loss_recapture_bonus=40.0,
+        ),
+        "recap_s45_e180_w50_b35": from_base(
+            REGULAR_CONFIG,
+            recent_loss_recapture_min_step=45,
+            recent_loss_recapture_max_step=180,
+            recent_loss_recapture_window=50,
+            recent_loss_recapture_bonus=35.0,
+        ),
+        "recap_vd_h65_m10": from_base(
+            REGULAR_CONFIG,
+            value_defense_horizon=65,
+            value_defense_max_send=45,
+            value_defense_min_margin=10,
+        ),
+        "recap_vd_h70_m12": from_base(
+            REGULAR_CONFIG,
             value_defense_horizon=70,
             value_defense_max_send=45,
             value_defense_min_margin=12,
