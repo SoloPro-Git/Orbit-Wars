@@ -54,6 +54,8 @@ class PublicRuleAgent:
     contested_friendly_credit: float = PUBLIC_EXACT.contested_friendly_credit
     contested_skip_friendly_covered: bool = PUBLIC_EXACT.contested_skip_friendly_covered
     enable_dynamic_posture: bool = PUBLIC_EXACT.enable_dynamic_posture
+    posture_max_active_players: int = PUBLIC_EXACT.posture_max_active_players
+    posture_defensive_min_step: int = PUBLIC_EXACT.posture_defensive_min_step
     posture_aggressive_prod_deficit: float = PUBLIC_EXACT.posture_aggressive_prod_deficit
     posture_aggressive_ship_ratio: float = PUBLIC_EXACT.posture_aggressive_ship_ratio
     posture_aggressive_planet_deficit: int = PUBLIC_EXACT.posture_aggressive_planet_deficit
@@ -75,6 +77,10 @@ class PublicRuleAgent:
     value_defense_min_margin: int = PUBLIC_EXACT.value_defense_min_margin
     value_defense_max_send: int = PUBLIC_EXACT.value_defense_max_send
     value_defense_roi_multiplier: float = PUBLIC_EXACT.value_defense_roi_multiplier
+    value_defense_multiplayer_min_active_players: int = PUBLIC_EXACT.value_defense_multiplayer_min_active_players
+    value_defense_multiplayer_horizon: int = PUBLIC_EXACT.value_defense_multiplayer_horizon
+    value_defense_multiplayer_max_send: int = PUBLIC_EXACT.value_defense_multiplayer_max_send
+    value_defense_multiplayer_min_margin: int = PUBLIC_EXACT.value_defense_multiplayer_min_margin
     enable_proactive_value_defense: bool = PUBLIC_EXACT.enable_proactive_value_defense
     proactive_defense_min_production: float = PUBLIC_EXACT.proactive_defense_min_production
     proactive_defense_radius: float = PUBLIC_EXACT.proactive_defense_radius
@@ -295,6 +301,18 @@ class PublicRuleAgent:
         if not self.enable_dynamic_posture:
             return "balanced"
 
+        active_players = {
+            planet.owner
+            for planet in local.planets
+            if planet.owner != -1
+        } | {
+            fleet.owner
+            for fleet in local.fleets
+            if fleet.owner != -1
+        }
+        if len(active_players) > self.posture_max_active_players:
+            return "balanced"
+
         own_prod = sum(p.production for p in local.planets if p.owner == local.player)
         enemy_prod = sum(p.production for p in local.planets if p.owner not in (-1, local.player))
         own_planets = sum(1 for p in local.planets if p.owner == local.player)
@@ -316,6 +334,8 @@ class PublicRuleAgent:
         ):
             return "aggressive"
         if (
+            local.step >= self.posture_defensive_min_step
+            and
             prod_diff >= self.posture_defensive_prod_lead
             and ship_ratio >= self.posture_defensive_ship_ratio
             and planet_diff >= self.posture_defensive_planet_lead
@@ -437,6 +457,7 @@ class PublicRuleAgent:
         moves: list[list[float | int]],
     ) -> None:
         planet_by_id = {p.id: p for p in local.mine}
+        horizon, max_send, min_margin = self._effective_value_defense_knobs(local)
         for target_id, row in sorted(
             under_attack.items(),
             key=lambda item: planet_by_id.get(item[0], Planet(-1, -1, 0, 0, 0, 0, 0)).production,
@@ -448,11 +469,11 @@ class PublicRuleAgent:
             if any(tracked["target"].id == target.id and tracked["arrive_tick"] >= 0 for tracked in self.reinforcement_trajectories):
                 continue
 
-            pressure = self._project_defense_pressure(target, row, local)
+            pressure = self._project_defense_pressure(target, row, local, horizon, min_margin)
             if pressure is None:
                 continue
             ships_needed, needed_by_tick = pressure
-            ships_needed = min(ships_needed, self.value_defense_max_send)
+            ships_needed = min(ships_needed, max_send)
             if ships_needed < self.min_ships_mine_attack:
                 continue
 
@@ -481,6 +502,26 @@ class PublicRuleAgent:
                     }
                 )
                 break
+
+    def _effective_value_defense_knobs(self, local: LocalObs) -> tuple[int, int, int]:
+        horizon = self.value_defense_horizon
+        max_send = self.value_defense_max_send
+        min_margin = self.value_defense_min_margin
+        if self.value_defense_multiplayer_min_active_players > 0:
+            active_players = {
+                planet.owner
+                for planet in local.planets
+                if planet.owner != -1
+            } | {
+                fleet.owner
+                for fleet in local.fleets
+                if fleet.owner != -1
+            }
+            if len(active_players) >= self.value_defense_multiplayer_min_active_players:
+                horizon = self.value_defense_multiplayer_horizon or horizon
+                max_send = self.value_defense_multiplayer_max_send or max_send
+                min_margin = self.value_defense_multiplayer_min_margin or min_margin
+        return horizon, max_send, min_margin
 
     def _append_proactive_value_defense(
         self,
@@ -654,9 +695,11 @@ class PublicRuleAgent:
         target: Planet,
         attack_row: dict[str, object],
         local: LocalObs,
+        horizon: int,
+        min_margin: int,
     ) -> tuple[int, int] | None:
         attacking = sorted(
-            [row for row in attack_row["fleets"] if int(row["arrive_tick"]) <= self.value_defense_horizon],
+            [row for row in attack_row["fleets"] if int(row["arrive_tick"]) <= horizon],
             key=lambda row: row["arrive_tick"],
         )
         if not attacking:
@@ -666,7 +709,7 @@ class PublicRuleAgent:
             [row for row in self.reinforcement_trajectories if row["target"].id == target.id],
             key=lambda row: row["arrive_tick"],
         )
-        desired_margin = self.value_defense_min_margin + int(target.production * self.value_defense_buffer_turns)
+        desired_margin = min_margin + int(target.production * self.value_defense_buffer_turns)
         available = target.ships
         previous_tick = 0
         reinf_idx = 0

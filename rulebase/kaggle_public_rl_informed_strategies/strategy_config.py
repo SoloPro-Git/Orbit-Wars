@@ -33,6 +33,8 @@ class StrategyConfig:
     contested_friendly_credit: float = 0.75
     contested_skip_friendly_covered: bool = True
     enable_dynamic_posture: bool = False
+    posture_max_active_players: int = 99
+    posture_defensive_min_step: int = 0
     posture_aggressive_prod_deficit: float = 5.0
     posture_aggressive_ship_ratio: float = 0.85
     posture_aggressive_planet_deficit: int = 2
@@ -54,6 +56,10 @@ class StrategyConfig:
     value_defense_min_margin: int = 8
     value_defense_max_send: int = 40
     value_defense_roi_multiplier: float = 1.25
+    value_defense_multiplayer_min_active_players: int = 0
+    value_defense_multiplayer_horizon: int = 0
+    value_defense_multiplayer_max_send: int = 0
+    value_defense_multiplayer_min_margin: int = 0
     enable_proactive_value_defense: bool = False
     proactive_defense_min_production: float = 3.0
     proactive_defense_radius: float = 45.0
@@ -282,7 +288,13 @@ MP_SOFT_4P_REGULAR_CONFIG = StrategyConfig(
         "multiplayer_neutral_bonus": 3.0,
     }
 )
-REGULAR_CONFIG = MP_SOFT_4P_REGULAR_CONFIG
+MP_SOFT_LEADER0_4P_REGULAR_CONFIG = StrategyConfig(
+    **{
+        **MP_SOFT_4P_REGULAR_CONFIG.to_agent_kwargs(),
+        "multiplayer_leader_prod_bonus": 0.0,
+    }
+)
+REGULAR_CONFIG = MP_SOFT_LEADER0_4P_REGULAR_CONFIG
 PRE_HOLDABILITY_REGULAR_CONFIG = StrategyConfig(
     target_candidate_limit=2,
     min_ships_mine_attack=12,
@@ -498,6 +510,7 @@ HISTORICAL_BEST_VARIANTS = {
     "recapture_s45_e180_w50_b40_regular": RECAPTURE_S45_E180_W50_B40_REGULAR_CONFIG.to_agent_kwargs(),
     "recapture_s45_e160_w50_b40_regular": RECAPTURE_S45_E160_W50_B40_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_soft_4p_regular": MP_SOFT_4P_REGULAR_CONFIG.to_agent_kwargs(),
+    "mp_soft_leader0_4p_regular": MP_SOFT_LEADER0_4P_REGULAR_CONFIG.to_agent_kwargs(),
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
 }
@@ -506,6 +519,7 @@ CHAMPION_OPPONENT_VARIANTS = {
     "public_original": None,
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "mp_soft_leader0_4p_regular": MP_SOFT_LEADER0_4P_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_soft_4p_regular": MP_SOFT_4P_REGULAR_CONFIG.to_agent_kwargs(),
     "recapture_s45_e160_w50_b40_regular": RECAPTURE_S45_E160_W50_B40_REGULAR_CONFIG.to_agent_kwargs(),
     "recapture_s45_e180_w50_b40_regular": RECAPTURE_S45_E180_W50_B40_REGULAR_CONFIG.to_agent_kwargs(),
@@ -1271,6 +1285,345 @@ ABLATION_SUITES = {
             multiplayer_local_enemy_bonus=0.0,
             multiplayer_leader_prod_bonus=1.0,
             multiplayer_neutral_bonus=8.0,
+        ),
+    },
+    "late_lead_guard": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "duel_guard_soft": from_base(
+            REGULAR_CONFIG,
+            enable_dynamic_posture=True,
+            posture_max_active_players=2,
+            posture_defensive_prod_lead=4.0,
+            posture_defensive_ship_ratio=1.00,
+            posture_defensive_planet_lead=0,
+            defensive_min_attack_delta=2,
+            defensive_target_candidate_delta=-1,
+            defensive_reserve_turns=2,
+            defensive_min_garrison=6,
+            defensive_high_prod_bonus=4,
+        ),
+        "duel_guard_mid": from_base(
+            REGULAR_CONFIG,
+            enable_dynamic_posture=True,
+            posture_max_active_players=2,
+            posture_defensive_prod_lead=3.0,
+            posture_defensive_ship_ratio=0.95,
+            posture_defensive_planet_lead=0,
+            defensive_min_attack_delta=3,
+            defensive_target_candidate_delta=-1,
+            defensive_reserve_turns=2,
+            defensive_min_garrison=8,
+            defensive_high_prod_bonus=6,
+        ),
+        "duel_guard_strong": from_base(
+            REGULAR_CONFIG,
+            enable_dynamic_posture=True,
+            posture_max_active_players=2,
+            posture_defensive_prod_lead=2.0,
+            posture_defensive_ship_ratio=0.90,
+            posture_defensive_planet_lead=0,
+            defensive_min_attack_delta=4,
+            defensive_target_candidate_delta=-1,
+            defensive_reserve_turns=3,
+            defensive_min_garrison=8,
+            defensive_high_prod_bonus=8,
+        ),
+        "duel_guard_late_source": from_base(
+            REGULAR_CONFIG,
+            enable_local_source_reserve=True,
+            local_reserve_min_step=120,
+            local_reserve_max_step=260,
+            local_reserve_min_production=4.0,
+            local_reserve_enemy_distance=45.0,
+            local_reserve_turns=1,
+            local_reserve_min_garrison=8,
+            local_reserve_front_bonus=10,
+        ),
+        "duel_guard_mid_source": from_base(
+            REGULAR_CONFIG,
+            enable_dynamic_posture=True,
+            posture_max_active_players=2,
+            posture_defensive_prod_lead=3.0,
+            posture_defensive_ship_ratio=0.95,
+            posture_defensive_planet_lead=0,
+            defensive_min_attack_delta=3,
+            defensive_target_candidate_delta=-1,
+            defensive_reserve_turns=2,
+            defensive_min_garrison=8,
+            defensive_high_prod_bonus=6,
+            enable_local_source_reserve=True,
+            local_reserve_min_step=120,
+            local_reserve_max_step=260,
+            local_reserve_min_production=4.0,
+            local_reserve_enemy_distance=45.0,
+            local_reserve_turns=1,
+            local_reserve_min_garrison=8,
+            local_reserve_front_bonus=10,
+        ),
+        "duel_guard_value_h80": from_base(
+            REGULAR_CONFIG,
+            value_defense_horizon=80,
+            value_defense_max_send=55,
+            value_defense_min_margin=12,
+        ),
+    },
+    "late_lead_guard_validate": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "duel_guard_soft": from_base(
+            REGULAR_CONFIG,
+            enable_dynamic_posture=True,
+            posture_max_active_players=2,
+            posture_defensive_prod_lead=4.0,
+            posture_defensive_ship_ratio=1.00,
+            posture_defensive_planet_lead=0,
+            defensive_min_attack_delta=2,
+            defensive_target_candidate_delta=-1,
+            defensive_reserve_turns=2,
+            defensive_min_garrison=6,
+            defensive_high_prod_bonus=4,
+        ),
+        "duel_guard_value_h80": from_base(
+            REGULAR_CONFIG,
+            value_defense_horizon=80,
+            value_defense_max_send=55,
+            value_defense_min_margin=12,
+        ),
+        "mp_value_h80": from_base(
+            REGULAR_CONFIG,
+            value_defense_multiplayer_min_active_players=4,
+            value_defense_multiplayer_horizon=80,
+            value_defense_multiplayer_max_send=55,
+            value_defense_multiplayer_min_margin=12,
+        ),
+    },
+    "late_lead_guard_timing": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "duel_guard_s120": from_base(
+            REGULAR_CONFIG,
+            enable_dynamic_posture=True,
+            posture_max_active_players=2,
+            posture_defensive_min_step=120,
+            posture_defensive_prod_lead=4.0,
+            posture_defensive_ship_ratio=1.00,
+            posture_defensive_planet_lead=0,
+            defensive_min_attack_delta=2,
+            defensive_target_candidate_delta=-1,
+            defensive_reserve_turns=2,
+            defensive_min_garrison=6,
+            defensive_high_prod_bonus=4,
+        ),
+        "duel_guard_s150": from_base(
+            REGULAR_CONFIG,
+            enable_dynamic_posture=True,
+            posture_max_active_players=2,
+            posture_defensive_min_step=150,
+            posture_defensive_prod_lead=4.0,
+            posture_defensive_ship_ratio=1.00,
+            posture_defensive_planet_lead=0,
+            defensive_min_attack_delta=2,
+            defensive_target_candidate_delta=-1,
+            defensive_reserve_turns=2,
+            defensive_min_garrison=6,
+            defensive_high_prod_bonus=4,
+        ),
+        "duel_guard_s180": from_base(
+            REGULAR_CONFIG,
+            enable_dynamic_posture=True,
+            posture_max_active_players=2,
+            posture_defensive_min_step=180,
+            posture_defensive_prod_lead=4.0,
+            posture_defensive_ship_ratio=1.00,
+            posture_defensive_planet_lead=0,
+            defensive_min_attack_delta=2,
+            defensive_target_candidate_delta=-1,
+            defensive_reserve_turns=2,
+            defensive_min_garrison=6,
+            defensive_high_prod_bonus=4,
+        ),
+        "duel_guard_s150_weak": from_base(
+            REGULAR_CONFIG,
+            enable_dynamic_posture=True,
+            posture_max_active_players=2,
+            posture_defensive_min_step=150,
+            posture_defensive_prod_lead=5.0,
+            posture_defensive_ship_ratio=1.05,
+            posture_defensive_planet_lead=1,
+            defensive_min_attack_delta=1,
+            defensive_target_candidate_delta=0,
+            defensive_reserve_turns=1,
+            defensive_min_garrison=4,
+            defensive_high_prod_bonus=2,
+        ),
+        "duel_guard_s150_vd70": from_base(
+            REGULAR_CONFIG,
+            enable_dynamic_posture=True,
+            posture_max_active_players=2,
+            posture_defensive_min_step=150,
+            posture_defensive_prod_lead=4.0,
+            posture_defensive_ship_ratio=1.00,
+            posture_defensive_planet_lead=0,
+            defensive_min_attack_delta=2,
+            defensive_target_candidate_delta=-1,
+            defensive_reserve_turns=2,
+            defensive_min_garrison=6,
+            defensive_high_prod_bonus=4,
+            value_defense_horizon=70,
+            value_defense_max_send=45,
+            value_defense_min_margin=12,
+        ),
+    },
+    "current_holdability_search": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "hold_w025_r35": from_base(
+            REGULAR_CONFIG,
+            enable_holdability_target_score=True,
+            holdability_weight=0.25,
+            holdability_radius=35.0,
+        ),
+        "hold_w050_r30": from_base(
+            REGULAR_CONFIG,
+            enable_holdability_target_score=True,
+            holdability_weight=0.50,
+            holdability_radius=30.0,
+        ),
+        "hold_w050_r40": from_base(
+            REGULAR_CONFIG,
+            enable_holdability_target_score=True,
+            holdability_weight=0.50,
+            holdability_radius=40.0,
+        ),
+        "hold_w075_r35": from_base(
+            REGULAR_CONFIG,
+            enable_holdability_target_score=True,
+            holdability_weight=0.75,
+            holdability_radius=35.0,
+        ),
+        "hold_enemy_prod5": from_base(
+            REGULAR_CONFIG,
+            enable_holdability_target_score=True,
+            holdability_weight=0.50,
+            holdability_radius=35.0,
+            holdability_enemy_prod_weight=5.0,
+        ),
+        "hold_own_support": from_base(
+            REGULAR_CONFIG,
+            enable_holdability_target_score=True,
+            holdability_weight=0.50,
+            holdability_radius=35.0,
+            holdability_own_prod_weight=3.0,
+            holdability_own_ship_weight=0.06,
+        ),
+        "early_neutral_more_safe": from_base(
+            REGULAR_CONFIG,
+            early_neutral_safe_bonus=28.0,
+            early_neutral_contested_penalty=22.0,
+            early_neutral_reaction_margin=4,
+        ),
+        "early_neutral_less_safe": from_base(
+            REGULAR_CONFIG,
+            early_neutral_safe_bonus=12.0,
+            early_neutral_contested_penalty=10.0,
+            early_neutral_reaction_margin=2,
+        ),
+    },
+    "recapture_micro_search": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "recap_e150": from_base(
+            REGULAR_CONFIG,
+            recent_loss_recapture_max_step=150,
+        ),
+        "recap_e170": from_base(
+            REGULAR_CONFIG,
+            recent_loss_recapture_max_step=170,
+        ),
+        "recap_w45": from_base(
+            REGULAR_CONFIG,
+            recent_loss_recapture_window=45,
+        ),
+        "recap_w55": from_base(
+            REGULAR_CONFIG,
+            recent_loss_recapture_window=55,
+        ),
+        "recap_b35": from_base(
+            REGULAR_CONFIG,
+            recent_loss_recapture_bonus=35.0,
+        ),
+        "recap_b45": from_base(
+            REGULAR_CONFIG,
+            recent_loss_recapture_bonus=45.0,
+        ),
+        "recap_prod45": from_base(
+            REGULAR_CONFIG,
+            recent_loss_recapture_min_production=4.5,
+        ),
+        "recap_e170_b35": from_base(
+            REGULAR_CONFIG,
+            recent_loss_recapture_max_step=170,
+            recent_loss_recapture_bonus=35.0,
+        ),
+        "recap_e150_w45": from_base(
+            REGULAR_CONFIG,
+            recent_loss_recapture_max_step=150,
+            recent_loss_recapture_window=45,
+        ),
+    },
+    "mp_soft_refine": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "mp_far08_local5_neu3": from_base(
+            REGULAR_CONFIG,
+            multiplayer_far_enemy_penalty=8.0,
+            multiplayer_local_enemy_bonus=5.0,
+            multiplayer_leader_prod_bonus=1.0,
+            multiplayer_neutral_bonus=3.0,
+        ),
+        "mp_far12_local5_neu3": from_base(
+            REGULAR_CONFIG,
+            multiplayer_far_enemy_penalty=12.0,
+            multiplayer_local_enemy_bonus=5.0,
+            multiplayer_leader_prod_bonus=1.0,
+            multiplayer_neutral_bonus=3.0,
+        ),
+        "mp_far10_local3_neu3": from_base(
+            REGULAR_CONFIG,
+            multiplayer_far_enemy_penalty=10.0,
+            multiplayer_local_enemy_bonus=3.0,
+            multiplayer_leader_prod_bonus=1.0,
+            multiplayer_neutral_bonus=3.0,
+        ),
+        "mp_far10_local7_neu3": from_base(
+            REGULAR_CONFIG,
+            multiplayer_far_enemy_penalty=10.0,
+            multiplayer_local_enemy_bonus=7.0,
+            multiplayer_leader_prod_bonus=1.0,
+            multiplayer_neutral_bonus=3.0,
+        ),
+        "mp_far10_local5_neu2": from_base(
+            REGULAR_CONFIG,
+            multiplayer_far_enemy_penalty=10.0,
+            multiplayer_local_enemy_bonus=5.0,
+            multiplayer_leader_prod_bonus=1.0,
+            multiplayer_neutral_bonus=2.0,
+        ),
+        "mp_far10_local5_neu4": from_base(
+            REGULAR_CONFIG,
+            multiplayer_far_enemy_penalty=10.0,
+            multiplayer_local_enemy_bonus=5.0,
+            multiplayer_leader_prod_bonus=1.0,
+            multiplayer_neutral_bonus=4.0,
+        ),
+        "mp_far10_local5_leader0": from_base(
+            REGULAR_CONFIG,
+            multiplayer_far_enemy_penalty=10.0,
+            multiplayer_local_enemy_bonus=5.0,
+            multiplayer_leader_prod_bonus=0.0,
+            multiplayer_neutral_bonus=3.0,
+        ),
+        "mp_far10_local5_leader2": from_base(
+            REGULAR_CONFIG,
+            multiplayer_far_enemy_penalty=10.0,
+            multiplayer_local_enemy_bonus=5.0,
+            multiplayer_leader_prod_bonus=2.0,
+            multiplayer_neutral_bonus=3.0,
         ),
     },
     "value_defense": {
