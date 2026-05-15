@@ -469,7 +469,13 @@ MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_S35_HOME6_REGULAR_CONFIG = StrategyCo
         "home_anchor_front_threat_bonus": 4,
     }
 )
-REGULAR_CONFIG = MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_S35_HOME6_REGULAR_CONFIG
+MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_S35_HOME6_POSTHOLD_REGULAR_CONFIG = StrategyConfig(
+    **{
+        **MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_S35_HOME6_REGULAR_CONFIG.to_agent_kwargs(),
+        "capture_hold_use_post_capture_window": True,
+    }
+)
+REGULAR_CONFIG = MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_S35_HOME6_POSTHOLD_REGULAR_CONFIG
 PRE_HOLDABILITY_REGULAR_CONFIG = StrategyConfig(
     target_candidate_limit=2,
     min_ships_mine_attack=12,
@@ -691,6 +697,7 @@ HISTORICAL_BEST_VARIANTS = {
     "mp_local3_neu5_comet12_path4p_hold4_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_local3_neu5_comet12_path4p_hold4_terr30_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_local3_neu5_comet12_path4p_hold4_terr30_s35_home6_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_S35_HOME6_REGULAR_CONFIG.to_agent_kwargs(),
+    "mp_local3_neu5_comet12_path4p_hold4_terr30_s35_home6_posthold_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_S35_HOME6_POSTHOLD_REGULAR_CONFIG.to_agent_kwargs(),
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
 }
@@ -1300,6 +1307,7 @@ CHAMPION_OPPONENT_VARIANTS = {
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
     "mp_local3_neu5_comet12_path4p_hold4_terr30_s35_home6_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_S35_HOME6_REGULAR_CONFIG.to_agent_kwargs(),
+    "mp_local3_neu5_comet12_path4p_hold4_terr30_s35_home6_posthold_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_S35_HOME6_POSTHOLD_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_local3_neu5_comet12_path4p_hold4_terr30_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_local3_neu5_comet12_path4p_hold4_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_local3_neu5_comet12_path4p_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_REGULAR_CONFIG.to_agent_kwargs(),
