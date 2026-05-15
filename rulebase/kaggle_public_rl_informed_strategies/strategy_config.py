@@ -202,6 +202,21 @@ class StrategyConfig:
     early_neutral_dynamic_source_safety_margin: int = 4
     early_neutral_dynamic_check_target_hold: bool = False
     early_neutral_dynamic_target_hold_margin: int = 4
+    enable_opening_neutral_territory_score: bool = False
+    opening_territory_min_active_players: int = 4
+    opening_territory_step_limit: int = 45
+    opening_territory_enemy_closer_margin: float = 6.0
+    opening_territory_penalty: float = 20.0
+    opening_territory_prod_scale: float = 4.0
+    opening_territory_allow_if_safe_gap: int = 10
+    enable_opening_neutral_hold_margin: bool = False
+    opening_hold_min_active_players: int = 4
+    opening_hold_step_limit: int = 55
+    opening_hold_min_production: float = 3.0
+    opening_hold_base_margin: int = 4
+    opening_hold_prod_turns: int = 2
+    opening_hold_contested_extra: int = 6
+    opening_hold_allow_extra_send: bool = True
     enable_opening_rotating_neutral_filter: bool = False
     opening_rotating_step_limit: int = 80
     opening_rotating_max_eta: int = 13
@@ -243,6 +258,24 @@ class StrategyConfig:
     multiplayer_local_enemy_bonus: float = 8.0
     multiplayer_leader_prod_bonus: float = 2.0
     multiplayer_neutral_bonus: float = 4.0
+    enable_home_anchor_source_reserve: bool = False
+    home_anchor_min_active_players: int = 0
+    home_anchor_min_production: float = 3.0
+    home_anchor_step_min: int = 20
+    home_anchor_step_max: int = 140
+    home_anchor_home_radius: float = 55.0
+    home_anchor_min_after: int = 10
+    home_anchor_prod_turns_after: int = 2
+    home_anchor_front_threat_bonus: int = 8
+    enable_midgame_border_source_reserve: bool = False
+    midgame_border_min_active_players: int = 4
+    midgame_border_step_min: int = 45
+    midgame_border_step_max: int = 140
+    midgame_border_min_production: float = 3.0
+    midgame_border_enemy_radius: float = 60.0
+    midgame_border_min_after: int = 12
+    midgame_border_prod_turns_after: int = 2
+    midgame_border_threat_margin: int = 8
 
     # RL-informed/custom attack-loop knobs.
     use_custom_attack_loop: bool = False
@@ -402,7 +435,15 @@ MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG = StrategyConfig(
         "capture_hold_margin": 4,
     }
 )
-REGULAR_CONFIG = MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG
+MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_REGULAR_CONFIG = StrategyConfig(
+    **{
+        **MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG.to_agent_kwargs(),
+        "enable_opening_neutral_territory_score": True,
+        "opening_territory_penalty": 30.0,
+        "opening_territory_enemy_closer_margin": 8.0,
+    }
+)
+REGULAR_CONFIG = MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_REGULAR_CONFIG
 PRE_HOLDABILITY_REGULAR_CONFIG = StrategyConfig(
     target_candidate_limit=2,
     min_ships_mine_attack=12,
@@ -622,6 +663,7 @@ HISTORICAL_BEST_VARIANTS = {
     "mp_local3_neu5_regular": MP_LOCAL3_NEU5_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_local3_neu5_comet12_path4p_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_local3_neu5_comet12_path4p_hold4_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG.to_agent_kwargs(),
+    "mp_local3_neu5_comet12_path4p_hold4_terr30_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_REGULAR_CONFIG.to_agent_kwargs(),
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
 }
@@ -747,10 +789,100 @@ RECENT_LOSS_VALIDATE_VARIANTS = {
     ),
 }
 
+MYREPLAY_REPAIR_VARIANTS = {
+    "regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG.to_agent_kwargs(),
+    "territory_penalty10_margin4": from_base(
+        MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG,
+        enable_opening_neutral_territory_score=True,
+        opening_territory_penalty=10.0,
+        opening_territory_enemy_closer_margin=4.0,
+    ),
+    "territory_penalty20_margin6": from_base(
+        MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG,
+        enable_opening_neutral_territory_score=True,
+        opening_territory_penalty=20.0,
+        opening_territory_enemy_closer_margin=6.0,
+    ),
+    "territory_penalty30_margin8": from_base(
+        MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG,
+        enable_opening_neutral_territory_score=True,
+        opening_territory_penalty=30.0,
+        opening_territory_enemy_closer_margin=8.0,
+    ),
+    "opening_hold_base4_prod2": from_base(
+        MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG,
+        enable_opening_neutral_hold_margin=True,
+        opening_hold_base_margin=4,
+        opening_hold_prod_turns=2,
+    ),
+    "opening_hold_base6_prod2": from_base(
+        MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG,
+        enable_opening_neutral_hold_margin=True,
+        opening_hold_base_margin=6,
+        opening_hold_prod_turns=2,
+    ),
+    "territory20_plus_opening_hold4": from_base(
+        MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG,
+        enable_opening_neutral_territory_score=True,
+        opening_territory_penalty=20.0,
+        opening_territory_enemy_closer_margin=6.0,
+        enable_opening_neutral_hold_margin=True,
+        opening_hold_base_margin=4,
+        opening_hold_prod_turns=2,
+    ),
+    "home_anchor_4p_after10_prod2": from_base(
+        MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG,
+        enable_home_anchor_source_reserve=True,
+        home_anchor_min_active_players=4,
+        home_anchor_min_after=10,
+        home_anchor_prod_turns_after=2,
+    ),
+    "home_anchor_4p_after14_prod2": from_base(
+        MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG,
+        enable_home_anchor_source_reserve=True,
+        home_anchor_min_active_players=4,
+        home_anchor_min_after=14,
+        home_anchor_prod_turns_after=2,
+    ),
+    "mid_border_after12_prod2": from_base(
+        MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG,
+        enable_midgame_border_source_reserve=True,
+        midgame_border_min_after=12,
+        midgame_border_prod_turns_after=2,
+    ),
+    "territory20_plus_anchor10": from_base(
+        MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG,
+        enable_opening_neutral_territory_score=True,
+        opening_territory_penalty=20.0,
+        opening_territory_enemy_closer_margin=6.0,
+        enable_home_anchor_source_reserve=True,
+        home_anchor_min_active_players=4,
+        home_anchor_min_after=10,
+        home_anchor_prod_turns_after=2,
+    ),
+}
+
+MYREPLAY_TERRITORY_VALIDATE_VARIANTS = {
+    "regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG.to_agent_kwargs(),
+    "territory_penalty20_margin6": from_base(
+        MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG,
+        enable_opening_neutral_territory_score=True,
+        opening_territory_penalty=20.0,
+        opening_territory_enemy_closer_margin=6.0,
+    ),
+    "territory_penalty30_margin8": from_base(
+        MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG,
+        enable_opening_neutral_territory_score=True,
+        opening_territory_penalty=30.0,
+        opening_territory_enemy_closer_margin=8.0,
+    ),
+}
+
 CHAMPION_OPPONENT_VARIANTS = {
     "public_original": None,
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "mp_local3_neu5_comet12_path4p_hold4_terr30_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_local3_neu5_comet12_path4p_hold4_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_local3_neu5_comet12_path4p_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_local3_neu5_regular": MP_LOCAL3_NEU5_REGULAR_CONFIG.to_agent_kwargs(),
@@ -774,6 +906,8 @@ ABLATION_SUITES = {
     "myreplay_followup": MYREPLAY_FOLLOWUP_VARIANTS,
     "recent_loss_replay": RECENT_LOSS_REPLAY_VARIANTS,
     "recent_loss_validate": RECENT_LOSS_VALIDATE_VARIANTS,
+    "myreplay_repair": MYREPLAY_REPAIR_VARIANTS,
+    "myreplay_territory_validate": MYREPLAY_TERRITORY_VALIDATE_VARIANTS,
     "regular_verify": {
         "public_exact": PUBLIC_EXACT.to_agent_kwargs(),
         "candidate2": cfg(target_candidate_limit=2),

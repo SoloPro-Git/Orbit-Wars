@@ -226,6 +226,21 @@ class PublicRuleAgent:
     early_neutral_dynamic_source_safety_margin: int = PUBLIC_EXACT.early_neutral_dynamic_source_safety_margin
     early_neutral_dynamic_check_target_hold: bool = PUBLIC_EXACT.early_neutral_dynamic_check_target_hold
     early_neutral_dynamic_target_hold_margin: int = PUBLIC_EXACT.early_neutral_dynamic_target_hold_margin
+    enable_opening_neutral_territory_score: bool = PUBLIC_EXACT.enable_opening_neutral_territory_score
+    opening_territory_min_active_players: int = PUBLIC_EXACT.opening_territory_min_active_players
+    opening_territory_step_limit: int = PUBLIC_EXACT.opening_territory_step_limit
+    opening_territory_enemy_closer_margin: float = PUBLIC_EXACT.opening_territory_enemy_closer_margin
+    opening_territory_penalty: float = PUBLIC_EXACT.opening_territory_penalty
+    opening_territory_prod_scale: float = PUBLIC_EXACT.opening_territory_prod_scale
+    opening_territory_allow_if_safe_gap: int = PUBLIC_EXACT.opening_territory_allow_if_safe_gap
+    enable_opening_neutral_hold_margin: bool = PUBLIC_EXACT.enable_opening_neutral_hold_margin
+    opening_hold_min_active_players: int = PUBLIC_EXACT.opening_hold_min_active_players
+    opening_hold_step_limit: int = PUBLIC_EXACT.opening_hold_step_limit
+    opening_hold_min_production: float = PUBLIC_EXACT.opening_hold_min_production
+    opening_hold_base_margin: int = PUBLIC_EXACT.opening_hold_base_margin
+    opening_hold_prod_turns: int = PUBLIC_EXACT.opening_hold_prod_turns
+    opening_hold_contested_extra: int = PUBLIC_EXACT.opening_hold_contested_extra
+    opening_hold_allow_extra_send: bool = PUBLIC_EXACT.opening_hold_allow_extra_send
     enable_opening_rotating_neutral_filter: bool = PUBLIC_EXACT.enable_opening_rotating_neutral_filter
     opening_rotating_step_limit: int = PUBLIC_EXACT.opening_rotating_step_limit
     opening_rotating_max_eta: int = PUBLIC_EXACT.opening_rotating_max_eta
@@ -267,9 +282,28 @@ class PublicRuleAgent:
     multiplayer_local_enemy_bonus: float = PUBLIC_EXACT.multiplayer_local_enemy_bonus
     multiplayer_leader_prod_bonus: float = PUBLIC_EXACT.multiplayer_leader_prod_bonus
     multiplayer_neutral_bonus: float = PUBLIC_EXACT.multiplayer_neutral_bonus
+    enable_home_anchor_source_reserve: bool = PUBLIC_EXACT.enable_home_anchor_source_reserve
+    home_anchor_min_active_players: int = PUBLIC_EXACT.home_anchor_min_active_players
+    home_anchor_min_production: float = PUBLIC_EXACT.home_anchor_min_production
+    home_anchor_step_min: int = PUBLIC_EXACT.home_anchor_step_min
+    home_anchor_step_max: int = PUBLIC_EXACT.home_anchor_step_max
+    home_anchor_home_radius: float = PUBLIC_EXACT.home_anchor_home_radius
+    home_anchor_min_after: int = PUBLIC_EXACT.home_anchor_min_after
+    home_anchor_prod_turns_after: int = PUBLIC_EXACT.home_anchor_prod_turns_after
+    home_anchor_front_threat_bonus: int = PUBLIC_EXACT.home_anchor_front_threat_bonus
+    enable_midgame_border_source_reserve: bool = PUBLIC_EXACT.enable_midgame_border_source_reserve
+    midgame_border_min_active_players: int = PUBLIC_EXACT.midgame_border_min_active_players
+    midgame_border_step_min: int = PUBLIC_EXACT.midgame_border_step_min
+    midgame_border_step_max: int = PUBLIC_EXACT.midgame_border_step_max
+    midgame_border_min_production: float = PUBLIC_EXACT.midgame_border_min_production
+    midgame_border_enemy_radius: float = PUBLIC_EXACT.midgame_border_enemy_radius
+    midgame_border_min_after: int = PUBLIC_EXACT.midgame_border_min_after
+    midgame_border_prod_turns_after: int = PUBLIC_EXACT.midgame_border_prod_turns_after
+    midgame_border_threat_margin: int = PUBLIC_EXACT.midgame_border_threat_margin
     fleet_trajectories: list[dict[str, object]] = field(default_factory=list)
     reinforcement_trajectories: list[dict[str, object]] = field(default_factory=list)
     moving_planets: set[int] = field(default_factory=set)
+    home_anchor_positions: list[tuple[float, float]] = field(default_factory=list)
     previous_owner_by_planet: dict[int, int] = field(default_factory=dict)
     recently_captured_steps: dict[int, int] = field(default_factory=dict)
     recently_lost_steps: dict[int, int] = field(default_factory=dict)
@@ -324,6 +358,8 @@ class PublicRuleAgent:
         return moves
 
     def _fill_moving_planets(self, local: LocalObs) -> None:
+        if not self.home_anchor_positions:
+            self.home_anchor_positions = [(planet.x, planet.y) for planet in local.mine]
         initial_by_id = {p.id: p for p in local.initial_planets}
         for planet in local.planets:
             initial = initial_by_id.get(planet.id)
@@ -516,6 +552,8 @@ class PublicRuleAgent:
 
     def _local_source_reserve(self, planet: Planet, local: LocalObs) -> int:
         reserve = self._source_threat_reserve(planet, local)
+        reserve = max(reserve, self._home_anchor_source_reserve(planet, local))
+        reserve = max(reserve, self._midgame_border_source_reserve(planet, local))
         if not self.enable_local_source_reserve:
             return reserve
         if local.step < self.local_reserve_min_step or local.step > self.local_reserve_max_step:
@@ -533,6 +571,57 @@ class PublicRuleAgent:
             front_pressure = max(0.0, self.local_reserve_enemy_distance - nearest_enemy) / max(self.local_reserve_enemy_distance, 1.0)
             local_reserve += int(self.local_reserve_front_bonus * front_pressure)
         return max(reserve, local_reserve)
+
+    def _home_anchor_source_reserve(self, planet: Planet, local: LocalObs) -> int:
+        if not self.enable_home_anchor_source_reserve:
+            return 0
+        if local.step < self.home_anchor_step_min or local.step > self.home_anchor_step_max:
+            return 0
+        if self.home_anchor_min_active_players > 0 and self._active_player_count(local) < self.home_anchor_min_active_players:
+            return 0
+        if planet.production < self.home_anchor_min_production:
+            return 0
+        if not self._near_home_anchor(planet, self.home_anchor_home_radius):
+            return 0
+
+        reserve = self.home_anchor_min_after + int(planet.production * self.home_anchor_prod_turns_after)
+        enemy_planets = [enemy for enemy in local.planets if enemy.owner not in (-1, local.player)]
+        nearest_enemy = min((distance(planet, enemy) for enemy in enemy_planets), default=10**9)
+        if nearest_enemy <= self.midgame_border_enemy_radius:
+            pressure = 1.0 - nearest_enemy / max(self.midgame_border_enemy_radius, 1.0)
+            reserve += int(self.home_anchor_front_threat_bonus * max(0.0, pressure))
+        return max(0, reserve)
+
+    def _midgame_border_source_reserve(self, planet: Planet, local: LocalObs) -> int:
+        if not self.enable_midgame_border_source_reserve:
+            return 0
+        if local.step < self.midgame_border_step_min or local.step > self.midgame_border_step_max:
+            return 0
+        if self.midgame_border_min_active_players > 0 and self._active_player_count(local) < self.midgame_border_min_active_players:
+            return 0
+        if planet.production < self.midgame_border_min_production:
+            return 0
+
+        reserve = 0
+        for enemy in local.planets:
+            if enemy.owner in (-1, local.player):
+                continue
+            if distance(enemy, planet) > self.midgame_border_enemy_radius:
+                continue
+            sendable = self._project_enemy_sendable_for_source_filter(enemy)
+            if sendable < self.min_ships_mine_attack:
+                continue
+            arrival = travel_ticks(enemy, planet, sendable)
+            projected_need = sendable + self.midgame_border_threat_margin - int(planet.production * arrival)
+            reserve = max(reserve, projected_need)
+
+        baseline = self.midgame_border_min_after + int(planet.production * self.midgame_border_prod_turns_after)
+        return max(0, reserve, baseline if reserve > 0 else 0)
+
+    def _near_home_anchor(self, planet: Planet, radius: float) -> bool:
+        if not self.home_anchor_positions:
+            return False
+        return any(math.hypot(planet.x - x, planet.y - y) <= radius for x, y in self.home_anchor_positions)
 
     def _source_threat_reserve(self, planet: Planet, local: LocalObs) -> int:
         if not self.enable_source_threat_reserve:
@@ -688,6 +777,37 @@ class PublicRuleAgent:
         sendable += int(enemy.production * self.capture_hold_enemy_launch_window)
         sendable -= int(enemy.production * self.capture_hold_enemy_reserve_turns)
         return max(0, sendable)
+
+    def _opening_hold_adjusted_ships(
+        self,
+        source: Planet,
+        target: Planet,
+        total_ships: int,
+        arrive_tick: int,
+        available: int,
+        local: LocalObs,
+    ) -> int | None:
+        if not self.enable_opening_neutral_hold_margin:
+            return total_ships
+        if target.owner != -1 or local.step > self.opening_hold_step_limit:
+            return total_ships
+        if target.production < self.opening_hold_min_production:
+            return total_ships
+        if self.opening_hold_min_active_players > 0 and self._active_player_count(local) < self.opening_hold_min_active_players:
+            return total_ships
+
+        post_capture = max(0, int(total_ships - target.ships))
+        required = self.opening_hold_base_margin + int(target.production * self.opening_hold_prod_turns)
+        enemy_eta = self._nearest_enemy_eta(target, local)
+        if enemy_eta < 10**8 and enemy_eta - arrive_tick <= self.early_neutral_reaction_margin:
+            required += self.opening_hold_contested_extra
+
+        if post_capture >= required:
+            return total_ships
+        adjusted = total_ships + (required - post_capture)
+        if adjusted <= available and self.opening_hold_allow_extra_send:
+            return adjusted
+        return None
 
     def _source_threat_target_penalty(self, source: Planet, target: Planet, local: LocalObs) -> float:
         if not self.enable_source_threat_target_penalty:
@@ -1558,6 +1678,19 @@ class PublicRuleAgent:
             if not self._path_hits_target(source, target, total_ships, angle, arrive_tick, local):
                 return False
 
+        adjusted_opening_ships = self._opening_hold_adjusted_ships(source, target, total_ships, arrive_tick, available, local)
+        if adjusted_opening_ships is None:
+            return False
+        if adjusted_opening_ships > total_ships:
+            total_ships = adjusted_opening_ships
+            angle, arrive_tick = self._angle_and_arrival(source, target, total_ships, local)
+            if angle is None or arrive_tick is None:
+                return False
+            if self.enable_sun_avoidance and sun_collision(source, total_ships, angle):
+                return False
+            if not self._path_hits_target(source, target, total_ships, angle, arrive_tick, local):
+                return False
+
         if self._source_exposed_after_send(source, target, total_ships, arrive_tick, local):
             return False
 
@@ -1797,7 +1930,7 @@ class PublicRuleAgent:
 
         needed = max(1, target.ships + 1)
         eta = self._estimate_arrival_for_requirement(source, target, needed, local)
-        adjustment = 0.0
+        adjustment = self._opening_neutral_territory_score(source, target, local, eta)
 
         if self.enable_opening_rotating_neutral_filter and local.step <= self.opening_rotating_step_limit:
             if target.id in self.moving_planets and (eta > self.opening_rotating_max_eta or target.production <= self.opening_rotating_low_production):
@@ -1819,6 +1952,32 @@ class PublicRuleAgent:
                 bonus -= self.early_neutral_contested_penalty
 
         return adjustment + bonus
+
+    def _opening_neutral_territory_score(self, source: Planet, target: Planet, local: LocalObs, eta: int) -> float:
+        if not self.enable_opening_neutral_territory_score:
+            return 0.0
+        if local.step > self.opening_territory_step_limit:
+            return 0.0
+        if self.opening_territory_min_active_players > 0 and self._active_player_count(local) < self.opening_territory_min_active_players:
+            return 0.0
+
+        enemy_planets = [planet for planet in local.planets if planet.owner not in (-1, local.player)]
+        if not enemy_planets:
+            return 0.0
+
+        own_dist = min(distance(source, target), *(distance(planet, target) for planet in local.mine))
+        enemy_dist = min(distance(planet, target) for planet in enemy_planets)
+        enemy_advantage = own_dist - enemy_dist
+        if enemy_advantage <= self.opening_territory_enemy_closer_margin:
+            return 0.0
+
+        enemy_eta = self._nearest_enemy_eta(target, local)
+        if enemy_eta - eta >= self.opening_territory_allow_if_safe_gap:
+            return 0.0
+
+        penalty = self.opening_territory_penalty + target.production * self.opening_territory_prod_scale
+        penalty += max(0.0, enemy_advantage - self.opening_territory_enemy_closer_margin)
+        return -penalty
 
     def _nearest_enemy_eta(self, target: Planet, local: LocalObs) -> int:
         best = 10**9
