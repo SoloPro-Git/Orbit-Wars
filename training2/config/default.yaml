@@ -1,0 +1,116 @@
+run:
+  # stage1 = supervised alignment to REGULAR_CONFIG.
+  # selfplay is intentionally not launched by train_stage1_ray; use a dedicated
+  # self-play entrypoint after stage1 passes.
+  stage: stage1
+
+model:
+  d_model: 192
+  nhead: 6
+  layers: 4
+  dropout: 0.10
+  max_candidates: 32
+
+data:
+  num_players: 4
+  max_steps: 500
+  candidate_width: 32
+  include_noop: true
+  oracle: rl_informed_regular
+
+training:
+  batch_size: 256
+  learning_rate: 0.0002
+  weight_decay: 0.0001
+  epochs: 10
+  updates_per_iteration: 100
+  value_loss_weight: 0.5
+  entropy_weight: 0.01
+  device: cuda
+  swanlab_project: orbit-wars
+  swanlab_experiment: training2-stage1-regular-align
+  swanlab_mode: cloud
+
+ray:
+  # Number of Ray trainer actors that consume generated data and run backprop.
+  # Stage1 averages trainer shard weights after each iteration.
+  num_trainer_workers: 28
+
+  # Ray GPU resources reserved by each trainer actor.
+  # Examples:
+  #   1.0 with num_trainer_workers=1 -> one full GPU for training.
+  #   1.0 with num_trainer_workers=4 -> four trainer actors, four GPUs total.
+  #   0.5 with num_trainer_workers=4 -> four trainer actors, two GPUs total.
+  gpus_per_trainer: 0.25
+
+  # Data workers are CPU Ray actors that generate REGULAR_CONFIG demonstrations.
+  # Increase this to generate more training samples in parallel.
+  num_data_workers: 28
+
+  # Eval workers run real games for the win-rate gate.
+  num_eval_workers: 8
+
+  # Number of full games each data worker generates per training iteration.
+  episodes_per_worker: 2
+
+  # Eval actors can use GPU for model inference. 0.25 means four eval workers
+  # can share one visible GPU. Set 0.0 when stage1.eval_device is cpu.
+  eval_gpus_per_worker: 0.0
+  temp_dir: training2/.ray_temp
+
+offline_data:
+  # Used by: python -m training2.generate_stage1_dataset_ray
+  episodes: 10000
+  num_workers: 64
+  episodes_per_task: 4
+  four_player_prob: 0.3
+  output_path: data/training2/stage1_regular_10k.jsonl
+
+historical_replay:
+  # Raw excellent historical games. These JSONL files contain observation +
+  # actions, so training2 converts them into candidate-ranking samples at load
+  # time with the historical action as target candidate 0.
+  enabled: true
+  paths:
+    - data/online_replay_converted_test
+  max_samples:
+
+  # Historical games contain many no-op turns. Keep only this fraction of no-op
+  # samples so the action head does not collapse toward always doing nothing.
+  keep_noop_prob: 0.2
+
+stage1:
+  oracle: rl_informed_regular
+
+  # online: generate fresh regular-rulebase data every iteration.
+  # offline: load offline_data_paths plus historical_replay once and train
+  # directly from that replay.
+  data_source: offline
+  offline_data_paths:
+    - data/training2/stage1_regular_10k.jsonl
+  offline_max_samples:
+
+  # Training data mix. 1.0 = all 4p games, 0.0 = all 2p games.
+  # Example: 0.7 means roughly 70% 4p and 30% 2p.
+  data_four_player_prob: 0.3
+
+  # Evaluation mix for the 100-game gate. 0.0 keeps the gate as pure 2p
+  # model-vs-regular. Set to 0.5 for mixed 2p/4p gate evaluation.
+  eval_four_player_prob: 0.3
+
+  eval_device: cpu
+  max_iterations: 500
+  eval_interval: 50
+  eval_games: 100
+  alignment_eval_samples: 4096
+  win_rate_threshold: 0.50
+  replay_capacity: 200000
+  output_dir: training2/checkpoints/stage1_regular
+
+self_play:
+  games_per_iteration: 32
+  iterations: 1000
+  temperature: 0.35
+  rulebase_opponent_ratio: 0.50
+  checkpoint_opponent_ratio: 0.50
+  replay_capacity: 200000

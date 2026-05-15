@@ -18,5 +18,7 @@ training/.ray_temp/
 replay_*.html
 data/expert_demonstrations/*
 training/checkpoints/*
+training2/checkpoints/*
 data/*
 rulebase/**/experiments/
+training2/.ray_temp/*
