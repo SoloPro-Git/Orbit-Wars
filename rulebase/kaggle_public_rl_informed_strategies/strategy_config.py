@@ -878,6 +878,89 @@ MYREPLAY_TERRITORY_VALIDATE_VARIANTS = {
     ),
 }
 
+MYREPLAY_TERRITORY_FOLLOWUP_VARIANTS = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "terr30_step35": from_base(
+        REGULAR_CONFIG,
+        opening_territory_step_limit=35,
+    ),
+    "terr30_step55": from_base(
+        REGULAR_CONFIG,
+        opening_territory_step_limit=55,
+    ),
+    "terr30_margin10": from_base(
+        REGULAR_CONFIG,
+        opening_territory_enemy_closer_margin=10.0,
+    ),
+    "terr30_margin12": from_base(
+        REGULAR_CONFIG,
+        opening_territory_enemy_closer_margin=12.0,
+    ),
+    "terr40_margin8": from_base(
+        REGULAR_CONFIG,
+        opening_territory_penalty=40.0,
+    ),
+    "terr20_margin8": from_base(
+        REGULAR_CONFIG,
+        opening_territory_penalty=20.0,
+    ),
+    "terr30_prod2": from_base(
+        REGULAR_CONFIG,
+        opening_territory_prod_scale=2.0,
+    ),
+    "terr30_prod6": from_base(
+        REGULAR_CONFIG,
+        opening_territory_prod_scale=6.0,
+    ),
+    "terr30_safe_gap6": from_base(
+        REGULAR_CONFIG,
+        opening_territory_allow_if_safe_gap=6,
+    ),
+    "terr30_safe_gap14": from_base(
+        REGULAR_CONFIG,
+        opening_territory_allow_if_safe_gap=14,
+    ),
+    "terr40_margin10_step55": from_base(
+        REGULAR_CONFIG,
+        opening_territory_penalty=40.0,
+        opening_territory_enemy_closer_margin=10.0,
+        opening_territory_step_limit=55,
+    ),
+    "home_anchor_soft_late": from_base(
+        REGULAR_CONFIG,
+        enable_home_anchor_source_reserve=True,
+        home_anchor_min_active_players=4,
+        home_anchor_step_min=60,
+        home_anchor_step_max=130,
+        home_anchor_home_radius=45.0,
+        home_anchor_min_after=6,
+        home_anchor_prod_turns_after=1,
+        home_anchor_front_threat_bonus=4,
+    ),
+    "mid_border_soft_late": from_base(
+        REGULAR_CONFIG,
+        enable_midgame_border_source_reserve=True,
+        midgame_border_step_min=70,
+        midgame_border_step_max=130,
+        midgame_border_enemy_radius=45.0,
+        midgame_border_min_after=6,
+        midgame_border_prod_turns_after=1,
+        midgame_border_threat_margin=4,
+    ),
+    "terr_margin10_plus_home_anchor_soft": from_base(
+        REGULAR_CONFIG,
+        opening_territory_enemy_closer_margin=10.0,
+        enable_home_anchor_source_reserve=True,
+        home_anchor_min_active_players=4,
+        home_anchor_step_min=60,
+        home_anchor_step_max=130,
+        home_anchor_home_radius=45.0,
+        home_anchor_min_after=6,
+        home_anchor_prod_turns_after=1,
+        home_anchor_front_threat_bonus=4,
+    ),
+}
+
 CHAMPION_OPPONENT_VARIANTS = {
     "public_original": None,
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
@@ -908,6 +991,7 @@ ABLATION_SUITES = {
     "recent_loss_validate": RECENT_LOSS_VALIDATE_VARIANTS,
     "myreplay_repair": MYREPLAY_REPAIR_VARIANTS,
     "myreplay_territory_validate": MYREPLAY_TERRITORY_VALIDATE_VARIANTS,
+    "myreplay_territory_followup": MYREPLAY_TERRITORY_FOLLOWUP_VARIANTS,
     "regular_verify": {
         "public_exact": PUBLIC_EXACT.to_agent_kwargs(),
         "candidate2": cfg(target_candidate_limit=2),
