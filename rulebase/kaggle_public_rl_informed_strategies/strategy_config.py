@@ -47,6 +47,20 @@ class StrategyConfig:
     endgame_dump_keep_source_ships: int = 0
     endgame_dump_angle_samples: int = 32
     endgame_dump_min_active_players: int = 0
+    enable_arrival_based_under_attack_availability: bool = False
+    under_attack_availability_min_step: int = 0
+    under_attack_availability_margin: int = 0
+    under_attack_availability_horizon: int = 60
+    enable_capture_hold_margin_gate: bool = False
+    capture_hold_min_active_players: int = 4
+    capture_hold_min_production: float = 4.0
+    capture_hold_enemy_radius: float = 45.0
+    capture_hold_enemy_send_fraction: float = 0.85
+    capture_hold_enemy_launch_window: int = 8
+    capture_hold_enemy_reserve_turns: int = 2
+    capture_hold_enemy_max_arrival: int = 45
+    capture_hold_margin: int = 6
+    capture_hold_allow_extra_send: bool = True
     enable_contested_target_adjustment: bool = False
     contested_arrival_margin: int = 3
     contested_enemy_weight: float = 1.0
@@ -381,7 +395,14 @@ MP_LOCAL3_NEU5_COMET12_PATH4P_REGULAR_CONFIG = StrategyConfig(
         "path_block_wait_penalty": 12.0,
     }
 )
-REGULAR_CONFIG = MP_LOCAL3_NEU5_COMET12_PATH4P_REGULAR_CONFIG
+MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG = StrategyConfig(
+    **{
+        **MP_LOCAL3_NEU5_COMET12_PATH4P_REGULAR_CONFIG.to_agent_kwargs(),
+        "enable_capture_hold_margin_gate": True,
+        "capture_hold_margin": 4,
+    }
+)
+REGULAR_CONFIG = MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG
 PRE_HOLDABILITY_REGULAR_CONFIG = StrategyConfig(
     target_candidate_limit=2,
     min_ships_mine_attack=12,
@@ -600,6 +621,7 @@ HISTORICAL_BEST_VARIANTS = {
     "mp_soft_leader0_4p_regular": MP_SOFT_LEADER0_4P_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_local3_neu5_regular": MP_LOCAL3_NEU5_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_local3_neu5_comet12_path4p_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_REGULAR_CONFIG.to_agent_kwargs(),
+    "mp_local3_neu5_comet12_path4p_hold4_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG.to_agent_kwargs(),
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
 }
@@ -651,10 +673,85 @@ MYREPLAY_FOLLOWUP_VARIANTS = {
     ),
 }
 
+RECENT_LOSS_REPLAY_VARIANTS = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "previous_best_mp_local3_neu5": MP_LOCAL3_NEU5_REGULAR_CONFIG.to_agent_kwargs(),
+    "arrival_under_attack_m0": from_base(
+        REGULAR_CONFIG,
+        enable_arrival_based_under_attack_availability=True,
+        under_attack_availability_margin=0,
+    ),
+    "arrival_under_attack_m6": from_base(
+        REGULAR_CONFIG,
+        enable_arrival_based_under_attack_availability=True,
+        under_attack_availability_margin=6,
+    ),
+    "arrival_under_attack_s60_m0": from_base(
+        REGULAR_CONFIG,
+        enable_arrival_based_under_attack_availability=True,
+        under_attack_availability_min_step=60,
+        under_attack_availability_margin=0,
+    ),
+    "arrival_under_attack_s70_m0": from_base(
+        REGULAR_CONFIG,
+        enable_arrival_based_under_attack_availability=True,
+        under_attack_availability_min_step=70,
+        under_attack_availability_margin=0,
+    ),
+    "capture_hold_m4": from_base(
+        REGULAR_CONFIG,
+        enable_capture_hold_margin_gate=True,
+        capture_hold_margin=4,
+    ),
+    "capture_hold_m8": from_base(
+        REGULAR_CONFIG,
+        enable_capture_hold_margin_gate=True,
+        capture_hold_margin=8,
+    ),
+    "arrival_m0_plus_hold_m4": from_base(
+        REGULAR_CONFIG,
+        enable_arrival_based_under_attack_availability=True,
+        under_attack_availability_margin=0,
+        enable_capture_hold_margin_gate=True,
+        capture_hold_margin=4,
+    ),
+    "arrival_m6_plus_hold_m4": from_base(
+        REGULAR_CONFIG,
+        enable_arrival_based_under_attack_availability=True,
+        under_attack_availability_margin=6,
+        enable_capture_hold_margin_gate=True,
+        capture_hold_margin=4,
+    ),
+    "arrival_s70_m0_plus_hold_m4": from_base(
+        REGULAR_CONFIG,
+        enable_arrival_based_under_attack_availability=True,
+        under_attack_availability_min_step=70,
+        under_attack_availability_margin=0,
+        enable_capture_hold_margin_gate=True,
+        capture_hold_margin=4,
+    ),
+}
+
+RECENT_LOSS_VALIDATE_VARIANTS = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "previous_best_mp_local3_neu5": MP_LOCAL3_NEU5_REGULAR_CONFIG.to_agent_kwargs(),
+    "capture_hold_m4": from_base(
+        REGULAR_CONFIG,
+        enable_capture_hold_margin_gate=True,
+        capture_hold_margin=4,
+    ),
+    "capture_hold_m8": from_base(
+        REGULAR_CONFIG,
+        enable_capture_hold_margin_gate=True,
+        capture_hold_margin=8,
+    ),
+}
+
 CHAMPION_OPPONENT_VARIANTS = {
     "public_original": None,
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "mp_local3_neu5_comet12_path4p_hold4_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_local3_neu5_comet12_path4p_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_local3_neu5_regular": MP_LOCAL3_NEU5_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_soft_leader0_4p_regular": MP_SOFT_LEADER0_4P_REGULAR_CONFIG.to_agent_kwargs(),
@@ -675,6 +772,8 @@ ABLATION_SUITES = {
     "combined": COMBINED_PROMISING_VARIANTS,
     "historical_best": HISTORICAL_BEST_VARIANTS,
     "myreplay_followup": MYREPLAY_FOLLOWUP_VARIANTS,
+    "recent_loss_replay": RECENT_LOSS_REPLAY_VARIANTS,
+    "recent_loss_validate": RECENT_LOSS_VALIDATE_VARIANTS,
     "regular_verify": {
         "public_exact": PUBLIC_EXACT.to_agent_kwargs(),
         "candidate2": cfg(target_candidate_limit=2),

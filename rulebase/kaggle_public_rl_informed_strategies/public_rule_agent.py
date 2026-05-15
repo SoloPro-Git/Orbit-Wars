@@ -71,6 +71,20 @@ class PublicRuleAgent:
     endgame_dump_keep_source_ships: int = PUBLIC_EXACT.endgame_dump_keep_source_ships
     endgame_dump_angle_samples: int = PUBLIC_EXACT.endgame_dump_angle_samples
     endgame_dump_min_active_players: int = PUBLIC_EXACT.endgame_dump_min_active_players
+    enable_arrival_based_under_attack_availability: bool = PUBLIC_EXACT.enable_arrival_based_under_attack_availability
+    under_attack_availability_min_step: int = PUBLIC_EXACT.under_attack_availability_min_step
+    under_attack_availability_margin: int = PUBLIC_EXACT.under_attack_availability_margin
+    under_attack_availability_horizon: int = PUBLIC_EXACT.under_attack_availability_horizon
+    enable_capture_hold_margin_gate: bool = PUBLIC_EXACT.enable_capture_hold_margin_gate
+    capture_hold_min_active_players: int = PUBLIC_EXACT.capture_hold_min_active_players
+    capture_hold_min_production: float = PUBLIC_EXACT.capture_hold_min_production
+    capture_hold_enemy_radius: float = PUBLIC_EXACT.capture_hold_enemy_radius
+    capture_hold_enemy_send_fraction: float = PUBLIC_EXACT.capture_hold_enemy_send_fraction
+    capture_hold_enemy_launch_window: int = PUBLIC_EXACT.capture_hold_enemy_launch_window
+    capture_hold_enemy_reserve_turns: int = PUBLIC_EXACT.capture_hold_enemy_reserve_turns
+    capture_hold_enemy_max_arrival: int = PUBLIC_EXACT.capture_hold_enemy_max_arrival
+    capture_hold_margin: int = PUBLIC_EXACT.capture_hold_margin
+    capture_hold_allow_extra_send: bool = PUBLIC_EXACT.capture_hold_allow_extra_send
     enable_contested_target_adjustment: bool = PUBLIC_EXACT.enable_contested_target_adjustment
     contested_arrival_margin: int = PUBLIC_EXACT.contested_arrival_margin
     contested_enemy_weight: float = PUBLIC_EXACT.contested_enemy_weight
@@ -374,8 +388,30 @@ class PublicRuleAgent:
                 if row["source_id"] == planet.id
             )
         if planet.id in under_attack:
-            available -= sum(int(row["fleet"].ships) for row in under_attack[planet.id]["fleets"])
+            if self._arrival_based_under_attack_availability_enabled(attack_row=under_attack[planet.id]):
+                available -= self._incoming_reserve_required(planet, under_attack[planet.id])
+            else:
+                available -= sum(int(row["fleet"].ships) for row in under_attack[planet.id]["fleets"])
         return max(0, available)
+
+    def _arrival_based_under_attack_availability_enabled(self, attack_row: dict[str, object]) -> bool:
+        if not self.enable_arrival_based_under_attack_availability:
+            return False
+        return self.steps_seen - 1 >= self.under_attack_availability_min_step
+
+    def _incoming_reserve_required(self, planet: Planet, attack_row: dict[str, object]) -> int:
+        projected = int(planet.ships)
+        previous_tick = 0
+        lowest_margin = projected
+        for row in sorted(attack_row["fleets"], key=lambda item: item["arrive_tick"]):
+            arrive_tick = int(row["arrive_tick"])
+            if arrive_tick > self.under_attack_availability_horizon:
+                continue
+            projected += int((arrive_tick - previous_tick) * planet.production)
+            projected -= int(row["fleet"].ships)
+            lowest_margin = min(lowest_margin, projected)
+            previous_tick = arrive_tick
+        return max(0, self.under_attack_availability_margin - lowest_margin)
 
     def _posture(self, local: LocalObs) -> str:
         if not self.enable_dynamic_posture:
@@ -597,6 +633,60 @@ class PublicRuleAgent:
         sendable = int(enemy.ships * self.local_source_defense_gate_enemy_fraction)
         sendable += int(enemy.production * self.local_source_defense_gate_enemy_launch_window)
         sendable -= int(enemy.production * self.local_source_defense_gate_enemy_reserve_turns)
+        return max(0, sendable)
+
+    def _capture_hold_adjusted_ships(
+        self,
+        source: Planet,
+        target: Planet,
+        total_ships: int,
+        arrive_tick: int,
+        available: int,
+        local: LocalObs,
+    ) -> int | None:
+        if not self.enable_capture_hold_margin_gate:
+            return total_ships
+        if target.owner == local.player or target.production < self.capture_hold_min_production:
+            return total_ships
+        if (
+            self.capture_hold_min_active_players > 0
+            and self._active_player_count(local) < self.capture_hold_min_active_players
+        ):
+            return total_ships
+
+        post_capture = int(total_ships - target.ships)
+        if target.owner != -1:
+            post_capture -= self._enemy_production_buffer(source, target, local, total_ships)
+        post_capture = max(0, post_capture)
+
+        extra_needed = 0
+        for enemy in local.planets:
+            if enemy.owner in (-1, local.player) or enemy.id == target.id:
+                continue
+            if distance(enemy, target) > self.capture_hold_enemy_radius:
+                continue
+            sendable = self._project_enemy_sendable_for_capture_hold(enemy)
+            if sendable < self.min_ships_mine_attack:
+                continue
+            enemy_arrival = travel_ticks(enemy, target, sendable)
+            if enemy_arrival > self.capture_hold_enemy_max_arrival:
+                continue
+            projected_defense = post_capture + int(target.production * enemy_arrival)
+            required_defense = sendable + self.capture_hold_margin
+            if projected_defense < required_defense:
+                extra_needed = max(extra_needed, required_defense - projected_defense)
+
+        if extra_needed <= 0:
+            return total_ships
+        adjusted = total_ships + extra_needed
+        if adjusted <= available and self.capture_hold_allow_extra_send:
+            return adjusted
+        return None
+
+    def _project_enemy_sendable_for_capture_hold(self, enemy: Planet) -> int:
+        sendable = int(enemy.ships * self.capture_hold_enemy_send_fraction)
+        sendable += int(enemy.production * self.capture_hold_enemy_launch_window)
+        sendable -= int(enemy.production * self.capture_hold_enemy_reserve_turns)
         return max(0, sendable)
 
     def _source_threat_target_penalty(self, source: Planet, target: Planet, local: LocalObs) -> float:
@@ -1447,6 +1537,19 @@ class PublicRuleAgent:
             total_ships = max(total_ships, base_ships)
             if total_ships > available:
                 return False
+            angle, arrive_tick = self._angle_and_arrival(source, target, total_ships, local)
+            if angle is None or arrive_tick is None:
+                return False
+            if self.enable_sun_avoidance and sun_collision(source, total_ships, angle):
+                return False
+            if not self._path_hits_target(source, target, total_ships, angle, arrive_tick, local):
+                return False
+
+        adjusted_hold_ships = self._capture_hold_adjusted_ships(source, target, total_ships, arrive_tick, available, local)
+        if adjusted_hold_ships is None:
+            return False
+        if adjusted_hold_ships > total_ships:
+            total_ships = adjusted_hold_ships
             angle, arrive_tick = self._angle_and_arrival(source, target, total_ships, local)
             if angle is None or arrive_tick is None:
                 return False
