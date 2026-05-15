@@ -119,6 +119,8 @@ class PublicRuleAgent:
     value_defense_multiplayer_max_send: int = PUBLIC_EXACT.value_defense_multiplayer_max_send
     value_defense_multiplayer_min_margin: int = PUBLIC_EXACT.value_defense_multiplayer_min_margin
     enable_proactive_value_defense: bool = PUBLIC_EXACT.enable_proactive_value_defense
+    proactive_defense_min_active_players: int = PUBLIC_EXACT.proactive_defense_min_active_players
+    proactive_defense_max_active_players: int = PUBLIC_EXACT.proactive_defense_max_active_players
     proactive_defense_min_production: float = PUBLIC_EXACT.proactive_defense_min_production
     proactive_defense_radius: float = PUBLIC_EXACT.proactive_defense_radius
     proactive_defense_base_margin: int = PUBLIC_EXACT.proactive_defense_base_margin
@@ -1254,6 +1256,11 @@ class PublicRuleAgent:
 
     def _proactive_context_allowed(self, local: LocalObs) -> bool:
         if local.step < self.proactive_defense_min_step or local.step > self.proactive_defense_max_step:
+            return False
+        active_players = self._active_player_count(local)
+        if active_players < self.proactive_defense_min_active_players:
+            return False
+        if active_players > self.proactive_defense_max_active_players:
             return False
 
         own_prod = sum(p.production for p in local.planets if p.owner == local.player)
