@@ -33,17 +33,19 @@ from rulebase.kaggle_public_rl_informed_strategies import agent
 
 Current best submission candidate:
 
-- Config name: `mp_local3_neu5_comet12_path4p_hold4_regular`
+- Config name: `mp_local3_neu5_comet12_path4p_hold4_terr30_regular`
 - Alias: `regular`
-- Code commit: `8ba9ca5`
-- Base: `mp_local3_neu5_comet12_path4p_regular`
+- Code commit: `4d0654e`
+- Base: `mp_local3_neu5_comet12_path4p_hold4_regular`
 - Added regular feature: `enable_capture_hold_margin_gate=True`,
-  `capture_hold_margin=4`
-- Validation: `recent_loss_validate_4p_ablation_20260515_181359_331711_0a162cd6`
-- 4P result against recent champions: `23-57-0`, win rate `28.7%`,
-  average rank `1.71`
-- Previous `regular` in the same validation: `20-60-0`, win rate `25.0%`,
-  average rank `1.75`
+  `capture_hold_margin=4`, plus `enable_opening_neutral_territory_score=True`,
+  `opening_territory_penalty=30.0`,
+  `opening_territory_enemy_closer_margin=8.0`
+- Validation: `myreplay_territory_validate_4p_ablation_20260515_183840_798875_e6a1823a`
+- 4P result against recent champions: `34-46-0`, win rate `42.5%`,
+  average rank `1.57`
+- Previous `regular` in the same validation: `27-53-0`, win rate `33.8%`,
+  average rank `1.66`
 - 2P validation against `regular`: same non-loss as previous `regular`
   (`2-5-33`, non-loss `87.5%`), so no obvious 2P regression signal.
 
