@@ -8,9 +8,11 @@ from dataclasses import dataclass, field
 from .defense import max_enemy_fleet_to_target, planets_under_attack, reinforcement_plans
 from .geometry import (
     angle_to,
+    collides_segment_circle,
     distance,
     find_angle_to_moving_planet,
     fleet_speed,
+    planet_trajectory,
     sun_collision,
     travel_ticks,
 )
@@ -48,6 +50,9 @@ class PublicRuleAgent:
     enable_coop_attacks: bool = PUBLIC_EXACT.enable_coop_attacks
     enable_reinforcements: bool = PUBLIC_EXACT.enable_reinforcements
     enable_sun_avoidance: bool = PUBLIC_EXACT.enable_sun_avoidance
+    enable_path_first_hit_check: bool = PUBLIC_EXACT.enable_path_first_hit_check
+    path_first_hit_padding: float = PUBLIC_EXACT.path_first_hit_padding
+    path_block_wait_penalty: float = PUBLIC_EXACT.path_block_wait_penalty
     enable_contested_target_adjustment: bool = PUBLIC_EXACT.enable_contested_target_adjustment
     contested_arrival_margin: int = PUBLIC_EXACT.contested_arrival_margin
     contested_enemy_weight: float = PUBLIC_EXACT.contested_enemy_weight
@@ -120,6 +125,35 @@ class PublicRuleAgent:
     local_reserve_turns: int = PUBLIC_EXACT.local_reserve_turns
     local_reserve_min_garrison: int = PUBLIC_EXACT.local_reserve_min_garrison
     local_reserve_front_bonus: int = PUBLIC_EXACT.local_reserve_front_bonus
+    enable_source_threat_reserve: bool = PUBLIC_EXACT.enable_source_threat_reserve
+    source_threat_min_active_players: int = PUBLIC_EXACT.source_threat_min_active_players
+    source_threat_min_step: int = PUBLIC_EXACT.source_threat_min_step
+    source_threat_max_step: int = PUBLIC_EXACT.source_threat_max_step
+    source_threat_min_production: float = PUBLIC_EXACT.source_threat_min_production
+    source_threat_radius: float = PUBLIC_EXACT.source_threat_radius
+    source_threat_enemy_send_fraction: float = PUBLIC_EXACT.source_threat_enemy_send_fraction
+    source_threat_enemy_launch_window: int = PUBLIC_EXACT.source_threat_enemy_launch_window
+    source_threat_enemy_reserve_turns: int = PUBLIC_EXACT.source_threat_enemy_reserve_turns
+    source_threat_max_arrival: int = PUBLIC_EXACT.source_threat_max_arrival
+    source_threat_margin: int = PUBLIC_EXACT.source_threat_margin
+    source_threat_roi_multiplier: float = PUBLIC_EXACT.source_threat_roi_multiplier
+    source_threat_min_net_value: float = PUBLIC_EXACT.source_threat_min_net_value
+    enable_source_threat_send_filter: bool = PUBLIC_EXACT.enable_source_threat_send_filter
+    source_threat_send_min_active_players: int = PUBLIC_EXACT.source_threat_send_min_active_players
+    source_threat_send_min_step: int = PUBLIC_EXACT.source_threat_send_min_step
+    source_threat_send_max_step: int = PUBLIC_EXACT.source_threat_send_max_step
+    source_threat_send_min_production: float = PUBLIC_EXACT.source_threat_send_min_production
+    source_threat_send_radius: float = PUBLIC_EXACT.source_threat_send_radius
+    source_threat_send_enemy_fraction: float = PUBLIC_EXACT.source_threat_send_enemy_fraction
+    source_threat_send_enemy_launch_window: int = PUBLIC_EXACT.source_threat_send_enemy_launch_window
+    source_threat_send_enemy_reserve_turns: int = PUBLIC_EXACT.source_threat_send_enemy_reserve_turns
+    source_threat_send_max_arrival: int = PUBLIC_EXACT.source_threat_send_max_arrival
+    source_threat_send_margin: int = PUBLIC_EXACT.source_threat_send_margin
+    source_threat_send_roi_multiplier: float = PUBLIC_EXACT.source_threat_send_roi_multiplier
+    source_threat_send_min_net_value: float = PUBLIC_EXACT.source_threat_send_min_net_value
+    source_threat_send_trade_ratio: float = PUBLIC_EXACT.source_threat_send_trade_ratio
+    enable_source_threat_target_penalty: bool = PUBLIC_EXACT.enable_source_threat_target_penalty
+    source_threat_target_penalty_weight: float = PUBLIC_EXACT.source_threat_target_penalty_weight
     enable_holdability_target_score: bool = PUBLIC_EXACT.enable_holdability_target_score
     holdability_radius: float = PUBLIC_EXACT.holdability_radius
     holdability_weight: float = PUBLIC_EXACT.holdability_weight
@@ -375,23 +409,166 @@ class PublicRuleAgent:
         return max(0, available - reserve)
 
     def _local_source_reserve(self, planet: Planet, local: LocalObs) -> int:
+        reserve = self._source_threat_reserve(planet, local)
         if not self.enable_local_source_reserve:
-            return 0
+            return reserve
         if local.step < self.local_reserve_min_step or local.step > self.local_reserve_max_step:
-            return 0
+            return reserve
 
         enemy_planets = [p for p in local.planets if p.owner not in (-1, local.player)]
         nearest_enemy = min((distance(planet, enemy) for enemy in enemy_planets), default=10**9)
         is_high_prod = planet.production >= self.local_reserve_min_production
         is_front = nearest_enemy <= self.local_reserve_enemy_distance
         if not is_high_prod and not is_front:
-            return 0
+            return reserve
 
-        reserve = self.local_reserve_min_garrison + int(planet.production * self.local_reserve_turns)
+        local_reserve = self.local_reserve_min_garrison + int(planet.production * self.local_reserve_turns)
         if is_front:
             front_pressure = max(0.0, self.local_reserve_enemy_distance - nearest_enemy) / max(self.local_reserve_enemy_distance, 1.0)
-            reserve += int(self.local_reserve_front_bonus * front_pressure)
-        return reserve
+            local_reserve += int(self.local_reserve_front_bonus * front_pressure)
+        return max(reserve, local_reserve)
+
+    def _source_threat_reserve(self, planet: Planet, local: LocalObs) -> int:
+        if not self.enable_source_threat_reserve:
+            return 0
+        if local.step < self.source_threat_min_step or local.step > self.source_threat_max_step:
+            return 0
+        if planet.production < self.source_threat_min_production:
+            return 0
+        if self.source_threat_min_active_players > 0:
+            active_players = {
+                p.owner
+                for p in local.planets
+                if p.owner != -1
+            } | {
+                f.owner
+                for f in local.fleets
+                if f.owner != -1
+            }
+            if len(active_players) < self.source_threat_min_active_players:
+                return 0
+
+        reserve = 0
+        remaining_steps = max(0, 500 - local.step)
+        for enemy in local.planets:
+            if enemy.owner in (-1, local.player):
+                continue
+            dist = distance(enemy, planet)
+            if dist > self.source_threat_radius:
+                continue
+            sendable = int(enemy.ships * self.source_threat_enemy_send_fraction)
+            sendable += int(enemy.production * self.source_threat_enemy_launch_window)
+            sendable -= int(enemy.production * self.source_threat_enemy_reserve_turns)
+            if sendable < self.min_ships_mine_attack:
+                continue
+            arrival = travel_ticks(enemy, planet, sendable)
+            if arrival > self.source_threat_max_arrival:
+                continue
+
+            enemy_cost = sendable + 1
+            capture_value = planet.production * max(0, remaining_steps - arrival)
+            if capture_value < enemy_cost * self.source_threat_roi_multiplier:
+                continue
+            if capture_value - enemy_cost < self.source_threat_min_net_value:
+                continue
+
+            needed_now = sendable + self.source_threat_margin - int(planet.production * arrival)
+            reserve = max(reserve, needed_now)
+        return max(0, reserve)
+
+    def _source_exposed_after_send(
+        self,
+        source: Planet,
+        target: Planet,
+        sent_ships: int,
+        arrive_tick: int,
+        local: LocalObs,
+    ) -> bool:
+        if not self.enable_source_threat_send_filter:
+            return False
+        return self._source_threat_after_send_gap(source, target, sent_ships, arrive_tick, local) > 0.0
+
+    def _source_threat_target_penalty(self, source: Planet, target: Planet, local: LocalObs) -> float:
+        if not self.enable_source_threat_target_penalty:
+            return 0.0
+        ships = self._base_ships_needed(target, local, source=source)
+        if ships is None:
+            return 0.0
+        arrive_tick = self._estimate_arrival_for_requirement(source, target, ships, local)
+        gap = self._source_threat_after_send_gap(source, target, ships, arrive_tick, local)
+        return gap * self.source_threat_target_penalty_weight
+
+    def _source_threat_after_send_gap(
+        self,
+        source: Planet,
+        target: Planet,
+        sent_ships: int,
+        arrive_tick: int,
+        local: LocalObs,
+    ) -> float:
+        if not self.enable_source_threat_send_filter and not self.enable_source_threat_target_penalty:
+            return 0.0
+        if local.step < self.source_threat_send_min_step or local.step > self.source_threat_send_max_step:
+            return 0.0
+        if source.production < self.source_threat_send_min_production:
+            return 0.0
+        if self.source_threat_send_min_active_players > 0 and self._active_player_count(local) < self.source_threat_send_min_active_players:
+            return 0.0
+
+        source_remaining = max(0, int(source.ships) - int(sent_ships))
+        enemy_best_value = 0.0
+        remaining_steps = max(0, 500 - local.step)
+        for enemy in local.planets:
+            if enemy.owner in (-1, local.player):
+                continue
+            if distance(enemy, source) > self.source_threat_send_radius:
+                continue
+            sendable = self._project_enemy_sendable_for_source_filter(enemy)
+            if sendable < self.min_ships_mine_attack:
+                continue
+            enemy_arrival = travel_ticks(enemy, source, sendable)
+            if enemy_arrival > self.source_threat_send_max_arrival:
+                continue
+
+            projected_source = source_remaining + int(source.production * enemy_arrival)
+            if projected_source >= sendable + self.source_threat_send_margin:
+                continue
+
+            enemy_cost = sendable + 1
+            enemy_value = source.production * max(0, remaining_steps - enemy_arrival)
+            if enemy_value < enemy_cost * self.source_threat_send_roi_multiplier:
+                continue
+            enemy_net = enemy_value - enemy_cost
+            if enemy_net < self.source_threat_send_min_net_value:
+                continue
+            enemy_best_value = max(enemy_best_value, enemy_net)
+
+        if enemy_best_value <= 0:
+            return 0.0
+
+        attack_value = target.production * max(0, 500 - local.step - arrive_tick)
+        if target.owner not in (-1, local.player):
+            attack_value *= 1.5
+        attack_net = attack_value - sent_ships
+        return max(0.0, enemy_best_value - attack_net * self.source_threat_send_trade_ratio)
+
+    def _active_player_count(self, local: LocalObs) -> int:
+        active_players = {
+            p.owner
+            for p in local.planets
+            if p.owner != -1
+        } | {
+            f.owner
+            for f in local.fleets
+            if f.owner != -1
+        }
+        return len(active_players)
+
+    def _project_enemy_sendable_for_source_filter(self, enemy: Planet) -> int:
+        sendable = int(enemy.ships * self.source_threat_send_enemy_fraction)
+        sendable += int(enemy.production * self.source_threat_send_enemy_launch_window)
+        sendable -= int(enemy.production * self.source_threat_send_enemy_reserve_turns)
+        return max(0, sendable)
 
     def _available_local_attack_ships(
         self,
@@ -755,7 +932,14 @@ class PublicRuleAgent:
                 for target in local.targets
                 if not self.skip_comet_targets or target.id not in local.comet_planet_ids
             ]
-            candidate_targets.sort(key=lambda target: self._target_score(source, target, local) + launch_pressure.get(target.id, 0.0), reverse=True)
+            candidate_targets.sort(
+                key=lambda target: (
+                    self._target_score(source, target, local)
+                    + launch_pressure.get(target.id, 0.0)
+                    - self._source_threat_target_penalty(source, target, local)
+                ),
+                reverse=True,
+            )
 
             for target in candidate_targets[: self._dynamic_target_candidate_limit(local)]:
                 if self.enable_single_attacks and self._try_single_attack(source, target, local, under_attack, exhausted_planet_ids, moves):
@@ -785,6 +969,7 @@ class PublicRuleAgent:
                     if (source.id, target.id) in failed_pairs:
                         continue
                     score = self._global_attack_score(source, target, local, launch_pressure)
+                    score -= self._source_threat_target_penalty(source, target, local)
                     if best is None or score > best[0]:
                         best = (score, source, target)
 
@@ -993,6 +1178,28 @@ class PublicRuleAgent:
                 return False
 
         if self.enable_sun_avoidance and sun_collision(source, total_ships, angle):
+            return False
+
+        path_target = self._resolve_path_target(source, target, total_ships, angle, arrive_tick, local)
+        if path_target is None:
+            return False
+        if path_target.id != target.id:
+            target = path_target
+            base_ships = self._base_ships_needed(target, local, source=source)
+            if base_ships is None:
+                return False
+            total_ships = max(total_ships, base_ships)
+            if total_ships > available:
+                return False
+            angle, arrive_tick = self._angle_and_arrival(source, target, total_ships, local)
+            if angle is None or arrive_tick is None:
+                return False
+            if self.enable_sun_avoidance and sun_collision(source, total_ships, angle):
+                return False
+            if not self._path_hits_target(source, target, total_ships, angle, arrive_tick, local):
+                return False
+
+        if self._source_exposed_after_send(source, target, total_ships, arrive_tick, local):
             return False
 
         moves.append([source.id, angle, total_ships])
@@ -1338,6 +1545,10 @@ class PublicRuleAgent:
                 continue
             if self.enable_sun_avoidance and sun_collision(source, ships, angle):
                 continue
+            if not self._path_hits_target(source, target, ships, angle, arrive_tick, local):
+                return None
+            if self._source_exposed_after_send(source, target, ships, arrive_tick, local):
+                continue
 
             planned.append((source, angle, ships, arrive_tick))
             remainder -= ships
@@ -1402,6 +1613,76 @@ class PublicRuleAgent:
         if target.id in self.moving_planets:
             return find_angle_to_moving_planet(source, target, ships, local.angular_velocity)
         return angle_to(source, target), int(math.floor(distance(source, target) / fleet_speed(ships)))
+
+    def _resolve_path_target(
+        self,
+        source: Planet,
+        intended: Planet,
+        ships: int,
+        angle: float,
+        arrive_tick: int,
+        local: LocalObs,
+    ) -> Planet | None:
+        if not self.enable_path_first_hit_check:
+            return intended
+        first_hit = self._first_planet_hit(source, angle, ships, max(1, arrive_tick), local)
+        if first_hit is None or first_hit.id == intended.id:
+            return intended
+        if first_hit.owner == local.player:
+            return None
+        redirected_score = self._target_score(source, first_hit, local)
+        intended_wait_score = self._target_score(source, intended, local) - self.path_block_wait_penalty
+        if redirected_score >= intended_wait_score:
+            return first_hit
+        return None
+
+    def _path_hits_target(
+        self,
+        source: Planet,
+        target: Planet,
+        ships: int,
+        angle: float,
+        arrive_tick: int,
+        local: LocalObs,
+    ) -> bool:
+        if not self.enable_path_first_hit_check:
+            return True
+        first_hit = self._first_planet_hit(source, angle, ships, max(1, arrive_tick), local)
+        return first_hit is None or first_hit.id == target.id
+
+    def _first_planet_hit(
+        self,
+        source: Planet,
+        angle: float,
+        ships: int,
+        max_tick: int,
+        local: LocalObs,
+    ) -> Planet | None:
+        speed = fleet_speed(ships)
+        prev_x, prev_y = source.x, source.y
+        moving_paths = {
+            planet.id: planet_trajectory(planet, local.angular_velocity, max_tick)
+            for planet in local.planets
+            if planet.id in self.moving_planets
+        }
+        for tick in range(1, max_tick + 1):
+            x = source.x + math.cos(angle) * speed * tick
+            y = source.y + math.sin(angle) * speed * tick
+            hits: list[tuple[float, Planet]] = []
+            for planet in local.planets:
+                if planet.id == source.id:
+                    continue
+                px, py = (planet.x, planet.y)
+                path = moving_paths.get(planet.id)
+                if path is not None and tick - 1 < len(path):
+                    px, py = path[tick - 1]
+                if collides_segment_circle(prev_x, prev_y, x, y, px, py, planet.radius + self.path_first_hit_padding):
+                    hits.append((math.hypot(px - source.x, py - source.y), planet))
+            if hits:
+                hits.sort(key=lambda row: row[0])
+                return hits[0][1]
+            prev_x, prev_y = x, y
+        return None
 
     def _track_attack(self, source: Planet, target: Planet, angle: float, ships: int, arrive_tick: int) -> None:
         self.fleet_trajectories.append(

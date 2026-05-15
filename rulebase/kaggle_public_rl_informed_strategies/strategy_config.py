@@ -27,6 +27,9 @@ class StrategyConfig:
     enable_coop_attacks: bool = True
     enable_reinforcements: bool = True
     enable_sun_avoidance: bool = True
+    enable_path_first_hit_check: bool = False
+    path_first_hit_padding: float = 0.8
+    path_block_wait_penalty: float = 12.0
     enable_contested_target_adjustment: bool = False
     contested_arrival_margin: int = 3
     contested_enemy_weight: float = 1.0
@@ -99,6 +102,35 @@ class StrategyConfig:
     local_reserve_turns: int = 2
     local_reserve_min_garrison: int = 6
     local_reserve_front_bonus: int = 8
+    enable_source_threat_reserve: bool = False
+    source_threat_min_active_players: int = 0
+    source_threat_min_step: int = 0
+    source_threat_max_step: int = 500
+    source_threat_min_production: float = 3.0
+    source_threat_radius: float = 45.0
+    source_threat_enemy_send_fraction: float = 0.85
+    source_threat_enemy_launch_window: int = 8
+    source_threat_enemy_reserve_turns: int = 2
+    source_threat_max_arrival: int = 45
+    source_threat_margin: int = 6
+    source_threat_roi_multiplier: float = 1.20
+    source_threat_min_net_value: float = 15.0
+    enable_source_threat_send_filter: bool = False
+    source_threat_send_min_active_players: int = 0
+    source_threat_send_min_step: int = 0
+    source_threat_send_max_step: int = 500
+    source_threat_send_min_production: float = 3.0
+    source_threat_send_radius: float = 45.0
+    source_threat_send_enemy_fraction: float = 0.85
+    source_threat_send_enemy_launch_window: int = 8
+    source_threat_send_enemy_reserve_turns: int = 2
+    source_threat_send_max_arrival: int = 45
+    source_threat_send_margin: int = 6
+    source_threat_send_roi_multiplier: float = 1.25
+    source_threat_send_min_net_value: float = 20.0
+    source_threat_send_trade_ratio: float = 1.0
+    enable_source_threat_target_penalty: bool = False
+    source_threat_target_penalty_weight: float = 0.05
     enable_holdability_target_score: bool = False
     holdability_radius: float = 35.0
     holdability_weight: float = 0.8
@@ -2984,5 +3016,274 @@ ABLATION_SUITES = {
             early_neutral_dynamic_source_min_after=3,
         ),
         "mp_local4": from_base(REGULAR_CONFIG, multiplayer_local_enemy_bonus=4.0),
+    },
+    "path_first_hit_refine": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "path_pad05_wait6": from_base(
+            REGULAR_CONFIG,
+            enable_path_first_hit_check=True,
+            path_first_hit_padding=0.5,
+            path_block_wait_penalty=6.0,
+        ),
+        "path_pad05_wait12": from_base(
+            REGULAR_CONFIG,
+            enable_path_first_hit_check=True,
+            path_first_hit_padding=0.5,
+            path_block_wait_penalty=12.0,
+        ),
+        "path_pad05_wait24": from_base(
+            REGULAR_CONFIG,
+            enable_path_first_hit_check=True,
+            path_first_hit_padding=0.5,
+            path_block_wait_penalty=24.0,
+        ),
+        "path_pad08_wait6": from_base(
+            REGULAR_CONFIG,
+            enable_path_first_hit_check=True,
+            path_first_hit_padding=0.8,
+            path_block_wait_penalty=6.0,
+        ),
+        "path_pad08_wait12": from_base(
+            REGULAR_CONFIG,
+            enable_path_first_hit_check=True,
+            path_first_hit_padding=0.8,
+            path_block_wait_penalty=12.0,
+        ),
+        "path_pad08_wait24": from_base(
+            REGULAR_CONFIG,
+            enable_path_first_hit_check=True,
+            path_first_hit_padding=0.8,
+            path_block_wait_penalty=24.0,
+        ),
+        "path_pad12_wait12": from_base(
+            REGULAR_CONFIG,
+            enable_path_first_hit_check=True,
+            path_first_hit_padding=1.2,
+            path_block_wait_penalty=12.0,
+        ),
+    },
+    "source_threat_reserve_refine": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "threat_soft": from_base(
+            REGULAR_CONFIG,
+            enable_source_threat_reserve=True,
+            source_threat_radius=35.0,
+            source_threat_margin=4,
+            source_threat_roi_multiplier=1.50,
+            source_threat_min_net_value=30.0,
+        ),
+        "threat_medium": from_base(
+            REGULAR_CONFIG,
+            enable_source_threat_reserve=True,
+            source_threat_radius=45.0,
+            source_threat_margin=6,
+            source_threat_roi_multiplier=1.20,
+            source_threat_min_net_value=15.0,
+        ),
+        "threat_frontier": from_base(
+            REGULAR_CONFIG,
+            enable_source_threat_reserve=True,
+            source_threat_radius=35.0,
+            source_threat_margin=8,
+            source_threat_roi_multiplier=1.20,
+            source_threat_min_net_value=20.0,
+            source_threat_min_production=4.0,
+        ),
+        "threat_late_soft": from_base(
+            REGULAR_CONFIG,
+            enable_source_threat_reserve=True,
+            source_threat_min_step=60,
+            source_threat_radius=35.0,
+            source_threat_margin=4,
+            source_threat_roi_multiplier=1.50,
+            source_threat_min_net_value=30.0,
+        ),
+        "threat_late_soft_4p": from_base(
+            REGULAR_CONFIG,
+            enable_source_threat_reserve=True,
+            source_threat_min_active_players=4,
+            source_threat_min_step=60,
+            source_threat_radius=35.0,
+            source_threat_margin=4,
+            source_threat_roi_multiplier=1.50,
+            source_threat_min_net_value=30.0,
+        ),
+        "path05w12_threat_soft": from_base(
+            REGULAR_CONFIG,
+            enable_path_first_hit_check=True,
+            path_first_hit_padding=0.5,
+            path_block_wait_penalty=12.0,
+            enable_source_threat_reserve=True,
+            source_threat_radius=35.0,
+            source_threat_margin=4,
+            source_threat_roi_multiplier=1.50,
+            source_threat_min_net_value=30.0,
+        ),
+    },
+    "source_threat_reserve_validate": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "threat_late_soft_4p": from_base(
+            REGULAR_CONFIG,
+            enable_source_threat_reserve=True,
+            source_threat_min_active_players=4,
+            source_threat_min_step=60,
+            source_threat_radius=35.0,
+            source_threat_margin=4,
+            source_threat_roi_multiplier=1.50,
+            source_threat_min_net_value=30.0,
+        ),
+    },
+    "source_threat_send_filter_refine": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "send_filter_soft": from_base(
+            REGULAR_CONFIG,
+            enable_source_threat_send_filter=True,
+            source_threat_send_min_step=60,
+            source_threat_send_radius=35.0,
+            source_threat_send_margin=4,
+            source_threat_send_roi_multiplier=1.50,
+            source_threat_send_min_net_value=30.0,
+            source_threat_send_trade_ratio=1.0,
+        ),
+        "send_filter_4p_soft": from_base(
+            REGULAR_CONFIG,
+            enable_source_threat_send_filter=True,
+            source_threat_send_min_active_players=4,
+            source_threat_send_min_step=60,
+            source_threat_send_radius=35.0,
+            source_threat_send_margin=4,
+            source_threat_send_roi_multiplier=1.50,
+            source_threat_send_min_net_value=30.0,
+            source_threat_send_trade_ratio=1.0,
+        ),
+        "send_filter_4p_strict_trade": from_base(
+            REGULAR_CONFIG,
+            enable_source_threat_send_filter=True,
+            source_threat_send_min_active_players=4,
+            source_threat_send_min_step=60,
+            source_threat_send_radius=35.0,
+            source_threat_send_margin=4,
+            source_threat_send_roi_multiplier=1.50,
+            source_threat_send_min_net_value=30.0,
+            source_threat_send_trade_ratio=1.5,
+        ),
+        "send_filter_4p_late90": from_base(
+            REGULAR_CONFIG,
+            enable_source_threat_send_filter=True,
+            source_threat_send_min_active_players=4,
+            source_threat_send_min_step=90,
+            source_threat_send_radius=35.0,
+            source_threat_send_margin=4,
+            source_threat_send_roi_multiplier=1.50,
+            source_threat_send_min_net_value=30.0,
+            source_threat_send_trade_ratio=1.0,
+        ),
+        "send_filter_4p_high_prod": from_base(
+            REGULAR_CONFIG,
+            enable_source_threat_send_filter=True,
+            source_threat_send_min_active_players=4,
+            source_threat_send_min_step=60,
+            source_threat_send_min_production=4.0,
+            source_threat_send_radius=35.0,
+            source_threat_send_margin=4,
+            source_threat_send_roi_multiplier=1.50,
+            source_threat_send_min_net_value=30.0,
+            source_threat_send_trade_ratio=1.0,
+        ),
+        "send_filter_2p_soft": from_base(
+            REGULAR_CONFIG,
+            enable_source_threat_send_filter=True,
+            source_threat_send_min_active_players=2,
+            source_threat_send_min_step=80,
+            source_threat_send_radius=35.0,
+            source_threat_send_margin=4,
+            source_threat_send_roi_multiplier=1.50,
+            source_threat_send_min_net_value=30.0,
+            source_threat_send_trade_ratio=1.0,
+        ),
+    },
+    "source_threat_target_penalty_refine": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "penalty_4p_w002": from_base(
+            REGULAR_CONFIG,
+            enable_source_threat_target_penalty=True,
+            source_threat_send_min_active_players=4,
+            source_threat_send_min_step=60,
+            source_threat_send_radius=35.0,
+            source_threat_send_margin=4,
+            source_threat_send_roi_multiplier=1.50,
+            source_threat_send_min_net_value=30.0,
+            source_threat_target_penalty_weight=0.02,
+        ),
+        "penalty_4p_w005": from_base(
+            REGULAR_CONFIG,
+            enable_source_threat_target_penalty=True,
+            source_threat_send_min_active_players=4,
+            source_threat_send_min_step=60,
+            source_threat_send_radius=35.0,
+            source_threat_send_margin=4,
+            source_threat_send_roi_multiplier=1.50,
+            source_threat_send_min_net_value=30.0,
+            source_threat_target_penalty_weight=0.05,
+        ),
+        "penalty_4p_w010": from_base(
+            REGULAR_CONFIG,
+            enable_source_threat_target_penalty=True,
+            source_threat_send_min_active_players=4,
+            source_threat_send_min_step=60,
+            source_threat_send_radius=35.0,
+            source_threat_send_margin=4,
+            source_threat_send_roi_multiplier=1.50,
+            source_threat_send_min_net_value=30.0,
+            source_threat_target_penalty_weight=0.10,
+        ),
+        "penalty_4p_late90_w005": from_base(
+            REGULAR_CONFIG,
+            enable_source_threat_target_penalty=True,
+            source_threat_send_min_active_players=4,
+            source_threat_send_min_step=90,
+            source_threat_send_radius=35.0,
+            source_threat_send_margin=4,
+            source_threat_send_roi_multiplier=1.50,
+            source_threat_send_min_net_value=30.0,
+            source_threat_target_penalty_weight=0.05,
+        ),
+        "penalty_4p_relaxed_w002": from_base(
+            REGULAR_CONFIG,
+            enable_source_threat_target_penalty=True,
+            source_threat_send_min_active_players=4,
+            source_threat_send_min_step=60,
+            source_threat_send_radius=45.0,
+            source_threat_send_margin=2,
+            source_threat_send_roi_multiplier=1.20,
+            source_threat_send_min_net_value=15.0,
+            source_threat_target_penalty_weight=0.02,
+        ),
+        "penalty_4p_cand3_w005": from_base(
+            REGULAR_CONFIG,
+            target_candidate_limit=3,
+            enable_source_threat_target_penalty=True,
+            source_threat_send_min_active_players=4,
+            source_threat_send_min_step=60,
+            source_threat_send_radius=35.0,
+            source_threat_send_margin=4,
+            source_threat_send_roi_multiplier=1.50,
+            source_threat_send_min_net_value=30.0,
+            source_threat_target_penalty_weight=0.05,
+        ),
+    },
+    "source_threat_target_penalty_validate": {
+        "regular": REGULAR_CONFIG.to_agent_kwargs(),
+        "penalty_4p_late90_w005": from_base(
+            REGULAR_CONFIG,
+            enable_source_threat_target_penalty=True,
+            source_threat_send_min_active_players=4,
+            source_threat_send_min_step=90,
+            source_threat_send_radius=35.0,
+            source_threat_send_margin=4,
+            source_threat_send_roi_multiplier=1.50,
+            source_threat_send_min_net_value=30.0,
+            source_threat_target_penalty_weight=0.05,
+        ),
     },
 }
