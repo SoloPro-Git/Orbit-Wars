@@ -65,6 +65,12 @@ class PublicRuleAgent:
     comet_evacuation_target_roi: float = PUBLIC_EXACT.comet_evacuation_target_roi
     comet_evacuation_target_prod_weight: float = PUBLIC_EXACT.comet_evacuation_target_prod_weight
     comet_evacuation_target_enemy_bonus: float = PUBLIC_EXACT.comet_evacuation_target_enemy_bonus
+    enable_endgame_fleet_dump: bool = PUBLIC_EXACT.enable_endgame_fleet_dump
+    endgame_dump_min_step: int = PUBLIC_EXACT.endgame_dump_min_step
+    endgame_dump_min_ships: int = PUBLIC_EXACT.endgame_dump_min_ships
+    endgame_dump_keep_source_ships: int = PUBLIC_EXACT.endgame_dump_keep_source_ships
+    endgame_dump_angle_samples: int = PUBLIC_EXACT.endgame_dump_angle_samples
+    endgame_dump_min_active_players: int = PUBLIC_EXACT.endgame_dump_min_active_players
     enable_contested_target_adjustment: bool = PUBLIC_EXACT.enable_contested_target_adjustment
     contested_arrival_margin: int = PUBLIC_EXACT.contested_arrival_margin
     contested_enemy_weight: float = PUBLIC_EXACT.contested_enemy_weight
@@ -211,6 +217,13 @@ class PublicRuleAgent:
     opening_rotating_max_eta: int = PUBLIC_EXACT.opening_rotating_max_eta
     opening_rotating_low_production: float = PUBLIC_EXACT.opening_rotating_low_production
     opening_rotating_penalty: float = PUBLIC_EXACT.opening_rotating_penalty
+    enable_opening_high_prod_trickle: bool = PUBLIC_EXACT.enable_opening_high_prod_trickle
+    opening_trickle_min_active_players: int = PUBLIC_EXACT.opening_trickle_min_active_players
+    opening_trickle_step_limit: int = PUBLIC_EXACT.opening_trickle_step_limit
+    opening_trickle_source_min_production: float = PUBLIC_EXACT.opening_trickle_source_min_production
+    opening_trickle_target_min_production: float = PUBLIC_EXACT.opening_trickle_target_min_production
+    opening_trickle_max_target_ships: int = PUBLIC_EXACT.opening_trickle_max_target_ships
+    opening_trickle_min_ships: int = PUBLIC_EXACT.opening_trickle_min_ships
     enable_enemy_launch_punish: bool = PUBLIC_EXACT.enable_enemy_launch_punish
     enemy_launch_punish_max_fleet_age: int = PUBLIC_EXACT.enemy_launch_punish_max_fleet_age
     enemy_launch_punish_min_outgoing: int = PUBLIC_EXACT.enemy_launch_punish_min_outgoing
@@ -292,6 +305,8 @@ class PublicRuleAgent:
         self.did_attack_this_turn = len(self.fleet_trajectories) > attack_count_before
         if self.enable_proactive_value_defense and self.proactive_defense_after_attacks:
             self._append_proactive_value_defense(local, under_attack, exhausted_planet_ids, moves)
+        if self.enable_endgame_fleet_dump:
+            self._append_endgame_fleet_dump(local, under_attack, exhausted_planet_ids, moves)
         return moves
 
     def _fill_moving_planets(self, local: LocalObs) -> None:
@@ -423,6 +438,30 @@ class PublicRuleAgent:
         if posture == "defensive":
             return max(1, self.target_candidate_limit + self.defensive_target_candidate_delta)
         return self.target_candidate_limit
+
+    def _source_min_attack(self, source: Planet, local: LocalObs) -> int:
+        if (
+            self.enable_opening_high_prod_trickle
+            and local.step <= self.opening_trickle_step_limit
+            and source.production >= self.opening_trickle_source_min_production
+            and self._active_player_count(local) >= self.opening_trickle_min_active_players
+        ):
+            return max(1, self.opening_trickle_min_ships)
+        return self._dynamic_min_attack(local)
+
+    def _target_min_attack(self, source: Planet | None, target: Planet, local: LocalObs) -> int:
+        if (
+            source is not None
+            and self.enable_opening_high_prod_trickle
+            and local.step <= self.opening_trickle_step_limit
+            and target.owner == -1
+            and source.production >= self.opening_trickle_source_min_production
+            and target.production >= self.opening_trickle_target_min_production
+            and target.ships <= self.opening_trickle_max_target_ships
+            and self._active_player_count(local) >= self.opening_trickle_min_active_players
+        ):
+            return max(1, self.opening_trickle_min_ships)
+        return self._dynamic_min_attack(local)
 
     def _available_attack_ships(
         self,
@@ -776,6 +815,54 @@ class PublicRuleAgent:
         scored.sort(key=lambda row: row[0], reverse=True)
         return scored[0][1]
 
+    def _append_endgame_fleet_dump(
+        self,
+        local: LocalObs,
+        under_attack: dict[int, dict[str, object]],
+        exhausted_planet_ids: set[int],
+        moves: list[list[float | int]],
+    ) -> None:
+        if local.step < self.endgame_dump_min_step:
+            return
+        if self.endgame_dump_min_active_players > 0 and self._active_player_count(local) < self.endgame_dump_min_active_players:
+            return
+
+        remaining_ticks = max(1, 500 - local.step)
+        for source in sorted(local.mine, key=lambda planet: planet.ships, reverse=True):
+            if source.id in exhausted_planet_ids:
+                continue
+            ships = self._available_ships(source, under_attack, reserve_outgoing_reinforcements=True)
+            ships -= max(0, self.endgame_dump_keep_source_ships)
+            if ships < self.endgame_dump_min_ships:
+                continue
+            angle = self._safe_endgame_dump_angle(source, ships, remaining_ticks, local)
+            if angle is None:
+                continue
+            moves.append([source.id, angle, ships])
+            exhausted_planet_ids.add(source.id)
+
+    def _safe_endgame_dump_angle(
+        self,
+        source: Planet,
+        ships: int,
+        remaining_ticks: int,
+        local: LocalObs,
+    ) -> float | None:
+        samples = max(8, self.endgame_dump_angle_samples)
+        start_angle = 0.0
+        enemies = [planet for planet in local.planets if planet.owner not in (-1, local.player)]
+        if enemies:
+            nearest = min(enemies, key=lambda planet: distance(source, planet))
+            start_angle = angle_to(nearest, source)
+
+        for idx in range(samples):
+            angle = start_angle + (2.0 * math.pi * idx / samples)
+            if self.enable_sun_avoidance and sun_collision(source, ships, angle, ticks=remaining_ticks + 1):
+                continue
+            if self._first_planet_hit(source, angle, ships, remaining_ticks, local) is None:
+                return angle
+        return None
+
     def _comet_evacuation_own_target_score(
         self,
         source: Planet,
@@ -1093,7 +1180,7 @@ class PublicRuleAgent:
         for source in sorted(local.mine, key=lambda p: p.ships, reverse=True):
             if source.id in exhausted_planet_ids:
                 continue
-            if self._available_local_attack_ships(source, local, under_attack) < self._dynamic_min_attack(local):
+            if self._available_local_attack_ships(source, local, under_attack) < self._source_min_attack(source, local):
                 continue
 
             candidate_targets = [
@@ -1130,7 +1217,7 @@ class PublicRuleAgent:
             for source in local.mine:
                 if source.id in exhausted_planet_ids:
                     continue
-                if self._available_local_attack_ships(source, local, under_attack) < self._dynamic_min_attack(local):
+                if self._available_local_attack_ships(source, local, under_attack) < self._source_min_attack(source, local):
                     continue
                 for target in local.targets:
                     if self.skip_comet_targets and target.id in local.comet_planet_ids:
@@ -1249,7 +1336,7 @@ class PublicRuleAgent:
 
         if len(local.mine) < len(local.planets) * self.en_route_skip_owned_ratio and en_route >= needed_now:
             return None
-        return max(self._dynamic_min_attack(local), needed_now - en_route)
+        return max(self._target_min_attack(source, target, local), needed_now - en_route)
 
     def _enemy_production_buffer(
         self,

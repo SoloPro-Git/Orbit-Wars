@@ -41,6 +41,12 @@ class StrategyConfig:
     comet_evacuation_target_roi: float = 1.10
     comet_evacuation_target_prod_weight: float = 18.0
     comet_evacuation_target_enemy_bonus: float = 20.0
+    enable_endgame_fleet_dump: bool = False
+    endgame_dump_min_step: int = 470
+    endgame_dump_min_ships: int = 20
+    endgame_dump_keep_source_ships: int = 0
+    endgame_dump_angle_samples: int = 32
+    endgame_dump_min_active_players: int = 0
     enable_contested_target_adjustment: bool = False
     contested_arrival_margin: int = 3
     contested_enemy_weight: float = 1.0
@@ -187,6 +193,13 @@ class StrategyConfig:
     opening_rotating_max_eta: int = 13
     opening_rotating_low_production: float = 2.0
     opening_rotating_penalty: float = 60.0
+    enable_opening_high_prod_trickle: bool = False
+    opening_trickle_min_active_players: int = 4
+    opening_trickle_step_limit: int = 30
+    opening_trickle_source_min_production: float = 4.0
+    opening_trickle_target_min_production: float = 4.0
+    opening_trickle_max_target_ships: int = 12
+    opening_trickle_min_ships: int = 5
     enable_enemy_launch_punish: bool = False
     enemy_launch_punish_max_fleet_age: int = 12
     enemy_launch_punish_min_outgoing: int = 12
@@ -591,6 +604,53 @@ HISTORICAL_BEST_VARIANTS = {
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
 }
 
+MYREPLAY_FOLLOWUP_VARIANTS = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "previous_best_mp_local3_neu5": MP_LOCAL3_NEU5_REGULAR_CONFIG.to_agent_kwargs(),
+    "opening_trickle_4p_s30_min4": from_base(
+        REGULAR_CONFIG,
+        enable_opening_high_prod_trickle=True,
+        opening_trickle_step_limit=30,
+        opening_trickle_min_ships=4,
+    ),
+    "opening_trickle_4p_s30_min5": from_base(
+        REGULAR_CONFIG,
+        enable_opening_high_prod_trickle=True,
+        opening_trickle_step_limit=30,
+        opening_trickle_min_ships=5,
+    ),
+    "opening_trickle_4p_s40_min5": from_base(
+        REGULAR_CONFIG,
+        enable_opening_high_prod_trickle=True,
+        opening_trickle_step_limit=40,
+        opening_trickle_min_ships=5,
+    ),
+    "opening_trickle_4p_s40_min6": from_base(
+        REGULAR_CONFIG,
+        enable_opening_high_prod_trickle=True,
+        opening_trickle_step_limit=40,
+        opening_trickle_min_ships=6,
+    ),
+    "endgame_dump_s470_min20": from_base(
+        REGULAR_CONFIG,
+        enable_endgame_fleet_dump=True,
+        endgame_dump_min_step=470,
+        endgame_dump_min_ships=20,
+    ),
+    "endgame_dump_s480_min20": from_base(
+        REGULAR_CONFIG,
+        enable_endgame_fleet_dump=True,
+        endgame_dump_min_step=480,
+        endgame_dump_min_ships=20,
+    ),
+    "endgame_dump_s470_min30": from_base(
+        REGULAR_CONFIG,
+        enable_endgame_fleet_dump=True,
+        endgame_dump_min_step=470,
+        endgame_dump_min_ships=30,
+    ),
+}
+
 CHAMPION_OPPONENT_VARIANTS = {
     "public_original": None,
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
@@ -614,6 +674,7 @@ ABLATION_SUITES = {
     "rl_score": RL_SCORE_GRID_VARIANTS,
     "combined": COMBINED_PROMISING_VARIANTS,
     "historical_best": HISTORICAL_BEST_VARIANTS,
+    "myreplay_followup": MYREPLAY_FOLLOWUP_VARIANTS,
     "regular_verify": {
         "public_exact": PUBLIC_EXACT.to_agent_kwargs(),
         "candidate2": cfg(target_candidate_limit=2),
