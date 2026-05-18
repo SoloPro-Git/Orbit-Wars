@@ -36,6 +36,39 @@ python -m training2.train_stage1_ray --config training2/config/default.yaml
 python -m training2.self_play --checkpoint training2/checkpoints/bc.pt --out training2/checkpoints/selfplay.pt
 ```
 
+## Fast simulator
+
+`training2.fast_orbit_wars` provides a standalone simulator that mirrors the
+official Kaggle Orbit Wars rules without going through Kaggle's schema
+validation, deepcopy, and agent-runner layers.
+
+```python
+from training2 import make_fast_orbit_wars
+
+env = make_fast_orbit_wars({"episodeSteps": 500, "seed": 0}, keep_history=False)
+env.reset(4)
+obs = env.steps[-1][0]["observation"]
+env.step([[], [], [], []])
+```
+
+For maximum throughput in read-only training loops, pass
+`copy_observations=False`. This reuses internal state lists in the latest
+observation and is not safe for agents that mutate `obs`.
+
+If `numba` is installed, pass `use_numba=True` to compile the fleet movement
+collision kernel:
+
+```python
+env = make_fast_orbit_wars({"episodeSteps": 500, "seed": 0}, keep_history=False, use_numba=True)
+```
+
+Use the comparison/benchmark script after simulator changes:
+
+```bash
+uv run python scripts/compare_fast_orbit_wars.py --seeds 3 --players 4 --episode-steps 180
+uv run python scripts/compare_fast_orbit_wars.py --seeds 3 --players 4 --episode-steps 180 --numba
+```
+
 ## Current best rulebase source
 
 The default oracle is

@@ -87,6 +87,15 @@ cd training && ./train.sh
 cd training && SKIP_PRETRAIN=1 ./train.sh
 ```
 
+## 🤖 Codex / 本地模拟器默认
+
+本地测试、数据生成和训练 smoke check 默认优先使用
+`training2.make_fast_orbit_wars(..., use_numba=True)`，不要直接走官方
+`kaggle_environments.make("orbit_wars")`。只有做官方一致性校验或排查
+simulator drift 时再使用 Kaggle 官方环境。
+
+项目级约定见 [AGENTS.md](AGENTS.md)。
+
 ## ⚠️ 注意事项
 
 1. 所有训练脚本都在 `training/` 目录下
