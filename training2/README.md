@@ -56,7 +56,7 @@ For maximum throughput in read-only training loops, pass
 observation and is not safe for agents that mutate `obs`.
 
 If `numba` is installed, pass `use_numba=True` to compile the fleet movement
-collision kernel:
+collision kernel and the moving planet/comet sweep collision kernel:
 
 ```python
 env = make_fast_orbit_wars({"episodeSteps": 500, "seed": 0}, keep_history=False, use_numba=True)

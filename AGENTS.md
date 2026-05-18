@@ -49,9 +49,9 @@ uv run python scripts/compare_fast_orbit_wars.py --seeds 100 --players 2 --episo
 
 ## Performance Notes
 
-`use_numba=True` compiles the fleet movement collision kernel. The first call has
-JIT startup cost; long local training/data generation jobs benefit the most.
+`use_numba=True` compiles the fleet movement collision kernel and the moving
+planet/comet sweep collision kernel. The first call has JIT startup cost; long
+local training/data generation jobs benefit the most.
 
 `copy_observations=False` can improve throughput in read-only loops, but only use
 it when agents and feature builders do not mutate `obs`.
-
