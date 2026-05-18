@@ -33,9 +33,10 @@ from rulebase.kaggle_public_rl_informed_strategies import agent
 
 Current best submission candidate:
 
-- Config name: `mp_local3_neu5_comet12_path4p_hold4_terr30_s35_home6_posthold_regular`
+- Config name:
+  `mp_local3_neu5_comet12_path4p_hold4_terr30_s35_home6_posthold_recap_b35_p4src_w002_lead10_regular`
 - Alias: `regular`
-- Base: `mp_local3_neu5_comet12_path4p_hold4_terr30_s35_home6_regular`
+- Base: `mp_local3_neu5_comet12_path4p_hold4_terr30_s35_home6_posthold_recap_b35_p4src_w002_regular`
 - Added regular feature: `enable_capture_hold_margin_gate=True`,
   `capture_hold_margin=4`, plus `enable_opening_neutral_territory_score=True`,
   `opening_territory_penalty=30.0`,
@@ -44,18 +45,33 @@ Current best submission candidate:
   reserve (`enable_home_anchor_source_reserve=True`,
   `home_anchor_step_min=60`, `home_anchor_min_after=6`,
   `home_anchor_prod_turns_after=1`), plus
-  `capture_hold_use_post_capture_window=True`.
-- Why this matters: capture-hold now counts only production after our fleet
-  actually captures the target, avoiding over-optimistic high-production
-  recapture/hold estimates.
+  `capture_hold_use_post_capture_window=True`, and widened recent-loss
+  recapture timing with a softer bonus:
+  `recent_loss_recapture_min_step=0`,
+  `recent_loss_recapture_max_step=500`,
+  `recent_loss_recapture_window=50`,
+  `recent_loss_recapture_bonus=35.0`, plus a 4P-only soft source-threat target
+  penalty (`source_threat_send_min_active_players=4`,
+  `source_threat_send_min_step=35`, `source_threat_send_max_step=160`,
+  `source_threat_send_min_production=4.0`,
+  `source_threat_target_penalty_weight=0.02`), plus a 4P-only moderate
+  production-leader target pressure
+  (`multiplayer_leader_prod_bonus=1.0`).
+- Why this matters: the previous recapture champion is kept under its own
+  historical name, the source-risk champion is kept under its own historical
+  name, while `regular` now uses the validated 4P leader-containment
+  improvement.
 - Validation:
-  `myreplay_recapture_hold_repair_4p_ablation_20260515_192404_855609_0484eab7`
-- 4P result against recent champions: `53-107-0`, win rate `33.1%`,
-  average rank `1.669`
-- Previous `regular` in the same validation: `47-113-0`, win rate `29.4%`,
-  average rank `1.706`
-- 2P validation against `regular`: same as previous `regular`
-  (`4-6-70`, non-loss `92.5%`), so no obvious 2P regression signal.
+  `myreplay_plan011_leader_bonus_focus_4p_ablation_20260517_144638_809435_ac08fd31`
+- 4P result against recent champions: `356-844-0`, win rate `29.7%`,
+  average rank `1.703`
+- Previous `regular` in the same validation: `342-858-0`, win rate `28.5%`,
+  average rank `1.715`
+- Same-seed flips versus previous `regular`: `82` gains, `68` losses,
+  net `+14` wins across `1200` games.
+- 2P regression:
+  `myreplay_plan011_leader_bonus_focus_ablation_20260517_152445`,
+  exact neutral (`70-52-478` for all variants, net `0 / 600`).
 
 Historical best configs are intentionally kept in `HISTORICAL_BEST_VARIANTS`
 and `CHAMPION_OPPONENT_VARIANTS`; do not delete named champion configs when
