@@ -196,6 +196,8 @@ class StrategyConfig:
     holdability_own_prod_weight: float = 2.0
     holdability_own_ship_weight: float = 0.04
     enable_early_neutral_bias: bool = False
+    early_neutral_min_active_players: int = 0
+    early_neutral_max_active_players: int = 99
     early_neutral_step_limit: int = 40
     early_neutral_min_production: float = 3.0
     early_neutral_max_ships: int = 15
@@ -206,6 +208,14 @@ class StrategyConfig:
     early_neutral_contested_penalty: float = 8.0
     early_neutral_reaction_margin: int = 2
     early_neutral_holdability_relief: float = 0.50
+    enable_early_neutral_multiplayer_override: bool = False
+    early_neutral_multiplayer_min_active_players: int = 4
+    early_neutral_multiplayer_max_active_players: int = 99
+    early_neutral_multiplayer_step_limit: int = 40
+    early_neutral_multiplayer_min_production: float = 3.0
+    early_neutral_multiplayer_bonus: float = 8.0
+    early_neutral_multiplayer_safe_bonus: float = 12.0
+    early_neutral_multiplayer_contested_penalty: float = 8.0
     enable_early_neutral_dynamic_max_ships: bool = False
     early_neutral_dynamic_max_ships: int = 20
     early_neutral_dynamic_min_production: float = 4.0
@@ -290,6 +300,7 @@ class StrategyConfig:
     third_party_tail_min_savings: int = 0
     third_party_tail_min_savings_ratio: float = 0.0
     third_party_tail_min_post_capture_ships: int = 0
+    third_party_tail_overpay_min_post_capture: int = 0
     third_party_tail_neutral_max_arrival: int = 999
     third_party_tail_neutral_min_post_capture_ships: int = 0
     third_party_tail_neutral_min_enemy_post_capture: int = 0
@@ -307,6 +318,15 @@ class StrategyConfig:
     third_party_tail_hold_enemy_reserve_turns: int = 2
     third_party_tail_hold_enemy_max_arrival: int = 40
     third_party_tail_hold_margin: int = 3
+    enable_third_party_anti_tail_hold_gate: bool = False
+    anti_tail_hold_min_active_players: int = 3
+    anti_tail_hold_min_production: float = 3.0
+    anti_tail_hold_enemy_radius: float = -1.0
+    anti_tail_hold_enemy_send_fraction: float = 0.85
+    anti_tail_hold_enemy_launch_window: int = 8
+    anti_tail_hold_enemy_reserve_turns: int = 2
+    anti_tail_hold_enemy_max_arrival: int = 24
+    anti_tail_hold_margin: int = 2
     enable_third_party_tail_watchlist: bool = False
     third_party_tail_watchlist_horizon: int = 90
     third_party_tail_watchlist_post_window: int = 18
@@ -624,7 +644,26 @@ TAIL_M2_MAX14_NET7_REGULAR_CANDIDATE_CONFIG = StrategyConfig(
         "third_party_tail_min_net_value": 7.0,
     }
 )
-REGULAR_CONFIG = TAIL_M2_MAX14_NET7_REGULAR_CANDIDATE_CONFIG
+TAIL_M2_MAX14_NET7_OVERPAY4_REGULAR_CANDIDATE_CONFIG = StrategyConfig(
+    **{
+        **TAIL_M2_MAX14_NET7_REGULAR_CANDIDATE_CONFIG.to_agent_kwargs(),
+        "third_party_tail_overpay_min_post_capture": 4,
+    }
+)
+TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_REGULAR_CONFIG = StrategyConfig(
+    **{
+        **TAIL_M2_MAX14_NET7_OVERPAY4_REGULAR_CANDIDATE_CONFIG.to_agent_kwargs(),
+        "enable_early_neutral_multiplayer_override": True,
+        "early_neutral_multiplayer_min_active_players": 4,
+        "early_neutral_multiplayer_max_active_players": 4,
+        "early_neutral_multiplayer_step_limit": 50,
+        "early_neutral_multiplayer_min_production": 2.0,
+        "early_neutral_multiplayer_bonus": 6.0,
+        "early_neutral_multiplayer_safe_bonus": 24.0,
+        "early_neutral_multiplayer_contested_penalty": 12.0,
+    }
+)
+REGULAR_CONFIG = TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_REGULAR_CONFIG
 PRE_HOLDABILITY_REGULAR_CONFIG = StrategyConfig(
     target_candidate_limit=2,
     min_ships_mine_attack=12,
@@ -855,7 +894,11 @@ HISTORICAL_BEST_VARIANTS = {
     "orbit_wars_regular_p4src_w002_lead10_slim_20260517": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_S35_HOME6_POSTHOLD_RECAP_B35_P4SRC_W002_LEAD10_REGULAR_CONFIG.to_agent_kwargs(),
     "orbit_wars_regular_p4src_w002_lead10_p4earlysrc_s35_80_t120_slim_20260518": PRE_TAIL_REGULAR_CONFIG.to_agent_kwargs(),
     "orbit_wars_regular_p4src_w002_lead10_p4earlysrc_s35_80_t120_tail_m2_max14_net7_slim_20260518": TAIL_M2_MAX14_NET7_REGULAR_CANDIDATE_CONFIG.to_agent_kwargs(),
+    "orbit_wars_regular_p4src_w002_lead10_p4earlysrc_s35_80_t120_tail_m2_max14_net7_overpay4_slim_20260518": TAIL_M2_MAX14_NET7_OVERPAY4_REGULAR_CANDIDATE_CONFIG.to_agent_kwargs(),
+    "orbit_wars_regular_p4src_w002_lead10_p4earlysrc_s35_80_t120_tail_m2_max14_net7_overpay4_p4lowhome_active4_slim_20260518": TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_REGULAR_CONFIG.to_agent_kwargs(),
     "tail_m2_max14_net7_regular_candidate": TAIL_M2_MAX14_NET7_REGULAR_CANDIDATE_CONFIG.to_agent_kwargs(),
+    "tail_m2_max14_net7_overpay4_regular_candidate": TAIL_M2_MAX14_NET7_OVERPAY4_REGULAR_CANDIDATE_CONFIG.to_agent_kwargs(),
+    "tail_m2_max14_net7_overpay4_p4lowhome_active4_regular": TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_REGULAR_CONFIG.to_agent_kwargs(),
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
 }
@@ -1464,6 +1507,8 @@ CHAMPION_OPPONENT_VARIANTS = {
     "public_original": None,
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "tail_m2_max14_net7_overpay4_p4lowhome_active4_regular": TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_REGULAR_CONFIG.to_agent_kwargs(),
+    "tail_m2_max14_net7_overpay4_regular_candidate": TAIL_M2_MAX14_NET7_OVERPAY4_REGULAR_CANDIDATE_CONFIG.to_agent_kwargs(),
     "tail_m2_max14_net7_regular_candidate": TAIL_M2_MAX14_NET7_REGULAR_CANDIDATE_CONFIG.to_agent_kwargs(),
     "mp_local3_neu5_comet12_path4p_hold4_terr30_s35_home6_posthold_recap_b35_p2src_w002_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_S35_HOME6_POSTHOLD_RECAP_B35_P2SRC_W002_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_local3_neu5_comet12_path4p_hold4_terr30_s35_home6_posthold_recap_b35_p4src_w002_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_S35_HOME6_POSTHOLD_RECAP_B35_P4SRC_W002_REGULAR_CONFIG.to_agent_kwargs(),
@@ -6041,4 +6086,291 @@ ABLATION_SUITES["myreplay_plan014_early_4p_source_guard_focus"] = {
     "p4_early_send_filter_s35_80_trade120": ABLATION_SUITES["myreplay_plan014_early_4p_source_guard"][
         "p4_early_send_filter_s35_80_trade120"
     ],
+}
+
+ABLATION_SUITES["myreplay_plan015_p2_highprod_source_guard"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "p2_highprod_send_filter_s45_115_m6": from_base(
+        REGULAR_CONFIG,
+        enable_source_threat_send_filter=True,
+        source_threat_send_min_active_players=2,
+        source_threat_send_max_active_players=2,
+        source_threat_send_min_step=45,
+        source_threat_send_max_step=115,
+        source_threat_send_min_production=4.0,
+        source_threat_send_radius=45.0,
+        source_threat_send_margin=6,
+        source_threat_send_roi_multiplier=1.35,
+        source_threat_send_min_net_value=25.0,
+        source_threat_send_trade_ratio=1.15,
+    ),
+    "p2_highprod_send_filter_s45_160_m8": from_base(
+        REGULAR_CONFIG,
+        enable_source_threat_send_filter=True,
+        source_threat_send_min_active_players=2,
+        source_threat_send_max_active_players=2,
+        source_threat_send_min_step=45,
+        source_threat_send_max_step=160,
+        source_threat_send_min_production=4.0,
+        source_threat_send_radius=45.0,
+        source_threat_send_margin=8,
+        source_threat_send_roi_multiplier=1.35,
+        source_threat_send_min_net_value=25.0,
+        source_threat_send_trade_ratio=1.20,
+    ),
+    "p2_highprod_source_reserve_s45_140_m8": from_base(
+        REGULAR_CONFIG,
+        enable_source_threat_reserve=True,
+        source_threat_min_active_players=2,
+        source_threat_min_step=45,
+        source_threat_max_step=140,
+        source_threat_min_production=4.0,
+        source_threat_radius=45.0,
+        source_threat_enemy_send_fraction=0.85,
+        source_threat_enemy_launch_window=8,
+        source_threat_enemy_reserve_turns=2,
+        source_threat_max_arrival=45,
+        source_threat_margin=8,
+        source_threat_roi_multiplier=1.35,
+        source_threat_min_net_value=25.0,
+    ),
+    "p2_highprod_source_reserve_s80_220_m10": from_base(
+        REGULAR_CONFIG,
+        enable_source_threat_reserve=True,
+        source_threat_min_active_players=2,
+        source_threat_min_step=80,
+        source_threat_max_step=220,
+        source_threat_min_production=5.0,
+        source_threat_radius=45.0,
+        source_threat_enemy_send_fraction=0.85,
+        source_threat_enemy_launch_window=8,
+        source_threat_enemy_reserve_turns=2,
+        source_threat_max_arrival=45,
+        source_threat_margin=10,
+        source_threat_roi_multiplier=1.35,
+        source_threat_min_net_value=25.0,
+    ),
+    "p2_highprod_recent_reserve_s45_150_m6": from_base(
+        REGULAR_CONFIG,
+        enable_recent_capture_source_reserve=True,
+        recent_capture_source_reserve_min_active_players=2,
+        recent_capture_source_reserve_min_step=45,
+        recent_capture_source_reserve_max_step=150,
+        recent_capture_source_reserve_window=35,
+        recent_capture_source_reserve_min_production=4.0,
+        recent_capture_source_reserve_min_after=8,
+        recent_capture_source_reserve_prod_turns_after=1,
+        recent_capture_source_reserve_enemy_radius=45.0,
+        recent_capture_source_reserve_front_bonus=6,
+    ),
+}
+
+ABLATION_SUITES["myreplay_plan015_p2_highprod_source_guard_focus"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "p2_highprod_send_filter_s45_115_m6": ABLATION_SUITES["myreplay_plan015_p2_highprod_source_guard"][
+        "p2_highprod_send_filter_s45_115_m6"
+    ],
+    "p2_highprod_source_reserve_s45_140_m8": ABLATION_SUITES["myreplay_plan015_p2_highprod_source_guard"][
+        "p2_highprod_source_reserve_s45_140_m8"
+    ],
+    "p2_highprod_recent_reserve_s45_150_m6": ABLATION_SUITES["myreplay_plan015_p2_highprod_source_guard"][
+        "p2_highprod_recent_reserve_s45_150_m6"
+    ],
+}
+
+ABLATION_SUITES["myreplay_plan018_p2_low_home_expansion_focus"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "p2_low_home_trickle_s30_src1_tgt4_m5": from_base(
+        REGULAR_CONFIG,
+        enable_opening_high_prod_trickle=True,
+        opening_trickle_min_active_players=2,
+        opening_trickle_max_active_players=2,
+        opening_trickle_step_limit=30,
+        opening_trickle_source_min_production=1.0,
+        opening_trickle_target_min_production=4.0,
+        opening_trickle_max_target_ships=12,
+        opening_trickle_min_ships=5,
+    ),
+    "p2_low_home_trickle_s40_src1_tgt3_m5": from_base(
+        REGULAR_CONFIG,
+        enable_opening_high_prod_trickle=True,
+        opening_trickle_min_active_players=2,
+        opening_trickle_max_active_players=2,
+        opening_trickle_step_limit=40,
+        opening_trickle_source_min_production=1.0,
+        opening_trickle_target_min_production=3.0,
+        opening_trickle_max_target_ships=14,
+        opening_trickle_min_ships=5,
+    ),
+    "p2_low_home_dyn22_after6": from_base(
+        REGULAR_CONFIG,
+        early_neutral_dynamic_max_ships=22,
+        early_neutral_dynamic_source_min_after=6,
+        early_neutral_dynamic_min_enemy_gap=2,
+    ),
+    "p2_low_home_dyn24_after5_prod3": from_base(
+        REGULAR_CONFIG,
+        early_neutral_dynamic_max_ships=24,
+        early_neutral_dynamic_source_min_after=5,
+        early_neutral_dynamic_min_production=3.0,
+        early_neutral_dynamic_min_enemy_gap=2,
+    ),
+    "p2_low_home_bonus_prod2_s55": from_base(
+        REGULAR_CONFIG,
+        early_neutral_step_limit=55,
+        early_neutral_min_production=2.0,
+        early_neutral_bonus=6.0,
+        early_neutral_safe_bonus=24.0,
+        early_neutral_contested_penalty=12.0,
+    ),
+}
+
+ABLATION_SUITES["myreplay_plan019_p4_low_home_opening_focus"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "p4_low_home_dyn20_after8_prod3_gap2": from_base(
+        REGULAR_CONFIG,
+        early_neutral_dynamic_max_ships=20,
+        early_neutral_dynamic_source_min_after=8,
+        early_neutral_dynamic_min_production=3.0,
+        early_neutral_dynamic_min_enemy_gap=2,
+    ),
+    "p4_low_home_dyn22_after6_prod3_gap2": from_base(
+        REGULAR_CONFIG,
+        early_neutral_dynamic_max_ships=22,
+        early_neutral_dynamic_source_min_after=6,
+        early_neutral_dynamic_min_production=3.0,
+        early_neutral_dynamic_min_enemy_gap=2,
+    ),
+    "p4_low_home_bonus_prod2_s50": from_base(
+        REGULAR_CONFIG,
+        early_neutral_step_limit=50,
+        early_neutral_min_production=2.0,
+        early_neutral_bonus=6.0,
+        early_neutral_safe_bonus=24.0,
+        early_neutral_contested_penalty=12.0,
+    ),
+    "p4_low_home_bonus_prod2_s50_active4": from_base(
+        REGULAR_CONFIG,
+        enable_early_neutral_multiplayer_override=True,
+        early_neutral_multiplayer_min_active_players=4,
+        early_neutral_multiplayer_max_active_players=4,
+        early_neutral_multiplayer_step_limit=50,
+        early_neutral_multiplayer_min_production=2.0,
+        early_neutral_multiplayer_bonus=6.0,
+        early_neutral_multiplayer_safe_bonus=24.0,
+        early_neutral_multiplayer_contested_penalty=12.0,
+    ),
+    "p4_low_home_trickle_s35_src1_tgt3_m5": from_base(
+        REGULAR_CONFIG,
+        enable_opening_high_prod_trickle=True,
+        opening_trickle_min_active_players=4,
+        opening_trickle_max_active_players=4,
+        opening_trickle_step_limit=35,
+        opening_trickle_source_min_production=1.0,
+        opening_trickle_target_min_production=3.0,
+        opening_trickle_max_target_ships=14,
+        opening_trickle_min_ships=5,
+    ),
+    "p4_low_home_soft_territory": from_base(
+        REGULAR_CONFIG,
+        opening_territory_penalty=12.0,
+        opening_territory_enemy_closer_margin=12.0,
+        opening_territory_allow_if_safe_gap=6,
+    ),
+}
+
+ABLATION_SUITES["myreplay_plan019_p4_low_home_opening_confirm"] = {
+    "previous_tail_m2_max14_net7_overpay4_regular": TAIL_M2_MAX14_NET7_OVERPAY4_REGULAR_CANDIDATE_CONFIG.to_agent_kwargs(),
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "p4_low_home_bonus_prod2_s50_active4": TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_REGULAR_CONFIG.to_agent_kwargs(),
+}
+
+ABLATION_SUITES["myreplay_plan019_regular_counter_probe"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "counter_no_opening_territory_penalty": from_base(
+        REGULAR_CONFIG,
+        enable_opening_neutral_territory_score=False,
+    ),
+    "counter_soft_opening_territory_penalty": from_base(
+        REGULAR_CONFIG,
+        opening_territory_penalty=10.0,
+        opening_territory_enemy_closer_margin=12.0,
+        opening_territory_allow_if_safe_gap=6,
+    ),
+    "counter_no_early_source_filter": from_base(
+        REGULAR_CONFIG,
+        enable_source_threat_send_filter=False,
+    ),
+    "counter_tail_inject_limit1": from_base(
+        REGULAR_CONFIG,
+        enable_third_party_tail_candidate_injection=True,
+        third_party_tail_candidate_limit=1,
+        third_party_tail_candidate_min_score=52.0,
+        third_party_tail_candidate_keep_front=1,
+    ),
+    "counter_tail_hold_filter": from_base(
+        REGULAR_CONFIG,
+        enable_third_party_tail_hold_filter=True,
+        third_party_tail_hold_margin=3,
+        third_party_tail_hold_enemy_max_arrival=40,
+    ),
+    "counter_leader_pressure_15": from_base(
+        REGULAR_CONFIG,
+        multiplayer_leader_prod_bonus=1.5,
+    ),
+    "counter_local_pressure_5_leader15": from_base(
+        REGULAR_CONFIG,
+        multiplayer_local_enemy_bonus=5.0,
+        multiplayer_leader_prod_bonus=1.5,
+    ),
+}
+
+ABLATION_SUITES["myreplay_plan019_regular_counter_focus"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "counter_no_early_source_filter": ABLATION_SUITES["myreplay_plan019_regular_counter_probe"][
+        "counter_no_early_source_filter"
+    ],
+    "counter_leader_pressure_15": ABLATION_SUITES["myreplay_plan019_regular_counter_probe"][
+        "counter_leader_pressure_15"
+    ],
+    "counter_local_pressure_5_leader15": ABLATION_SUITES["myreplay_plan019_regular_counter_probe"][
+        "counter_local_pressure_5_leader15"
+    ],
+}
+
+ABLATION_SUITES["myreplay_plan020_regular_counter_refine"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "leader_pressure_125": from_base(
+        REGULAR_CONFIG,
+        multiplayer_leader_prod_bonus=1.25,
+    ),
+    "leader_pressure_150": from_base(
+        REGULAR_CONFIG,
+        multiplayer_leader_prod_bonus=1.50,
+    ),
+    "leader_pressure_175": from_base(
+        REGULAR_CONFIG,
+        multiplayer_leader_prod_bonus=1.75,
+    ),
+    "leader_pressure_200": from_base(
+        REGULAR_CONFIG,
+        multiplayer_leader_prod_bonus=2.00,
+    ),
+    "no_early_source_filter": from_base(
+        REGULAR_CONFIG,
+        enable_source_threat_send_filter=False,
+    ),
+    "no_source_filter_leader150": from_base(
+        REGULAR_CONFIG,
+        enable_source_threat_send_filter=False,
+        multiplayer_leader_prod_bonus=1.50,
+    ),
+    "relaxed_source_filter_s35_65": from_base(
+        REGULAR_CONFIG,
+        source_threat_send_max_step=65,
+    ),
+    "relaxed_source_filter_trade140": from_base(
+        REGULAR_CONFIG,
+        source_threat_send_trade_ratio=1.40,
+    ),
 }

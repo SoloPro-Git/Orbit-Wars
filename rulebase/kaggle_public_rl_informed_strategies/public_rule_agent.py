@@ -220,6 +220,8 @@ class PublicRuleAgent:
     holdability_own_prod_weight: float = PUBLIC_EXACT.holdability_own_prod_weight
     holdability_own_ship_weight: float = PUBLIC_EXACT.holdability_own_ship_weight
     enable_early_neutral_bias: bool = PUBLIC_EXACT.enable_early_neutral_bias
+    early_neutral_min_active_players: int = PUBLIC_EXACT.early_neutral_min_active_players
+    early_neutral_max_active_players: int = PUBLIC_EXACT.early_neutral_max_active_players
     early_neutral_step_limit: int = PUBLIC_EXACT.early_neutral_step_limit
     early_neutral_min_production: float = PUBLIC_EXACT.early_neutral_min_production
     early_neutral_max_ships: int = PUBLIC_EXACT.early_neutral_max_ships
@@ -230,6 +232,14 @@ class PublicRuleAgent:
     early_neutral_contested_penalty: float = PUBLIC_EXACT.early_neutral_contested_penalty
     early_neutral_reaction_margin: int = PUBLIC_EXACT.early_neutral_reaction_margin
     early_neutral_holdability_relief: float = PUBLIC_EXACT.early_neutral_holdability_relief
+    enable_early_neutral_multiplayer_override: bool = PUBLIC_EXACT.enable_early_neutral_multiplayer_override
+    early_neutral_multiplayer_min_active_players: int = PUBLIC_EXACT.early_neutral_multiplayer_min_active_players
+    early_neutral_multiplayer_max_active_players: int = PUBLIC_EXACT.early_neutral_multiplayer_max_active_players
+    early_neutral_multiplayer_step_limit: int = PUBLIC_EXACT.early_neutral_multiplayer_step_limit
+    early_neutral_multiplayer_min_production: float = PUBLIC_EXACT.early_neutral_multiplayer_min_production
+    early_neutral_multiplayer_bonus: float = PUBLIC_EXACT.early_neutral_multiplayer_bonus
+    early_neutral_multiplayer_safe_bonus: float = PUBLIC_EXACT.early_neutral_multiplayer_safe_bonus
+    early_neutral_multiplayer_contested_penalty: float = PUBLIC_EXACT.early_neutral_multiplayer_contested_penalty
     enable_early_neutral_dynamic_max_ships: bool = PUBLIC_EXACT.enable_early_neutral_dynamic_max_ships
     early_neutral_dynamic_max_ships: int = PUBLIC_EXACT.early_neutral_dynamic_max_ships
     early_neutral_dynamic_min_production: float = PUBLIC_EXACT.early_neutral_dynamic_min_production
@@ -314,6 +324,7 @@ class PublicRuleAgent:
     third_party_tail_min_savings: int = PUBLIC_EXACT.third_party_tail_min_savings
     third_party_tail_min_savings_ratio: float = PUBLIC_EXACT.third_party_tail_min_savings_ratio
     third_party_tail_min_post_capture_ships: int = PUBLIC_EXACT.third_party_tail_min_post_capture_ships
+    third_party_tail_overpay_min_post_capture: int = PUBLIC_EXACT.third_party_tail_overpay_min_post_capture
     third_party_tail_neutral_max_arrival: int = PUBLIC_EXACT.third_party_tail_neutral_max_arrival
     third_party_tail_neutral_min_post_capture_ships: int = PUBLIC_EXACT.third_party_tail_neutral_min_post_capture_ships
     third_party_tail_neutral_min_enemy_post_capture: int = PUBLIC_EXACT.third_party_tail_neutral_min_enemy_post_capture
@@ -331,6 +342,15 @@ class PublicRuleAgent:
     third_party_tail_hold_enemy_reserve_turns: int = PUBLIC_EXACT.third_party_tail_hold_enemy_reserve_turns
     third_party_tail_hold_enemy_max_arrival: int = PUBLIC_EXACT.third_party_tail_hold_enemy_max_arrival
     third_party_tail_hold_margin: int = PUBLIC_EXACT.third_party_tail_hold_margin
+    enable_third_party_anti_tail_hold_gate: bool = PUBLIC_EXACT.enable_third_party_anti_tail_hold_gate
+    anti_tail_hold_min_active_players: int = PUBLIC_EXACT.anti_tail_hold_min_active_players
+    anti_tail_hold_min_production: float = PUBLIC_EXACT.anti_tail_hold_min_production
+    anti_tail_hold_enemy_radius: float = PUBLIC_EXACT.anti_tail_hold_enemy_radius
+    anti_tail_hold_enemy_send_fraction: float = PUBLIC_EXACT.anti_tail_hold_enemy_send_fraction
+    anti_tail_hold_enemy_launch_window: int = PUBLIC_EXACT.anti_tail_hold_enemy_launch_window
+    anti_tail_hold_enemy_reserve_turns: int = PUBLIC_EXACT.anti_tail_hold_enemy_reserve_turns
+    anti_tail_hold_enemy_max_arrival: int = PUBLIC_EXACT.anti_tail_hold_enemy_max_arrival
+    anti_tail_hold_margin: int = PUBLIC_EXACT.anti_tail_hold_margin
     enable_third_party_tail_watchlist: bool = PUBLIC_EXACT.enable_third_party_tail_watchlist
     third_party_tail_watchlist_horizon: int = PUBLIC_EXACT.third_party_tail_watchlist_horizon
     third_party_tail_watchlist_post_window: int = PUBLIC_EXACT.third_party_tail_watchlist_post_window
@@ -2098,6 +2118,12 @@ class PublicRuleAgent:
                 min_post_capture = max(min_post_capture, self.third_party_tail_neutral_min_post_capture_ships)
             if post_capture_ships < min_post_capture:
                 continue
+            if (
+                self.third_party_tail_overpay_min_post_capture > 0
+                and ships > direct_need
+                and post_capture_ships < self.third_party_tail_overpay_min_post_capture
+            ):
+                continue
             if self._third_party_tail_hold_filter_blocks(target, local, post_capture_ships, arrival):
                 continue
 
@@ -2161,6 +2187,56 @@ class PublicRuleAgent:
             projected_defense = post_capture_ships + int(target.production * arrival)
             if sendable >= projected_defense + self.third_party_tail_hold_margin:
                 return True
+        return False
+
+    def _third_party_anti_tail_hold_blocks(
+        self,
+        target: Planet,
+        local: LocalObs,
+        post_capture_ships: int,
+        our_arrival: int,
+    ) -> bool:
+        if not self.enable_third_party_anti_tail_hold_gate:
+            return False
+        if target.owner == local.player or target.production < self.anti_tail_hold_min_production:
+            return False
+        if (
+            self.anti_tail_hold_min_active_players > 0
+            and self._active_player_count(local) < self.anti_tail_hold_min_active_players
+        ):
+            return False
+
+        for fleet in local.fleets:
+            if fleet.owner in (-1, local.player):
+                continue
+            fleet_arrival = self._fleet_arrival_to_target(fleet, target, local)
+            if fleet_arrival is None or fleet_arrival <= our_arrival:
+                continue
+            recapture_delay = fleet_arrival - our_arrival
+            if recapture_delay > self.anti_tail_hold_enemy_max_arrival:
+                continue
+            projected_defense = post_capture_ships + int(target.production * recapture_delay)
+            if fleet.ships >= projected_defense + self.anti_tail_hold_margin:
+                return True
+
+        if self.anti_tail_hold_enemy_radius >= 0:
+            for enemy in local.planets:
+                if enemy.owner in (-1, local.player):
+                    continue
+                if distance(enemy, target) > self.anti_tail_hold_enemy_radius:
+                    continue
+                sendable = int(enemy.ships * self.anti_tail_hold_enemy_send_fraction)
+                sendable += int(enemy.production * self.anti_tail_hold_enemy_launch_window)
+                sendable -= int(enemy.production * self.anti_tail_hold_enemy_reserve_turns)
+                sendable = max(0, sendable)
+                if sendable <= 0:
+                    continue
+                arrival = travel_ticks(enemy, target, sendable)
+                if arrival > self.anti_tail_hold_enemy_max_arrival:
+                    continue
+                projected_defense = post_capture_ships + int(target.production * arrival)
+                if sendable >= projected_defense + self.anti_tail_hold_margin:
+                    return True
         return False
 
     def _try_single_attack(
@@ -2308,6 +2384,10 @@ class PublicRuleAgent:
                     return False
                 if not self._path_hits_target(source, target, total_ships, angle, arrive_tick, local):
                     return False
+
+            post_capture_ships = self._post_capture_ships(source, target, total_ships, local)
+            if self._third_party_anti_tail_hold_blocks(target, local, post_capture_ships, arrive_tick):
+                return False
 
         if self._source_exposed_after_send(source, target, total_ships, arrive_tick, local):
             return False
@@ -2476,10 +2556,36 @@ class PublicRuleAgent:
             return 0.0
         return float(plan["score"])
 
+    def _early_neutral_profile(self, local: LocalObs) -> tuple[int, float, float, float, float]:
+        active_players = self._active_player_count(local)
+        if (
+            self.enable_early_neutral_multiplayer_override
+            and active_players >= self.early_neutral_multiplayer_min_active_players
+            and (
+                self.early_neutral_multiplayer_max_active_players <= 0
+                or active_players <= self.early_neutral_multiplayer_max_active_players
+            )
+        ):
+            return (
+                self.early_neutral_multiplayer_step_limit,
+                self.early_neutral_multiplayer_min_production,
+                self.early_neutral_multiplayer_bonus,
+                self.early_neutral_multiplayer_safe_bonus,
+                self.early_neutral_multiplayer_contested_penalty,
+            )
+        return (
+            self.early_neutral_step_limit,
+            self.early_neutral_min_production,
+            self.early_neutral_bonus,
+            self.early_neutral_safe_bonus,
+            self.early_neutral_contested_penalty,
+        )
+
     def _early_neutral_allowed(self, source: Planet, target: Planet, local: LocalObs) -> bool:
-        if target.owner != -1 or local.step > self.early_neutral_step_limit:
+        step_limit, min_production, _, _, _ = self._early_neutral_profile(local)
+        if target.owner != -1 or local.step > step_limit:
             return False
-        if target.production < self.early_neutral_min_production:
+        if target.production < min_production:
             return False
         needed = target.ships + 1
         if target.ships > self.early_neutral_max_ships:
@@ -2564,7 +2670,8 @@ class PublicRuleAgent:
         if not self.enable_early_neutral_bias or not self._early_neutral_allowed(source, target, local):
             return adjustment
 
-        bonus = self.early_neutral_bonus * target.production
+        _, _, bonus_weight, safe_bonus, contested_penalty = self._early_neutral_profile(local)
+        bonus = bonus_weight * target.production
         if target.id not in self.moving_planets:
             bonus *= self.early_neutral_static_multiplier
 
@@ -2572,9 +2679,9 @@ class PublicRuleAgent:
         if enemy_eta < 10**8:
             gap = enemy_eta - eta
             if gap >= self.early_neutral_reaction_margin:
-                bonus += self.early_neutral_safe_bonus
+                bonus += safe_bonus
             elif abs(gap) <= self.early_neutral_reaction_margin:
-                bonus -= self.early_neutral_contested_penalty
+                bonus -= contested_penalty
 
         return adjustment + bonus
 
