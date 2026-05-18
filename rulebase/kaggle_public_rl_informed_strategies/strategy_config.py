@@ -592,10 +592,10 @@ MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_S35_HOME6_POSTHOLD_RECAP_B35_P4SRC_W0
         "source_threat_send_trade_ratio": 1.20,
     }
 )
-REGULAR_CONFIG = MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_S35_HOME6_POSTHOLD_RECAP_B35_P4SRC_W002_LEAD10_P4EARLYSRC_S35_80_T120_REGULAR_CONFIG
+PRE_TAIL_REGULAR_CONFIG = MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_S35_HOME6_POSTHOLD_RECAP_B35_P4SRC_W002_LEAD10_P4EARLYSRC_S35_80_T120_REGULAR_CONFIG
 TAIL_WATCH_TINY_REGULAR_CANDIDATE_CONFIG = StrategyConfig(
     **{
-        **MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_S35_HOME6_POSTHOLD_RECAP_B35_P4SRC_W002_LEAD10_REGULAR_CONFIG.to_agent_kwargs(),
+        **PRE_TAIL_REGULAR_CONFIG.to_agent_kwargs(),
         "enable_third_party_tail_capture": True,
         "enable_third_party_tail_watchlist": True,
         "enable_third_party_tail_candidate_injection": False,
@@ -624,6 +624,7 @@ TAIL_M2_MAX14_NET7_REGULAR_CANDIDATE_CONFIG = StrategyConfig(
         "third_party_tail_min_net_value": 7.0,
     }
 )
+REGULAR_CONFIG = TAIL_M2_MAX14_NET7_REGULAR_CANDIDATE_CONFIG
 PRE_HOLDABILITY_REGULAR_CONFIG = StrategyConfig(
     target_candidate_limit=2,
     min_ships_mine_attack=12,
@@ -852,6 +853,8 @@ HISTORICAL_BEST_VARIANTS = {
     "mp_local3_neu5_comet12_path4p_hold4_terr30_s35_home6_posthold_recap_b35_p4src_w002_lead10_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_S35_HOME6_POSTHOLD_RECAP_B35_P4SRC_W002_LEAD10_REGULAR_CONFIG.to_agent_kwargs(),
     "mp_local3_neu5_comet12_path4p_hold4_terr30_s35_home6_posthold_recap_b35_p4src_w002_lead10_p4earlysrc_s35_80_t120_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_S35_HOME6_POSTHOLD_RECAP_B35_P4SRC_W002_LEAD10_P4EARLYSRC_S35_80_T120_REGULAR_CONFIG.to_agent_kwargs(),
     "orbit_wars_regular_p4src_w002_lead10_slim_20260517": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_S35_HOME6_POSTHOLD_RECAP_B35_P4SRC_W002_LEAD10_REGULAR_CONFIG.to_agent_kwargs(),
+    "orbit_wars_regular_p4src_w002_lead10_p4earlysrc_s35_80_t120_slim_20260518": PRE_TAIL_REGULAR_CONFIG.to_agent_kwargs(),
+    "orbit_wars_regular_p4src_w002_lead10_p4earlysrc_s35_80_t120_tail_m2_max14_net7_slim_20260518": TAIL_M2_MAX14_NET7_REGULAR_CANDIDATE_CONFIG.to_agent_kwargs(),
     "tail_m2_max14_net7_regular_candidate": TAIL_M2_MAX14_NET7_REGULAR_CANDIDATE_CONFIG.to_agent_kwargs(),
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
