@@ -2027,7 +2027,9 @@ class PublicRuleAgent:
             return None
         target_traj = planet_trajectory(target, local.angular_velocity) if target.id in self.moving_planets else None
         prev_x, prev_y = float(fleet.x), float(fleet.y)
-        max_tick = max(self.third_party_tail_max_enemy_arrival, self.third_party_tail_watchlist_horizon)
+        max_tick = self.third_party_tail_max_enemy_arrival
+        if self.enable_third_party_tail_watchlist:
+            max_tick = max(max_tick, self.third_party_tail_watchlist_horizon)
         if target_traj is not None:
             max_tick = min(max_tick, len(target_traj))
         for tick in range(1, max_tick + 1):
@@ -2175,12 +2177,13 @@ class PublicRuleAgent:
             return False
         tail_plan = self._third_party_tail_capture_plan(source, target, local)
         is_tail_capture = tail_plan is not None and int(tail_plan["ships"]) <= base_ships
+        planned_ships = int(tail_plan["ships"]) if is_tail_capture else base_ships
 
         available = self._available_local_attack_ships(source, local, under_attack)
-        if available < base_ships:
+        if available < planned_ships:
             return False
 
-        total_ships = base_ships
+        total_ships = planned_ships
         angle: float | None
         arrive_tick: int | None
 
