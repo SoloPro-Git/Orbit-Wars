@@ -39,20 +39,21 @@ training:
   entropy_weight: 0.01
   device: cuda
   swanlab_project: orbit-wars
-  swanlab_experiment: training2-stage1-regular-align
+  swanlab_experiment: training2-stage1-regular-refresh-20260518
   swanlab_mode: cloud
 
 ray:
   # Number of Ray trainer actors that consume generated data and run backprop.
   # Stage1 averages trainer shard weights every weight_sync_interval iterations.
-  num_trainer_workers: 7
+  num_trainer_workers: 45
 
   # Ray GPU resources reserved by each trainer actor.
   # Examples:
   #   1.0 with num_trainer_workers=1 -> one full GPU for training.
   #   1.0 with num_trainer_workers=7 -> seven trainer actors, seven GPUs total.
   #   0.5 with num_trainer_workers=14 -> fourteen trainer actors, seven GPUs total.
-  gpus_per_trainer: 1.0
+  gpus_per_trainer: 0.333
+  cpus_per_trainer: 0.5
 
   # Data workers are CPU Ray actors that generate REGULAR_CONFIG demonstrations.
   # Increase this to generate more training samples in parallel.
@@ -97,14 +98,16 @@ offline_data:
   shuffle_candidates: true
   # Directory output. The generator writes part-00000.jsonl ... part-N.jsonl
   # so trainer workers can read different files directly.
-  output_path: data/training2/stage1_regular_10k_shuffle
+  output_path: data/training2/stage1_regular_current_20260518
   output_shards: 128
 
+# Historical replay disabled for this refresh: keep the teacher signal purely
+# from the current REGULAR_CONFIG.
 historical_replay:
   # Raw excellent historical games. These JSONL files contain observation +
   # actions, so training2 converts them into shuffled candidate-ranking samples
   # at load time with the historical action as the target.
-  enabled: true
+  enabled: false
   paths:
     - data/online_replay_converted_test
   max_samples:
@@ -125,7 +128,7 @@ stage1:
   # directly from that replay.
   data_source: offline
   offline_data_paths:
-    - data/training2/stage1_regular_10k_shuffle
+    - data/training2/stage1_regular_current_20260518
   offline_max_samples:
 
   # Single-candidate rows have little ranking signal, but still supervise the
@@ -153,7 +156,7 @@ stage1:
   alignment_eval_interval: 10
   win_rate_threshold: 0.50
   replay_capacity: 200000
-  output_dir: training2/checkpoints/stage1_regular
+  output_dir: training2/checkpoints/stage1_regular_current_20260518
 
 self_play:
   games_per_iteration: 32
@@ -177,7 +180,7 @@ stage15:
   num_rollout_workers: 32
   games_per_rollout_task: 1
   cpus_per_rollout: 1.0
-  num_trainer_workers: 7
+  num_trainer_workers: 45
   cpus_per_trainer: 0.5
   num_eval_workers: 4
 
@@ -186,7 +189,7 @@ stage15:
   device: cuda
   rollout_device: cpu
   eval_device: cpu
-  gpus_per_trainer: 0.5
+  gpus_per_trainer: 0.333
   gpus_per_rollout: 0.0
   eval_gpus_per_worker: 0.0
 
