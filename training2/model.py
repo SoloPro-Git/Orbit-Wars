@@ -53,7 +53,7 @@ class CandidatePolicyValueNet(nn.Module):
         planets: torch.Tensor,
         global_features: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        planet_mask = planets[..., -1] <= 0.0
+        planet_mask = planets.abs().sum(dim=-1) <= 0.0
         planet_emb = self.encoder(self.planet_proj(planets), src_key_padding_mask=planet_mask)
         valid = (~planet_mask).float().unsqueeze(-1)
         pooled = (planet_emb * valid).sum(dim=1) / valid.sum(dim=1).clamp(min=1.0)
