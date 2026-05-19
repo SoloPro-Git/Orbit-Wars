@@ -7,7 +7,7 @@ import torch
 
 from training2.candidates import build_candidates
 from training2.features import encode_position
-from training2.model import CandidatePolicyValueNet
+from training2.model import CandidatePolicyValueNet, load_compatible_state_dict
 from training2.proposal import ProposalConfig, proposals_from_model
 from training2.rulebase_bridge import make_rulebase_agent
 
@@ -30,7 +30,7 @@ class CandidateModelAgent:
         self.model = CandidatePolicyValueNet().to(self.device)
         if checkpoint:
             ckpt = torch.load(Path(checkpoint), map_location=self.device, weights_only=False)
-            self.model.load_state_dict(ckpt["model_state_dict"], strict=False)
+            load_compatible_state_dict(self.model, ckpt["model_state_dict"])
         self.model.eval()
 
     def act(self, obs: dict) -> list[list]:

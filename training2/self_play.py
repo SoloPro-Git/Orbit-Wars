@@ -17,7 +17,7 @@ from kaggle_environments import make
 from training2.batching import pad_planets
 from training2.candidates import build_candidates
 from training2.features import encode_position, result_value
-from training2.model import CandidatePolicyValueNet
+from training2.model import CandidatePolicyValueNet, load_compatible_state_dict
 from training2.rulebase_bridge import make_rulebase_agent
 
 
@@ -55,7 +55,7 @@ def main() -> None:
     model = CandidatePolicyValueNet().to(args.device)
     if args.checkpoint:
         ckpt = torch.load(args.checkpoint, map_location=args.device, weights_only=False)
-        model.load_state_dict(ckpt["model_state_dict"], strict=False)
+        load_compatible_state_dict(model, ckpt["model_state_dict"])
     opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
     replay: list[dict] = []
 

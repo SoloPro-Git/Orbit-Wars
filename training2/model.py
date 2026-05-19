@@ -100,3 +100,24 @@ class CandidatePolicyValueNet(nn.Module):
 
 def masked_policy_loss(logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     return F.cross_entropy(logits, target)
+
+
+def load_compatible_state_dict(model: nn.Module, state_dict: dict, *, strict: bool = False) -> dict[str, list[str]]:
+    """Load checkpoint weights while skipping tensors whose shapes changed."""
+    current = model.state_dict()
+    compatible = {
+        key: value
+        for key, value in state_dict.items()
+        if key in current and tuple(value.shape) == tuple(current[key].shape)
+    }
+    skipped = [
+        key
+        for key, value in state_dict.items()
+        if key in current and tuple(value.shape) != tuple(current[key].shape)
+    ]
+    missing, unexpected = model.load_state_dict(compatible, strict=strict)
+    return {
+        "skipped_shape_mismatch": skipped,
+        "missing": list(missing),
+        "unexpected": list(unexpected),
+    }

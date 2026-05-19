@@ -35,7 +35,7 @@ from training2.batching import pad_planets
 from training2.candidates import build_candidates
 from training2.envs import make_orbit_wars_env
 from training2.features import encode_position, result_value
-from training2.model import CandidatePolicyValueNet
+from training2.model import CandidatePolicyValueNet, load_compatible_state_dict
 from training2.proposal import ProposalConfig, proposals_from_model
 from training2.rulebase_bridge import make_rulebase_agent
 
@@ -360,7 +360,7 @@ class Stage15TrainerActor:
         self.model = _make_model(model_cfg, device)
         if resume:
             ckpt = torch.load(resume, map_location=device, weights_only=False)
-            self.model.load_state_dict(ckpt["model_state_dict"], strict=False)
+            load_compatible_state_dict(self.model, ckpt["model_state_dict"])
         self.opt = torch.optim.AdamW(
             self.model.parameters(),
             lr=float(train_cfg.get("learning_rate", 1e-4)),
@@ -431,7 +431,7 @@ class Stage15EvalActor:
 
     def evaluate(self, state_dict: dict, games: int, seed_offset: int, four_player_prob: float, device: str) -> dict:
         model = _make_model(self.model_cfg, device)
-        model.load_state_dict(state_dict, strict=False)
+        load_compatible_state_dict(model, state_dict)
         model.eval()
         wins = losses = draws = 0
         margins: list[float] = []

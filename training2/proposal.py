@@ -25,6 +25,61 @@ def _angle_diff(angle: float) -> float:
     return math.atan2(math.sin(angle), math.cos(angle))
 
 
+def _fleet_speed(ships: float, max_speed: float = 6.0) -> float:
+    if ships <= 1:
+        return 1.0
+    ratio = math.log(max(ships, 1.0)) / math.log(1000.0)
+    ratio = min(max(ratio, 0.0), 1.0)
+    return 1.0 + (max_speed - 1.0) * (ratio**1.5)
+
+
+def _is_orbital_target(obs: dict, planet: list) -> bool:
+    if int(planet[0]) in set(obs.get("comet_planet_ids", [])):
+        return False
+    return math.hypot(float(planet[2]) - 50.0, float(planet[3]) - 50.0) + float(planet[4]) < 50.0
+
+
+def _comet_future_position(obs: dict, planet_id: int, eta: int) -> tuple[float, float] | None:
+    for group in obs.get("comets", []) or []:
+        planet_ids = group.get("planet_ids", []) if isinstance(group, dict) else []
+        if planet_id not in planet_ids:
+            continue
+        try:
+            idx = list(planet_ids).index(planet_id)
+            path = group.get("paths", [])[idx]
+            path_index = int(group.get("path_index", 0))
+            future_index = min(max(0, path_index + max(0, eta)), len(path) - 1)
+            x, y = path[future_index]
+            return float(x), float(y)
+        except (IndexError, TypeError, ValueError):
+            return None
+    return None
+
+
+def _future_target_position(obs: dict, target: list, eta: int) -> tuple[float, float]:
+    comet_pos = _comet_future_position(obs, int(target[0]), eta)
+    if comet_pos is not None:
+        return comet_pos
+    if _is_orbital_target(obs, target):
+        angle = math.atan2(float(target[3]) - 50.0, float(target[2]) - 50.0)
+        radius = math.hypot(float(target[2]) - 50.0, float(target[3]) - 50.0)
+        angle += float(obs.get("angular_velocity", 0.0)) * max(0, eta)
+        return 50.0 + math.cos(angle) * radius, 50.0 + math.sin(angle) * radius
+    return float(target[2]), float(target[3])
+
+
+def _aim_angle(obs: dict, source: list, target: list, ships: int) -> float:
+    speed = _fleet_speed(max(1, ships))
+    eta = 0
+    tx = float(target[2])
+    ty = float(target[3])
+    for _ in range(3):
+        dist = math.hypot(tx - float(source[2]), ty - float(source[3]))
+        eta = int(math.ceil(dist / max(speed, 1e-6)))
+        tx, ty = _future_target_position(obs, target, eta)
+    return math.atan2(ty - float(source[3]), tx - float(source[2]))
+
+
 def proposal_labels(
     obs: dict,
     player: int,
@@ -60,7 +115,7 @@ def proposal_labels(
         if tgt_idx is None or tgt_idx == src_idx:
             continue
         target_planet = planets[tgt_idx]
-        center_angle = math.atan2(float(target_planet[3]) - float(source[3]), float(target_planet[2]) - float(source[2]))
+        center_angle = _aim_angle(obs, source, target_planet, int(move[2]))
         send[src_idx] = 1.0
         target[src_idx] = int(tgt_idx)
         ship_ratio[src_idx] = min(max(float(move[2]) / source_ships, 0.0), 1.0)
@@ -89,7 +144,11 @@ def proposals_from_model(
     if not planets:
         return []
 
-    planet_features = torch.tensor(encode_planets(obs, player), dtype=torch.float32, device=device).unsqueeze(0)
+    planet_features = torch.tensor(
+        encode_planets(obs, player, include_fleets=False),
+        dtype=torch.float32,
+        device=device,
+    ).unsqueeze(0)
     global_features = torch.tensor(encode_global(obs, player), dtype=torch.float32, device=device).unsqueeze(0)
     with torch.no_grad():
         pred = model.proposal(planet_features, global_features)
@@ -124,19 +183,20 @@ def proposals_from_model(
         top_targets = torch.topk(logits, k=min(cfg.top_targets_per_source, len(planets))).indices.tolist()
         target_idx = int(top_targets[0])
         target = planets[target_idx]
-        base_angle = math.atan2(float(target[3]) - float(src[3]), float(target[2]) - float(src[2]))
-        angle = base_angle + float(angle_offset[src_idx]) * cfg.max_angle_offset
         ratio = max(float(ship_ratio[src_idx]), cfg.min_ship_ratio)
         ships = max(1, min(int(float(src[5])), int(float(src[5]) * ratio)))
+        base_angle = _aim_angle(obs, src, target, ships)
+        angle = base_angle + float(angle_offset[src_idx]) * cfg.max_angle_offset
         if ships > 0:
             action.append([int(src[0]), float(angle), int(ships)])
 
         for choice in cfg.ship_ratio_choices:
             ships_variant = max(1, min(int(float(src[5])), int(float(src[5]) * choice)))
-            variants.append([[int(src[0]), float(angle), int(ships_variant)]])
+            variant_angle = _aim_angle(obs, src, target, ships_variant) + float(angle_offset[src_idx]) * cfg.max_angle_offset
+            variants.append([[int(src[0]), float(variant_angle), int(ships_variant)]])
         for alt_idx in top_targets[1:]:
             alt = planets[int(alt_idx)]
-            alt_angle = math.atan2(float(alt[3]) - float(src[3]), float(alt[2]) - float(src[2]))
+            alt_angle = _aim_angle(obs, src, alt, ships)
             variants.append([[int(src[0]), float(alt_angle), ships]])
 
     out: list[list[list]] = []

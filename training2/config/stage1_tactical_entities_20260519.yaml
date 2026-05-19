@@ -1,0 +1,126 @@
+run:
+  stage: stage1
+
+model:
+  d_model: 192
+  nhead: 6
+  layers: 4
+  dropout: 0.10
+  max_candidates: 32
+
+proposal:
+  enabled: true
+  num_candidates: 8
+  send_threshold: 0.45
+  max_angle_offset: 0.35
+  min_ship_ratio: 0.08
+  ship_ratio_choices: [0.35, 0.60, 0.90]
+  top_targets_per_source: 2
+
+training:
+  batch_size: 1024
+  learning_rate: 0.0002
+  weight_decay: 0.0001
+  updates_per_iteration: 100
+  value_loss_weight: 0.5
+  entropy_weight: 0.01
+  device: cuda
+  swanlab_project: orbit-wars
+  swanlab_experiment: training2-stage1-tactical-entities-20260519
+  swanlab_mode: cloud
+
+ray:
+  # Use a fresh local Ray runtime for this schema refresh. The long-running
+  # shared cluster may have worker nodes with stale training2 imports.
+  num_trainer_workers: 7
+  gpus_per_trainer: 1.0
+  cpus_per_trainer: 0.5
+  num_data_workers: 16
+  num_eval_workers: 4
+  episodes_per_worker: 2
+  eval_gpus_per_worker: 0.0
+  sharded_offline: true
+  weight_sync_interval: 5
+  address:
+  rollout_resource:
+  temp_dir: data/ray_te_20260519
+
+offline_data:
+  # Bootstrap first so stage1 can start in roughly the same wall time as the
+  # previous 10k run. The richer feature schema writes substantially larger
+  # rows, so we can extend this later if alignment saturates.
+  episodes: 3000
+  num_workers: 16
+  episodes_per_task: 4
+  four_player_prob: 0.3
+  shuffle_candidates: true
+  output_path: data/training2/stage1_tactical_entities_20260519
+  output_shards: 128
+
+historical_replay:
+  enabled: false
+  paths:
+    - data/online_replay_converted_test
+  keep_noop_prob: 0.2
+
+stage1:
+  oracle: rl_informed_regular
+  resume_from: training2/checkpoints/stage1_regular_current_20260518/latest.pt
+  data_source: offline
+  offline_data_paths:
+    - data/training2/stage1_tactical_entities_20260519
+  keep_single_candidate_prob: 0.15
+  data_four_player_prob: 0.3
+  eval_four_player_prob: 0.3
+  eval_use_model_proposals: false
+  eval_device: cpu
+  max_iterations: 500
+  eval_interval: 50
+  eval_games: 100
+  alignment_eval_samples: 4096
+  alignment_eval_interval: 10
+  win_rate_threshold: 0.50
+  replay_capacity: 200000
+  output_dir: training2/checkpoints/stage1_tactical_entities_20260519
+
+stage15:
+  resume_from: training2/checkpoints/stage1_tactical_entities_20260519/latest.pt
+  output_dir: training2/checkpoints/stage15_tactical_entities_20260519
+  swanlab_experiment: training2-stage15-tactical-entities-20260519
+  oracle: rl_informed_regular
+  max_iterations: 1000
+  games_per_iteration: 32
+  num_rollout_workers: 32
+  games_per_rollout_task: 1
+  cpus_per_rollout: 1.0
+  num_trainer_workers: 7
+  cpus_per_trainer: 0.5
+  num_eval_workers: 4
+  device: cuda
+  rollout_device: cpu
+  eval_device: cpu
+  gpus_per_trainer: 1.0
+  gpus_per_rollout: 0.0
+  eval_gpus_per_worker: 0.0
+  batch_size: 2048
+  learning_rate: 0.00005
+  updates_per_iteration: 30
+  replay_capacity: 200000
+  value_loss_weight: 0.5
+  entropy_weight: 0.01
+  four_player_prob: 0.3
+  temperature: 0.4
+  epsilon: 0.0
+  reward_mode: paired_margin_advantage
+  advantage_margin_threshold: 0.0
+  advantage_value_scale: 2000.0
+  min_policy_weight: 0.25
+  max_policy_weight: 2.0
+  positive_policy_weight: 1.25
+  negative_policy_weight: 1.0
+  eval_interval: 20
+  eval_games: 100
+
+env:
+  backend: fast
+  use_numba: true
