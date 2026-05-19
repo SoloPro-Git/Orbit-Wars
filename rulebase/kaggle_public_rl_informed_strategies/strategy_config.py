@@ -6472,6 +6472,84 @@ ABLATION_SUITES["myreplay_plan029_p2_no_attack_fallback"] = {
     ),
 }
 
+ABLATION_SUITES["myreplay_plan030_p4_wave_source_guard"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "p4_send_filter_prod3_s35_130_m5": from_base(
+        REGULAR_CONFIG,
+        enable_source_threat_send_filter=True,
+        source_threat_send_min_active_players=4,
+        source_threat_send_max_active_players=4,
+        source_threat_send_min_step=35,
+        source_threat_send_max_step=130,
+        source_threat_send_min_production=3.0,
+        source_threat_send_radius=45.0,
+        source_threat_send_margin=5,
+        source_threat_send_roi_multiplier=1.35,
+        source_threat_send_min_net_value=25.0,
+        source_threat_send_trade_ratio=1.10,
+    ),
+    "p4_send_filter_prod3_s35_150_m4": from_base(
+        REGULAR_CONFIG,
+        enable_source_threat_send_filter=True,
+        source_threat_send_min_active_players=4,
+        source_threat_send_max_active_players=4,
+        source_threat_send_min_step=35,
+        source_threat_send_max_step=150,
+        source_threat_send_min_production=3.0,
+        source_threat_send_radius=45.0,
+        source_threat_send_margin=4,
+        source_threat_send_roi_multiplier=1.35,
+        source_threat_send_min_net_value=25.0,
+        source_threat_send_trade_ratio=1.05,
+    ),
+    "p4_source_reserve_prod3_s45_150_m6": from_base(
+        REGULAR_CONFIG,
+        enable_source_threat_reserve=True,
+        source_threat_min_active_players=4,
+        source_threat_min_step=45,
+        source_threat_max_step=150,
+        source_threat_min_production=3.0,
+        source_threat_radius=45.0,
+        source_threat_enemy_send_fraction=0.85,
+        source_threat_enemy_launch_window=8,
+        source_threat_enemy_reserve_turns=2,
+        source_threat_max_arrival=45,
+        source_threat_margin=6,
+        source_threat_roi_multiplier=1.35,
+        source_threat_min_net_value=25.0,
+    ),
+    "p4_send_filter_plus_reserve_prod3": from_base(
+        REGULAR_CONFIG,
+        enable_source_threat_send_filter=True,
+        source_threat_send_min_active_players=4,
+        source_threat_send_max_active_players=4,
+        source_threat_send_min_step=35,
+        source_threat_send_max_step=130,
+        source_threat_send_min_production=3.0,
+        source_threat_send_radius=45.0,
+        source_threat_send_margin=5,
+        source_threat_send_roi_multiplier=1.35,
+        source_threat_send_min_net_value=25.0,
+        source_threat_send_trade_ratio=1.10,
+        enable_source_threat_reserve=True,
+        source_threat_min_active_players=4,
+        source_threat_min_step=45,
+        source_threat_max_step=150,
+        source_threat_min_production=3.0,
+        source_threat_radius=45.0,
+        source_threat_margin=6,
+        source_threat_roi_multiplier=1.35,
+        source_threat_min_net_value=25.0,
+    ),
+}
+
+ABLATION_SUITES["myreplay_plan031_p4_source_reserve_confirm"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "p4_source_reserve_prod3_s45_150_m6": ABLATION_SUITES["myreplay_plan030_p4_wave_source_guard"][
+        "p4_source_reserve_prod3_s45_150_m6"
+    ],
+}
+
 ABLATION_SUITES["myreplay_plan026_p4_source_gate_border"] = {
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
     "p4_source_gate_prod2_m6_s35_130": from_base(
