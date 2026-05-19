@@ -1045,6 +1045,7 @@ def main() -> None:
 
     try:
         progress = tqdm(range(iterations), desc="[Stage1]", unit="iter")
+        last_alignment_top1 = 0.0
         for iteration in progress:
             t0 = time.time()
             if data_source == "online":
@@ -1194,12 +1195,15 @@ def main() -> None:
                     best_win_rate = win_rate
                     ray.get(trainer_actors[0].save.remote(str(output_dir / "best.pt"), iteration, cfg, best_win_rate))
 
+            if "align/new_oracle_top1" in log:
+                last_alignment_top1 = float(log["align/new_oracle_top1"])
+            log["align/last_new_oracle_top1"] = last_alignment_top1
             if swan:
                 swan.log(log, step=iteration)
             print(json.dumps(log, ensure_ascii=False), flush=True)
             progress.set_postfix(
                 loss=f"{log.get('train/loss', 0.0):.3f}",
-                align=f"{log.get('align/new_oracle_top1', 0.0):.3f}",
+                align=f"{last_alignment_top1:.3f}",
                 win=f"{log.get('eval/win_rate_vs_regular', -1.0):.3f}",
             )
 
