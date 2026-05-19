@@ -34,6 +34,8 @@ previous feature schema.
    - Connect to the multi-node Ray cluster and use fractional GPU trainer
      actors, three trainers per GPU, to keep the full H20 pool saturated during
      stage1 and stage1.5.
+   - Keep per-trainer updates low enough that total global updates stay close
+     to the earlier 7-trainer run.
    - Keep model proposals disabled in stage1 eval.
 
 3. Watch the first 10-20 iterations.
