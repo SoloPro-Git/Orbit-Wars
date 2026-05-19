@@ -32,8 +32,8 @@ training:
 ray:
   # Use a fresh local Ray runtime for this schema refresh. The long-running
   # shared cluster may have worker nodes with stale training2 imports.
-  num_trainer_workers: 7
-  gpus_per_trainer: 1.0
+  num_trainer_workers: 24
+  gpus_per_trainer: 0.333
   cpus_per_trainer: 0.5
   num_data_workers: 16
   num_eval_workers: 4
@@ -93,13 +93,13 @@ stage15:
   num_rollout_workers: 32
   games_per_rollout_task: 1
   cpus_per_rollout: 1.0
-  num_trainer_workers: 7
+  num_trainer_workers: 24
   cpus_per_trainer: 0.5
   num_eval_workers: 4
   device: cuda
   rollout_device: cpu
   eval_device: cpu
-  gpus_per_trainer: 1.0
+  gpus_per_trainer: 0.333
   gpus_per_rollout: 0.0
   eval_gpus_per_worker: 0.0
   batch_size: 2048

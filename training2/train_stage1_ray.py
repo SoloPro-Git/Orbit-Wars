@@ -521,7 +521,8 @@ def _train_batch(model, opt, rows: list[dict], device: str) -> dict:
                     out[i, : len(values)] = torch.tensor(values, dtype=torch.long, device=device)
             return out
 
-        prop_valid = pad_float("proposal_valid") * (planets[..., -1] > 0.0).float()
+        entity_valid = (planets.abs().sum(dim=-1) > 0.0).float()
+        prop_valid = pad_float("proposal_valid") * entity_valid
         prop_send = pad_float("proposal_send")
         prop_target = pad_long("proposal_target")
         prop_ship = pad_float("proposal_ship_ratio")
