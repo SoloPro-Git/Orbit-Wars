@@ -67,6 +67,16 @@ class StrategyConfig:
     contested_enemy_weight: float = 1.0
     contested_friendly_credit: float = 0.75
     contested_skip_friendly_covered: bool = True
+    enable_contested_stop_loss: bool = False
+    contested_stop_loss_min_active_players: int = 0
+    contested_stop_loss_max_active_players: int = 99
+    contested_stop_loss_window: int = 40
+    contested_stop_loss_flip_threshold: int = 3
+    contested_stop_loss_low_prod_max: float = 2.0
+    contested_stop_loss_high_prod_exception_min: float = 3.0
+    contested_stop_loss_penalty: float = 45.0
+    contested_stop_loss_min_hold: int = 8
+    contested_stop_loss_prod_hold_turns: int = 3
     enable_dynamic_posture: bool = False
     posture_max_active_players: int = 99
     posture_defensive_min_step: int = 0
@@ -95,6 +105,21 @@ class StrategyConfig:
     value_defense_multiplayer_horizon: int = 0
     value_defense_multiplayer_max_send: int = 0
     value_defense_multiplayer_min_margin: int = 0
+    enable_enemy_wave_preserve_prod: bool = False
+    enemy_wave_preserve_min_active_players: int = 0
+    enemy_wave_preserve_max_active_players: int = 99
+    enemy_wave_preserve_min_step: int = 0
+    enemy_wave_preserve_max_step: int = 180
+    enemy_wave_preserve_min_production: float = 4.0
+    enemy_wave_preserve_horizon: int = 40
+    enemy_wave_preserve_min_enemy_post_capture: int = 30
+    enemy_wave_preserve_margin: int = 10
+    enemy_wave_preserve_min_send: int = 10
+    enemy_wave_preserve_max_send: int = 48
+    enemy_wave_preserve_max_sources: int = 2
+    enemy_wave_preserve_max_targets: int = 1
+    enemy_wave_preserve_source_min_after: int = 6
+    enemy_wave_preserve_source_prod_turns_after: int = 1
     enable_proactive_value_defense: bool = False
     proactive_defense_min_active_players: int = 0
     proactive_defense_max_active_players: int = 99
@@ -273,6 +298,18 @@ class StrategyConfig:
     recent_loss_recapture_max_step: int = 500
     recent_loss_recapture_bonus: float = 25.0
     recent_loss_recapture_prod_weight: float = 5.0
+    enable_dynamic_front_base_recapture: bool = False
+    dynamic_recapture_min_production: float = 2.0
+    dynamic_recapture_enable_2p: bool = True
+    dynamic_recapture_enable_4p_collapse: bool = False
+    dynamic_recapture_collapse_loss_count: int = 2
+    dynamic_recapture_collapse_window: int = 20
+    dynamic_recapture_enable_front_base: bool = False
+    dynamic_recapture_front_own_radius: float = 45.0
+    dynamic_recapture_front_min_own_neighbors: int = 2
+    dynamic_recapture_anchor_window: int = 35
+    dynamic_recapture_anchor_min_production: float = 4.0
+    dynamic_recapture_anchor_radius: float = 55.0
     enable_recent_loss_recapture_hold_gate: bool = False
     recent_loss_recapture_hold_min_active_players: int = 4
     recent_loss_recapture_hold_min_step: int = 45
@@ -344,6 +381,62 @@ class StrategyConfig:
     no_attack_fallback_max_step: int = 500
     no_attack_fallback_candidate_limit: int = 5
     no_attack_fallback_min_attack_delta: int = 0
+    enable_opening_tempo_neutral_fallback: bool = False
+    opening_tempo_min_active_players: int = 0
+    opening_tempo_max_active_players: int = 99
+    opening_tempo_step_limit: int = 50
+    opening_tempo_min_production: float = 3.0
+    opening_tempo_max_target_ships: int = 24
+    opening_tempo_max_eta: int = 35
+    opening_tempo_source_min_production: float = 1.0
+    opening_tempo_source_min_after: int = 5
+    opening_tempo_candidate_limit: int = 6
+    enable_recent_capture_chain_attack: bool = False
+    chain_attack_min_active_players: int = 0
+    chain_attack_max_active_players: int = 99
+    chain_attack_min_step: int = 0
+    chain_attack_max_step: int = 120
+    chain_attack_source_window: int = 24
+    chain_attack_source_min_production: float = 3.0
+    chain_attack_target_min_production: float = 3.0
+    chain_attack_max_eta: int = 28
+    chain_attack_source_order_bonus: float = 1000.0
+    chain_attack_enemy_bonus: float = 45.0
+    chain_attack_neutral_bonus: float = 20.0
+    enable_mobile_relay_attack: bool = False
+    mobile_relay_min_active_players: int = 4
+    mobile_relay_max_active_players: int = 4
+    mobile_relay_min_step: int = 0
+    mobile_relay_max_step: int = 140
+    mobile_relay_max_ships: int = 18
+    mobile_relay_min_production: float = 1.0
+    mobile_relay_goal_min_production: float = 4.0
+    mobile_relay_direct_min_eta: int = 45
+    mobile_relay_max_first_eta: int = 30
+    mobile_relay_max_second_eta: int = 35
+    mobile_relay_min_eta_savings: int = 10
+    mobile_relay_bonus: float = 55.0
+    mobile_relay_comet_min_remaining: int = 45
+    mobile_relay_recent_source_window: int = 45
+    mobile_relay_source_order_bonus: float = 900.0
+    mobile_relay_source_target_bonus: float = 55.0
+    enable_recent_high_prod_hub_support: bool = False
+    hub_support_min_active_players: int = 0
+    hub_support_max_active_players: int = 99
+    hub_support_min_step: int = 0
+    hub_support_max_step: int = 120
+    hub_support_recent_capture_window: int = 24
+    hub_support_min_production: float = 3.0
+    hub_support_enemy_radius: float = 55.0
+    hub_support_base_margin: int = 6
+    hub_support_prod_turns: int = 3
+    hub_support_front_bonus: int = 6
+    hub_support_max_eta: int = 28
+    hub_support_min_send: int = 6
+    hub_support_max_send: int = 32
+    hub_support_source_min_after: int = 6
+    hub_support_source_prod_turns_after: int = 1
+    hub_support_max_targets: int = 1
     enable_multiplayer_diplomacy_score: bool = False
     multiplayer_min_active_players: int = 4
     multiplayer_far_enemy_distance: float = 45.0
@@ -700,7 +793,46 @@ TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P2TRICKLE_S30_P4MIDBORDER_S40_REGU
         "midgame_border_threat_margin": 5,
     }
 )
-REGULAR_CONFIG = TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P2TRICKLE_S30_P4MIDBORDER_S40_REGULAR_CONFIG
+TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P2TRICKLE_S30_P4MIDBORDER_S40_P4CHAIN_SRC4_REGULAR_CONFIG = StrategyConfig(
+    **{
+        **TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P2TRICKLE_S30_P4MIDBORDER_S40_REGULAR_CONFIG.to_agent_kwargs(),
+        "enable_recent_capture_chain_attack": True,
+        "chain_attack_min_active_players": 4,
+        "chain_attack_max_active_players": 4,
+        "chain_attack_min_step": 0,
+        "chain_attack_max_step": 140,
+        "chain_attack_source_window": 30,
+        "chain_attack_source_min_production": 4.0,
+        "chain_attack_target_min_production": 3.0,
+        "chain_attack_max_eta": 30,
+        "chain_attack_source_order_bonus": 1000.0,
+        "chain_attack_enemy_bonus": 55.0,
+        "chain_attack_neutral_bonus": 15.0,
+    }
+)
+TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P2TRICKLE_S30_P4MIDBORDER_S40_P4CHAIN_SRC4_P4MOBILEBASE_REGULAR_CONFIG = StrategyConfig(
+    **{
+        **TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P2TRICKLE_S30_P4MIDBORDER_S40_P4CHAIN_SRC4_REGULAR_CONFIG.to_agent_kwargs(),
+        "enable_mobile_relay_attack": True,
+        "mobile_relay_min_active_players": 4,
+        "mobile_relay_max_active_players": 4,
+        "mobile_relay_min_step": 0,
+        "mobile_relay_max_step": 140,
+        "mobile_relay_max_ships": 20,
+        "mobile_relay_min_production": 4.0,
+        "mobile_relay_goal_min_production": 4.0,
+        "mobile_relay_direct_min_eta": 10,
+        "mobile_relay_max_first_eta": 32,
+        "mobile_relay_max_second_eta": 40,
+        "mobile_relay_min_eta_savings": -10,
+        "mobile_relay_bonus": 55.0,
+        "mobile_relay_comet_min_remaining": 55,
+        "mobile_relay_recent_source_window": 45,
+        "mobile_relay_source_order_bonus": 900.0,
+        "mobile_relay_source_target_bonus": 55.0,
+    }
+)
+REGULAR_CONFIG = TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P2TRICKLE_S30_P4MIDBORDER_S40_P4CHAIN_SRC4_P4MOBILEBASE_REGULAR_CONFIG
 PRE_HOLDABILITY_REGULAR_CONFIG = StrategyConfig(
     target_candidate_limit=2,
     min_ships_mine_attack=12,
@@ -940,6 +1072,8 @@ HISTORICAL_BEST_VARIANTS = {
     "tail_m2_max14_net7_overpay4_p4lowhome_active4_regular": TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_REGULAR_CONFIG.to_agent_kwargs(),
     "tail_m2_max14_net7_overpay4_p4lowhome_active4_p2trickle_s30_regular": TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P2TRICKLE_S30_REGULAR_CONFIG.to_agent_kwargs(),
     "tail_m2_max14_net7_overpay4_p4lowhome_active4_p2trickle_s30_p4midborder_s40_regular": TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P2TRICKLE_S30_P4MIDBORDER_S40_REGULAR_CONFIG.to_agent_kwargs(),
+    "tail_m2_max14_net7_overpay4_p4lowhome_active4_p2trickle_s30_p4midborder_s40_p4chain_src4_regular": TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P2TRICKLE_S30_P4MIDBORDER_S40_P4CHAIN_SRC4_REGULAR_CONFIG.to_agent_kwargs(),
+    "tail_m2_max14_net7_overpay4_p4lowhome_active4_p2trickle_s30_p4midborder_s40_p4chain_src4_p4mobilebase_regular": TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P2TRICKLE_S30_P4MIDBORDER_S40_P4CHAIN_SRC4_P4MOBILEBASE_REGULAR_CONFIG.to_agent_kwargs(),
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
 }
@@ -1548,6 +1682,8 @@ CHAMPION_OPPONENT_VARIANTS = {
     "public_original": None,
     "regular_config": REGULAR_CONFIG.to_agent_kwargs(),
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "tail_m2_max14_net7_overpay4_p4lowhome_active4_p2trickle_s30_p4midborder_s40_p4chain_src4_p4mobilebase_regular": TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P2TRICKLE_S30_P4MIDBORDER_S40_P4CHAIN_SRC4_P4MOBILEBASE_REGULAR_CONFIG.to_agent_kwargs(),
+    "tail_m2_max14_net7_overpay4_p4lowhome_active4_p2trickle_s30_p4midborder_s40_p4chain_src4_regular": TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P2TRICKLE_S30_P4MIDBORDER_S40_P4CHAIN_SRC4_REGULAR_CONFIG.to_agent_kwargs(),
     "tail_m2_max14_net7_overpay4_p4lowhome_active4_regular": TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_REGULAR_CONFIG.to_agent_kwargs(),
     "tail_m2_max14_net7_overpay4_regular_candidate": TAIL_M2_MAX14_NET7_OVERPAY4_REGULAR_CANDIDATE_CONFIG.to_agent_kwargs(),
     "tail_m2_max14_net7_regular_candidate": TAIL_M2_MAX14_NET7_REGULAR_CANDIDATE_CONFIG.to_agent_kwargs(),
@@ -6550,6 +6686,655 @@ ABLATION_SUITES["myreplay_plan031_p4_source_reserve_confirm"] = {
     ],
 }
 
+ABLATION_SUITES["vadasz_plan001_opening_tempo_neutral"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "p4_tempo_prod3_s50_ship24_eta35_after5": from_base(
+        REGULAR_CONFIG,
+        enable_opening_tempo_neutral_fallback=True,
+        opening_tempo_min_active_players=4,
+        opening_tempo_max_active_players=4,
+        opening_tempo_step_limit=50,
+        opening_tempo_min_production=3.0,
+        opening_tempo_max_target_ships=24,
+        opening_tempo_max_eta=35,
+        opening_tempo_source_min_production=1.0,
+        opening_tempo_source_min_after=5,
+        opening_tempo_candidate_limit=6,
+    ),
+    "p4_tempo_prod3_s45_ship20_eta30_after6": from_base(
+        REGULAR_CONFIG,
+        enable_opening_tempo_neutral_fallback=True,
+        opening_tempo_min_active_players=4,
+        opening_tempo_max_active_players=4,
+        opening_tempo_step_limit=45,
+        opening_tempo_min_production=3.0,
+        opening_tempo_max_target_ships=20,
+        opening_tempo_max_eta=30,
+        opening_tempo_source_min_production=1.0,
+        opening_tempo_source_min_after=6,
+        opening_tempo_candidate_limit=5,
+    ),
+    "p2_tempo_prod3_s45_ship20_eta30_after6": from_base(
+        REGULAR_CONFIG,
+        enable_opening_tempo_neutral_fallback=True,
+        opening_tempo_min_active_players=2,
+        opening_tempo_max_active_players=2,
+        opening_tempo_step_limit=45,
+        opening_tempo_min_production=3.0,
+        opening_tempo_max_target_ships=20,
+        opening_tempo_max_eta=30,
+        opening_tempo_source_min_production=1.0,
+        opening_tempo_source_min_after=6,
+        opening_tempo_candidate_limit=5,
+    ),
+}
+
+ABLATION_SUITES["vadasz_plan002_candidate_breadth"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "candidate_limit3": from_base(
+        REGULAR_CONFIG,
+        target_candidate_limit=3,
+    ),
+    "candidate_limit4": from_base(
+        REGULAR_CONFIG,
+        target_candidate_limit=4,
+    ),
+    "global_priority_light": from_base(
+        REGULAR_CONFIG,
+        enable_global_attack_priority=True,
+        global_attack_max_failed_pairs=96,
+        global_attack_roi_weight=0.01,
+        global_attack_arrival_penalty=0.10,
+    ),
+    "global_priority_roi": from_base(
+        REGULAR_CONFIG,
+        enable_global_attack_priority=True,
+        global_attack_max_failed_pairs=128,
+        global_attack_roi_weight=0.02,
+        global_attack_arrival_penalty=0.15,
+    ),
+}
+
+ABLATION_SUITES["vadasz_plan003_key_star_hold"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "urgent_value_h18_m10_send32": from_base(
+        REGULAR_CONFIG,
+        enable_value_defense=True,
+        value_defense_min_production=4.0,
+        value_defense_horizon=18,
+        value_defense_buffer_turns=2,
+        value_defense_min_margin=10,
+        value_defense_max_send=32,
+        value_defense_roi_multiplier=1.10,
+        value_defense_multiplayer_min_active_players=4,
+        value_defense_multiplayer_horizon=18,
+        value_defense_multiplayer_max_send=32,
+        value_defense_multiplayer_min_margin=10,
+    ),
+    "urgent_value_h12_m8_send24": from_base(
+        REGULAR_CONFIG,
+        enable_value_defense=True,
+        value_defense_min_production=4.0,
+        value_defense_horizon=12,
+        value_defense_buffer_turns=1,
+        value_defense_min_margin=8,
+        value_defense_max_send=24,
+        value_defense_roi_multiplier=1.05,
+        value_defense_multiplayer_min_active_players=4,
+        value_defense_multiplayer_horizon=12,
+        value_defense_multiplayer_max_send=24,
+        value_defense_multiplayer_min_margin=8,
+    ),
+    "recapture_hold_prod4_w60_m10": from_base(
+        REGULAR_CONFIG,
+        enable_recent_loss_recapture_hold_gate=True,
+        recent_loss_recapture_hold_min_active_players=4,
+        recent_loss_recapture_hold_min_step=35,
+        recent_loss_recapture_hold_max_step=180,
+        recent_loss_recapture_hold_window=60,
+        recent_loss_recapture_hold_min_production=4.0,
+        recent_loss_recapture_hold_enemy_radius=45.0,
+        recent_loss_recapture_hold_margin=10,
+        recent_loss_recapture_hold_allow_extra_send=True,
+    ),
+    "urgent_value_plus_recapture_hold": from_base(
+        REGULAR_CONFIG,
+        enable_value_defense=True,
+        value_defense_min_production=4.0,
+        value_defense_horizon=18,
+        value_defense_buffer_turns=2,
+        value_defense_min_margin=10,
+        value_defense_max_send=32,
+        value_defense_roi_multiplier=1.10,
+        value_defense_multiplayer_min_active_players=4,
+        value_defense_multiplayer_horizon=18,
+        value_defense_multiplayer_max_send=32,
+        value_defense_multiplayer_min_margin=10,
+        enable_recent_loss_recapture_hold_gate=True,
+        recent_loss_recapture_hold_min_active_players=4,
+        recent_loss_recapture_hold_min_step=35,
+        recent_loss_recapture_hold_max_step=180,
+        recent_loss_recapture_hold_window=60,
+        recent_loss_recapture_hold_min_production=4.0,
+        recent_loss_recapture_hold_enemy_radius=45.0,
+        recent_loss_recapture_hold_margin=10,
+        recent_loss_recapture_hold_allow_extra_send=True,
+    ),
+}
+
+ABLATION_SUITES["vadasz_plan004_high_prod_hub_support"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "p4_hub_prod3_w24_eta28_m6_send32": from_base(
+        REGULAR_CONFIG,
+        enable_recent_high_prod_hub_support=True,
+        hub_support_min_active_players=4,
+        hub_support_max_active_players=4,
+        hub_support_max_step=100,
+        hub_support_recent_capture_window=24,
+        hub_support_min_production=3.0,
+        hub_support_enemy_radius=55.0,
+        hub_support_base_margin=6,
+        hub_support_prod_turns=3,
+        hub_support_front_bonus=6,
+        hub_support_max_eta=28,
+        hub_support_min_send=6,
+        hub_support_max_send=32,
+        hub_support_source_min_after=6,
+        hub_support_source_prod_turns_after=1,
+        hub_support_max_targets=1,
+    ),
+    "p4_hub_prod4_w30_eta30_m8_send36": from_base(
+        REGULAR_CONFIG,
+        enable_recent_high_prod_hub_support=True,
+        hub_support_min_active_players=4,
+        hub_support_max_active_players=4,
+        hub_support_max_step=120,
+        hub_support_recent_capture_window=30,
+        hub_support_min_production=4.0,
+        hub_support_enemy_radius=60.0,
+        hub_support_base_margin=8,
+        hub_support_prod_turns=3,
+        hub_support_front_bonus=8,
+        hub_support_max_eta=30,
+        hub_support_min_send=8,
+        hub_support_max_send=36,
+        hub_support_source_min_after=7,
+        hub_support_source_prod_turns_after=1,
+        hub_support_max_targets=1,
+    ),
+    "p2_hub_prod3_w24_eta28_m6_send28": from_base(
+        REGULAR_CONFIG,
+        enable_recent_high_prod_hub_support=True,
+        hub_support_min_active_players=2,
+        hub_support_max_active_players=2,
+        hub_support_max_step=100,
+        hub_support_recent_capture_window=24,
+        hub_support_min_production=3.0,
+        hub_support_enemy_radius=55.0,
+        hub_support_base_margin=6,
+        hub_support_prod_turns=3,
+        hub_support_front_bonus=6,
+        hub_support_max_eta=28,
+        hub_support_min_send=6,
+        hub_support_max_send=28,
+        hub_support_source_min_after=6,
+        hub_support_source_prod_turns_after=1,
+        hub_support_max_targets=1,
+    ),
+}
+
+ABLATION_SUITES["vadasz_plan005_enemy_wave_preserve_prod"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "p4_wave_prod4_h35_post30_m10_send48_src2": from_base(
+        REGULAR_CONFIG,
+        enable_enemy_wave_preserve_prod=True,
+        enemy_wave_preserve_min_active_players=4,
+        enemy_wave_preserve_max_active_players=4,
+        enemy_wave_preserve_min_step=35,
+        enemy_wave_preserve_max_step=170,
+        enemy_wave_preserve_min_production=4.0,
+        enemy_wave_preserve_horizon=35,
+        enemy_wave_preserve_min_enemy_post_capture=30,
+        enemy_wave_preserve_margin=10,
+        enemy_wave_preserve_min_send=10,
+        enemy_wave_preserve_max_send=48,
+        enemy_wave_preserve_max_sources=2,
+        enemy_wave_preserve_max_targets=1,
+        enemy_wave_preserve_source_min_after=6,
+        enemy_wave_preserve_source_prod_turns_after=1,
+    ),
+    "p4_wave_prod4_h45_post45_m12_send56_src2": from_base(
+        REGULAR_CONFIG,
+        enable_enemy_wave_preserve_prod=True,
+        enemy_wave_preserve_min_active_players=4,
+        enemy_wave_preserve_max_active_players=4,
+        enemy_wave_preserve_min_step=40,
+        enemy_wave_preserve_max_step=180,
+        enemy_wave_preserve_min_production=4.0,
+        enemy_wave_preserve_horizon=45,
+        enemy_wave_preserve_min_enemy_post_capture=45,
+        enemy_wave_preserve_margin=12,
+        enemy_wave_preserve_min_send=12,
+        enemy_wave_preserve_max_send=56,
+        enemy_wave_preserve_max_sources=2,
+        enemy_wave_preserve_max_targets=1,
+        enemy_wave_preserve_source_min_after=7,
+        enemy_wave_preserve_source_prod_turns_after=1,
+    ),
+    "p2_wave_prod3_h40_post45_m12_send56_src2": from_base(
+        REGULAR_CONFIG,
+        enable_enemy_wave_preserve_prod=True,
+        enemy_wave_preserve_min_active_players=2,
+        enemy_wave_preserve_max_active_players=2,
+        enemy_wave_preserve_min_step=45,
+        enemy_wave_preserve_max_step=220,
+        enemy_wave_preserve_min_production=3.0,
+        enemy_wave_preserve_horizon=40,
+        enemy_wave_preserve_min_enemy_post_capture=45,
+        enemy_wave_preserve_margin=12,
+        enemy_wave_preserve_min_send=12,
+        enemy_wave_preserve_max_send=56,
+        enemy_wave_preserve_max_sources=2,
+        enemy_wave_preserve_max_targets=1,
+        enemy_wave_preserve_source_min_after=7,
+        enemy_wave_preserve_source_prod_turns_after=1,
+    ),
+    "p2_wave_prod4_h45_post60_m14_send64_src2": from_base(
+        REGULAR_CONFIG,
+        enable_enemy_wave_preserve_prod=True,
+        enemy_wave_preserve_min_active_players=2,
+        enemy_wave_preserve_max_active_players=2,
+        enemy_wave_preserve_min_step=60,
+        enemy_wave_preserve_max_step=240,
+        enemy_wave_preserve_min_production=4.0,
+        enemy_wave_preserve_horizon=45,
+        enemy_wave_preserve_min_enemy_post_capture=60,
+        enemy_wave_preserve_margin=14,
+        enemy_wave_preserve_min_send=14,
+        enemy_wave_preserve_max_send=64,
+        enemy_wave_preserve_max_sources=2,
+        enemy_wave_preserve_max_targets=1,
+        enemy_wave_preserve_source_min_after=8,
+        enemy_wave_preserve_source_prod_turns_after=1,
+    ),
+}
+
+ABLATION_SUITES["vadasz_plan006_dynamic_front_base_recapture"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "p2_dynamic_recap_p2_w45_b25_pw4": from_base(
+        REGULAR_CONFIG,
+        enable_dynamic_front_base_recapture=True,
+        dynamic_recapture_min_production=2.0,
+        dynamic_recapture_enable_2p=True,
+        dynamic_recapture_enable_4p_collapse=False,
+        dynamic_recapture_enable_front_base=False,
+        recent_loss_recapture_window=45,
+        recent_loss_recapture_bonus=25.0,
+        recent_loss_recapture_prod_weight=4.0,
+    ),
+    "p2_dynamic_recap_p2_w50_b35_pw5": from_base(
+        REGULAR_CONFIG,
+        enable_dynamic_front_base_recapture=True,
+        dynamic_recapture_min_production=2.0,
+        dynamic_recapture_enable_2p=True,
+        dynamic_recapture_enable_4p_collapse=False,
+        dynamic_recapture_enable_front_base=False,
+        recent_loss_recapture_window=50,
+        recent_loss_recapture_bonus=35.0,
+        recent_loss_recapture_prod_weight=5.0,
+    ),
+    "p4_collapse_recap_p2_loss2w20": from_base(
+        REGULAR_CONFIG,
+        enable_dynamic_front_base_recapture=True,
+        dynamic_recapture_min_production=2.0,
+        dynamic_recapture_enable_2p=False,
+        dynamic_recapture_enable_4p_collapse=True,
+        dynamic_recapture_collapse_loss_count=2,
+        dynamic_recapture_collapse_window=20,
+        dynamic_recapture_enable_front_base=False,
+    ),
+    "p2_or_p4_collapse_recap_p2": from_base(
+        REGULAR_CONFIG,
+        enable_dynamic_front_base_recapture=True,
+        dynamic_recapture_min_production=2.0,
+        dynamic_recapture_enable_2p=True,
+        dynamic_recapture_enable_4p_collapse=True,
+        dynamic_recapture_collapse_loss_count=2,
+        dynamic_recapture_collapse_window=20,
+        dynamic_recapture_enable_front_base=False,
+    ),
+    "frontbase_recap_p2_near2own45": from_base(
+        REGULAR_CONFIG,
+        enable_dynamic_front_base_recapture=True,
+        dynamic_recapture_min_production=2.0,
+        dynamic_recapture_enable_2p=False,
+        dynamic_recapture_enable_4p_collapse=False,
+        dynamic_recapture_enable_front_base=True,
+        dynamic_recapture_front_own_radius=45.0,
+        dynamic_recapture_front_min_own_neighbors=2,
+        dynamic_recapture_anchor_window=35,
+        dynamic_recapture_anchor_min_production=4.0,
+        dynamic_recapture_anchor_radius=55.0,
+    ),
+}
+
+ABLATION_SUITES["vadasz_plan007_recent_capture_chain_attack"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "p4_chain_srcp3_tgtp3_w24_eta28_enemy45_neu20": from_base(
+        REGULAR_CONFIG,
+        enable_recent_capture_chain_attack=True,
+        chain_attack_min_active_players=4,
+        chain_attack_max_active_players=4,
+        chain_attack_min_step=0,
+        chain_attack_max_step=120,
+        chain_attack_source_window=24,
+        chain_attack_source_min_production=3.0,
+        chain_attack_target_min_production=3.0,
+        chain_attack_max_eta=28,
+        chain_attack_source_order_bonus=1000.0,
+        chain_attack_enemy_bonus=45.0,
+        chain_attack_neutral_bonus=20.0,
+    ),
+    "p4_chain_enemy_only_srcp3_tgtp3_w24_eta24_b60": from_base(
+        REGULAR_CONFIG,
+        enable_recent_capture_chain_attack=True,
+        chain_attack_min_active_players=4,
+        chain_attack_max_active_players=4,
+        chain_attack_min_step=10,
+        chain_attack_max_step=120,
+        chain_attack_source_window=24,
+        chain_attack_source_min_production=3.0,
+        chain_attack_target_min_production=3.0,
+        chain_attack_max_eta=24,
+        chain_attack_source_order_bonus=1000.0,
+        chain_attack_enemy_bonus=60.0,
+        chain_attack_neutral_bonus=0.0,
+    ),
+    "p4_chain_srcp4_tgtp3_w30_eta30_enemy55_neu15": from_base(
+        REGULAR_CONFIG,
+        enable_recent_capture_chain_attack=True,
+        chain_attack_min_active_players=4,
+        chain_attack_max_active_players=4,
+        chain_attack_min_step=0,
+        chain_attack_max_step=140,
+        chain_attack_source_window=30,
+        chain_attack_source_min_production=4.0,
+        chain_attack_target_min_production=3.0,
+        chain_attack_max_eta=30,
+        chain_attack_source_order_bonus=1000.0,
+        chain_attack_enemy_bonus=55.0,
+        chain_attack_neutral_bonus=15.0,
+    ),
+    "p2_chain_srcp3_tgtp4_w20_eta24_enemy40_neu10": from_base(
+        REGULAR_CONFIG,
+        enable_recent_capture_chain_attack=True,
+        chain_attack_min_active_players=2,
+        chain_attack_max_active_players=2,
+        chain_attack_min_step=0,
+        chain_attack_max_step=110,
+        chain_attack_source_window=20,
+        chain_attack_source_min_production=3.0,
+        chain_attack_target_min_production=4.0,
+        chain_attack_max_eta=24,
+        chain_attack_source_order_bonus=1000.0,
+        chain_attack_enemy_bonus=40.0,
+        chain_attack_neutral_bonus=10.0,
+    ),
+    "all_chain_srcp3_tgtp3_w20_eta22_enemy35_neu10": from_base(
+        REGULAR_CONFIG,
+        enable_recent_capture_chain_attack=True,
+        chain_attack_min_active_players=0,
+        chain_attack_max_active_players=99,
+        chain_attack_min_step=0,
+        chain_attack_max_step=110,
+        chain_attack_source_window=20,
+        chain_attack_source_min_production=3.0,
+        chain_attack_target_min_production=3.0,
+        chain_attack_max_eta=22,
+        chain_attack_source_order_bonus=1000.0,
+        chain_attack_enemy_bonus=35.0,
+        chain_attack_neutral_bonus=10.0,
+    ),
+}
+
+ABLATION_SUITES["vadasz_plan007_recent_capture_chain_attack_focus"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "p4_chain_srcp4_tgtp3_w30_eta30_enemy55_neu15": ABLATION_SUITES[
+        "vadasz_plan007_recent_capture_chain_attack"
+    ]["p4_chain_srcp4_tgtp3_w30_eta30_enemy55_neu15"],
+}
+
+ABLATION_SUITES["vadasz_plan008_contested_stop_loss"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "p4_stoploss_prod2_w40_f3_p35_hold8": from_base(
+        REGULAR_CONFIG,
+        enable_contested_stop_loss=True,
+        contested_stop_loss_min_active_players=4,
+        contested_stop_loss_max_active_players=4,
+        contested_stop_loss_window=40,
+        contested_stop_loss_flip_threshold=3,
+        contested_stop_loss_low_prod_max=2.0,
+        contested_stop_loss_high_prod_exception_min=3.0,
+        contested_stop_loss_penalty=35.0,
+        contested_stop_loss_min_hold=8,
+        contested_stop_loss_prod_hold_turns=3,
+    ),
+    "p4_stoploss_prod2_w45_f3_p50_hold10": from_base(
+        REGULAR_CONFIG,
+        enable_contested_stop_loss=True,
+        contested_stop_loss_min_active_players=4,
+        contested_stop_loss_max_active_players=4,
+        contested_stop_loss_window=45,
+        contested_stop_loss_flip_threshold=3,
+        contested_stop_loss_low_prod_max=2.0,
+        contested_stop_loss_high_prod_exception_min=3.0,
+        contested_stop_loss_penalty=50.0,
+        contested_stop_loss_min_hold=10,
+        contested_stop_loss_prod_hold_turns=4,
+    ),
+    "p4_stoploss_prod1_w40_f3_p50_hold8": from_base(
+        REGULAR_CONFIG,
+        enable_contested_stop_loss=True,
+        contested_stop_loss_min_active_players=4,
+        contested_stop_loss_max_active_players=4,
+        contested_stop_loss_window=40,
+        contested_stop_loss_flip_threshold=3,
+        contested_stop_loss_low_prod_max=1.0,
+        contested_stop_loss_high_prod_exception_min=3.0,
+        contested_stop_loss_penalty=50.0,
+        contested_stop_loss_min_hold=8,
+        contested_stop_loss_prod_hold_turns=3,
+    ),
+    "all_stoploss_prod1_w40_f3_p35_hold8": from_base(
+        REGULAR_CONFIG,
+        enable_contested_stop_loss=True,
+        contested_stop_loss_min_active_players=0,
+        contested_stop_loss_max_active_players=99,
+        contested_stop_loss_window=40,
+        contested_stop_loss_flip_threshold=3,
+        contested_stop_loss_low_prod_max=1.0,
+        contested_stop_loss_high_prod_exception_min=3.0,
+        contested_stop_loss_penalty=35.0,
+        contested_stop_loss_min_hold=8,
+        contested_stop_loss_prod_hold_turns=3,
+    ),
+}
+
+ABLATION_SUITES["vadasz_plan009_mobile_relay_attack"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "p4_mobile_relay_prod4_direct45_saving10": from_base(
+        REGULAR_CONFIG,
+        enable_mobile_relay_attack=True,
+        mobile_relay_min_active_players=4,
+        mobile_relay_max_active_players=4,
+        mobile_relay_min_step=0,
+        mobile_relay_max_step=140,
+        mobile_relay_max_ships=18,
+        mobile_relay_min_production=1.0,
+        mobile_relay_goal_min_production=4.0,
+        mobile_relay_direct_min_eta=45,
+        mobile_relay_max_first_eta=30,
+        mobile_relay_max_second_eta=35,
+        mobile_relay_min_eta_savings=10,
+        mobile_relay_bonus=55.0,
+        mobile_relay_comet_min_remaining=45,
+        mobile_relay_recent_source_window=45,
+        mobile_relay_source_order_bonus=900.0,
+        mobile_relay_source_target_bonus=55.0,
+    ),
+    "p4_mobile_relay_prod4_direct55_saving14": from_base(
+        REGULAR_CONFIG,
+        enable_mobile_relay_attack=True,
+        mobile_relay_min_active_players=4,
+        mobile_relay_max_active_players=4,
+        mobile_relay_min_step=0,
+        mobile_relay_max_step=150,
+        mobile_relay_max_ships=16,
+        mobile_relay_min_production=1.0,
+        mobile_relay_goal_min_production=4.0,
+        mobile_relay_direct_min_eta=55,
+        mobile_relay_max_first_eta=28,
+        mobile_relay_max_second_eta=32,
+        mobile_relay_min_eta_savings=14,
+        mobile_relay_bonus=65.0,
+        mobile_relay_comet_min_remaining=50,
+        mobile_relay_recent_source_window=45,
+        mobile_relay_source_order_bonus=900.0,
+        mobile_relay_source_target_bonus=65.0,
+    ),
+    "p4_mobile_relay_prod5_direct50_saving10": from_base(
+        REGULAR_CONFIG,
+        enable_mobile_relay_attack=True,
+        mobile_relay_min_active_players=4,
+        mobile_relay_max_active_players=4,
+        mobile_relay_min_step=10,
+        mobile_relay_max_step=160,
+        mobile_relay_max_ships=20,
+        mobile_relay_min_production=1.0,
+        mobile_relay_goal_min_production=5.0,
+        mobile_relay_direct_min_eta=50,
+        mobile_relay_max_first_eta=32,
+        mobile_relay_max_second_eta=35,
+        mobile_relay_min_eta_savings=10,
+        mobile_relay_bonus=70.0,
+        mobile_relay_comet_min_remaining=50,
+        mobile_relay_recent_source_window=50,
+        mobile_relay_source_order_bonus=900.0,
+        mobile_relay_source_target_bonus=70.0,
+    ),
+    "all_mobile_relay_prod4_direct55_saving14": from_base(
+        REGULAR_CONFIG,
+        enable_mobile_relay_attack=True,
+        mobile_relay_min_active_players=0,
+        mobile_relay_max_active_players=99,
+        mobile_relay_min_step=0,
+        mobile_relay_max_step=150,
+        mobile_relay_max_ships=16,
+        mobile_relay_min_production=1.0,
+        mobile_relay_goal_min_production=4.0,
+        mobile_relay_direct_min_eta=55,
+        mobile_relay_max_first_eta=28,
+        mobile_relay_max_second_eta=32,
+        mobile_relay_min_eta_savings=14,
+        mobile_relay_bonus=55.0,
+        mobile_relay_comet_min_remaining=50,
+        mobile_relay_recent_source_window=45,
+        mobile_relay_source_order_bonus=900.0,
+        mobile_relay_source_target_bonus=55.0,
+    ),
+}
+
+ABLATION_SUITES["vadasz_plan010_mobile_highprod_forward_base"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "p4_mobile_base_prod3_goal3_loose": from_base(
+        REGULAR_CONFIG,
+        enable_mobile_relay_attack=True,
+        mobile_relay_min_active_players=4,
+        mobile_relay_max_active_players=4,
+        mobile_relay_min_step=0,
+        mobile_relay_max_step=120,
+        mobile_relay_max_ships=20,
+        mobile_relay_min_production=3.0,
+        mobile_relay_goal_min_production=3.0,
+        mobile_relay_direct_min_eta=0,
+        mobile_relay_max_first_eta=35,
+        mobile_relay_max_second_eta=45,
+        mobile_relay_min_eta_savings=-20,
+        mobile_relay_bonus=35.0,
+        mobile_relay_comet_min_remaining=55,
+        mobile_relay_recent_source_window=50,
+        mobile_relay_source_order_bonus=850.0,
+        mobile_relay_source_target_bonus=45.0,
+    ),
+    "p4_mobile_base_prod4_goal3_loose": from_base(
+        REGULAR_CONFIG,
+        enable_mobile_relay_attack=True,
+        mobile_relay_min_active_players=4,
+        mobile_relay_max_active_players=4,
+        mobile_relay_min_step=0,
+        mobile_relay_max_step=120,
+        mobile_relay_max_ships=22,
+        mobile_relay_min_production=4.0,
+        mobile_relay_goal_min_production=3.0,
+        mobile_relay_direct_min_eta=0,
+        mobile_relay_max_first_eta=35,
+        mobile_relay_max_second_eta=45,
+        mobile_relay_min_eta_savings=-20,
+        mobile_relay_bonus=45.0,
+        mobile_relay_comet_min_remaining=55,
+        mobile_relay_recent_source_window=50,
+        mobile_relay_source_order_bonus=850.0,
+        mobile_relay_source_target_bonus=45.0,
+    ),
+    "p4_mobile_base_prod3_goal4_moderate": from_base(
+        REGULAR_CONFIG,
+        enable_mobile_relay_attack=True,
+        mobile_relay_min_active_players=4,
+        mobile_relay_max_active_players=4,
+        mobile_relay_min_step=0,
+        mobile_relay_max_step=140,
+        mobile_relay_max_ships=18,
+        mobile_relay_min_production=3.0,
+        mobile_relay_goal_min_production=4.0,
+        mobile_relay_direct_min_eta=15,
+        mobile_relay_max_first_eta=32,
+        mobile_relay_max_second_eta=40,
+        mobile_relay_min_eta_savings=-10,
+        mobile_relay_bonus=45.0,
+        mobile_relay_comet_min_remaining=55,
+        mobile_relay_recent_source_window=45,
+        mobile_relay_source_order_bonus=900.0,
+        mobile_relay_source_target_bonus=55.0,
+    ),
+    "p4_mobile_base_prod4_goal4_moderate": from_base(
+        REGULAR_CONFIG,
+        enable_mobile_relay_attack=True,
+        mobile_relay_min_active_players=4,
+        mobile_relay_max_active_players=4,
+        mobile_relay_min_step=0,
+        mobile_relay_max_step=140,
+        mobile_relay_max_ships=20,
+        mobile_relay_min_production=4.0,
+        mobile_relay_goal_min_production=4.0,
+        mobile_relay_direct_min_eta=10,
+        mobile_relay_max_first_eta=32,
+        mobile_relay_max_second_eta=40,
+        mobile_relay_min_eta_savings=-10,
+        mobile_relay_bonus=55.0,
+        mobile_relay_comet_min_remaining=55,
+        mobile_relay_recent_source_window=45,
+        mobile_relay_source_order_bonus=900.0,
+        mobile_relay_source_target_bonus=55.0,
+    ),
+}
+
+ABLATION_SUITES["vadasz_plan010_mobile_highprod_forward_base_focus"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "p4_mobile_base_prod4_goal4_moderate": ABLATION_SUITES[
+        "vadasz_plan010_mobile_highprod_forward_base"
+    ]["p4_mobile_base_prod4_goal4_moderate"],
+}
+
 ABLATION_SUITES["myreplay_plan026_p4_source_gate_border"] = {
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
     "p4_source_gate_prod2_m6_s35_130": from_base(
@@ -6817,4 +7602,213 @@ ABLATION_SUITES["myreplay_plan020_leader_pressure_focus"] = {
     "leader_pressure_125": ABLATION_SUITES["myreplay_plan020_regular_counter_refine"]["leader_pressure_125"],
     "leader_pressure_150": ABLATION_SUITES["myreplay_plan020_regular_counter_refine"]["leader_pressure_150"],
     "leader_pressure_175": ABLATION_SUITES["myreplay_plan020_regular_counter_refine"]["leader_pressure_175"],
+}
+
+ABLATION_SUITES["unread260519_plan032_p4_throughput_counter"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "p4_no_early_source_filter": from_base(
+        REGULAR_CONFIG,
+        enable_source_threat_send_filter=False,
+    ),
+    "p4_short_source_filter_s35_60": from_base(
+        REGULAR_CONFIG,
+        source_threat_send_max_step=60,
+    ),
+    "p4_no_attack_fallback_c6_s25_150": from_base(
+        REGULAR_CONFIG,
+        enable_no_attack_fallback=True,
+        no_attack_fallback_min_active_players=4,
+        no_attack_fallback_max_active_players=4,
+        no_attack_fallback_min_step=25,
+        no_attack_fallback_max_step=150,
+        no_attack_fallback_candidate_limit=6,
+        no_attack_fallback_min_attack_delta=-1,
+    ),
+    "p4_tail_inject_limit1_score52": from_base(
+        REGULAR_CONFIG,
+        enable_third_party_tail_candidate_injection=True,
+        third_party_tail_candidate_limit=1,
+        third_party_tail_candidate_min_score=52.0,
+        third_party_tail_candidate_keep_front=1,
+    ),
+    "p4_throughput_tail_no_filter": from_base(
+        REGULAR_CONFIG,
+        enable_source_threat_send_filter=False,
+        enable_no_attack_fallback=True,
+        no_attack_fallback_min_active_players=4,
+        no_attack_fallback_max_active_players=4,
+        no_attack_fallback_min_step=25,
+        no_attack_fallback_max_step=150,
+        no_attack_fallback_candidate_limit=6,
+        no_attack_fallback_min_attack_delta=-1,
+        enable_third_party_tail_candidate_injection=True,
+        third_party_tail_candidate_limit=1,
+        third_party_tail_candidate_min_score=52.0,
+        third_party_tail_candidate_keep_front=1,
+    ),
+}
+
+ABLATION_SUITES["unread260519_plan033_p2_wave_hold_counter"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "p2_wave_prod3_h40_post45_m12": from_base(
+        REGULAR_CONFIG,
+        enable_enemy_wave_preserve_prod=True,
+        enemy_wave_preserve_min_active_players=2,
+        enemy_wave_preserve_max_active_players=2,
+        enemy_wave_preserve_min_step=45,
+        enemy_wave_preserve_max_step=220,
+        enemy_wave_preserve_min_production=3.0,
+        enemy_wave_preserve_horizon=40,
+        enemy_wave_preserve_min_enemy_post_capture=45,
+        enemy_wave_preserve_margin=12,
+        enemy_wave_preserve_min_send=12,
+        enemy_wave_preserve_max_send=56,
+        enemy_wave_preserve_max_sources=2,
+        enemy_wave_preserve_max_targets=1,
+        enemy_wave_preserve_source_min_after=7,
+        enemy_wave_preserve_source_prod_turns_after=1,
+    ),
+    "p2_wave_prod4_h45_post60_m14": from_base(
+        REGULAR_CONFIG,
+        enable_enemy_wave_preserve_prod=True,
+        enemy_wave_preserve_min_active_players=2,
+        enemy_wave_preserve_max_active_players=2,
+        enemy_wave_preserve_min_step=60,
+        enemy_wave_preserve_max_step=240,
+        enemy_wave_preserve_min_production=4.0,
+        enemy_wave_preserve_horizon=45,
+        enemy_wave_preserve_min_enemy_post_capture=60,
+        enemy_wave_preserve_margin=14,
+        enemy_wave_preserve_min_send=14,
+        enemy_wave_preserve_max_send=64,
+        enemy_wave_preserve_max_sources=2,
+        enemy_wave_preserve_max_targets=1,
+        enemy_wave_preserve_source_min_after=8,
+        enemy_wave_preserve_source_prod_turns_after=1,
+    ),
+    "p2_dynamic_recap_prod2_b35": from_base(
+        REGULAR_CONFIG,
+        enable_dynamic_front_base_recapture=True,
+        dynamic_recapture_min_production=2.0,
+        dynamic_recapture_enable_2p=True,
+        dynamic_recapture_enable_4p_collapse=False,
+        recent_loss_recapture_window=50,
+        recent_loss_recapture_bonus=35.0,
+        recent_loss_recapture_prod_weight=5.0,
+    ),
+    "p2_wave_plus_recap_prod2": from_base(
+        REGULAR_CONFIG,
+        enable_enemy_wave_preserve_prod=True,
+        enemy_wave_preserve_min_active_players=2,
+        enemy_wave_preserve_max_active_players=2,
+        enemy_wave_preserve_min_step=45,
+        enemy_wave_preserve_max_step=220,
+        enemy_wave_preserve_min_production=3.0,
+        enemy_wave_preserve_horizon=40,
+        enemy_wave_preserve_min_enemy_post_capture=45,
+        enemy_wave_preserve_margin=12,
+        enemy_wave_preserve_min_send=12,
+        enemy_wave_preserve_max_send=56,
+        enemy_wave_preserve_max_sources=2,
+        enemy_wave_preserve_max_targets=1,
+        enemy_wave_preserve_source_min_after=7,
+        enemy_wave_preserve_source_prod_turns_after=1,
+        enable_dynamic_front_base_recapture=True,
+        dynamic_recapture_min_production=2.0,
+        dynamic_recapture_enable_2p=True,
+        dynamic_recapture_enable_4p_collapse=False,
+        recent_loss_recapture_window=50,
+        recent_loss_recapture_bonus=35.0,
+        recent_loss_recapture_prod_weight=5.0,
+    ),
+    "p2_candidate3_wave": from_base(
+        REGULAR_CONFIG,
+        target_candidate_limit=3,
+        enable_enemy_wave_preserve_prod=True,
+        enemy_wave_preserve_min_active_players=2,
+        enemy_wave_preserve_max_active_players=2,
+        enemy_wave_preserve_min_step=45,
+        enemy_wave_preserve_max_step=220,
+        enemy_wave_preserve_min_production=3.0,
+        enemy_wave_preserve_horizon=40,
+        enemy_wave_preserve_min_enemy_post_capture=45,
+        enemy_wave_preserve_margin=12,
+        enemy_wave_preserve_min_send=12,
+        enemy_wave_preserve_max_send=56,
+        enemy_wave_preserve_max_sources=2,
+        enemy_wave_preserve_max_targets=1,
+        enemy_wave_preserve_source_min_after=7,
+        enemy_wave_preserve_source_prod_turns_after=1,
+    ),
+}
+
+ABLATION_SUITES["unread260519_plan034_vadasz_imitation_combo"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "p4_chain_src3_relaxed": from_base(
+        REGULAR_CONFIG,
+        enable_recent_capture_chain_attack=True,
+        chain_attack_min_active_players=4,
+        chain_attack_max_active_players=4,
+        chain_attack_min_step=0,
+        chain_attack_max_step=140,
+        chain_attack_source_window=28,
+        chain_attack_source_min_production=3.0,
+        chain_attack_target_min_production=3.0,
+        chain_attack_max_eta=30,
+        chain_attack_source_order_bonus=1000.0,
+        chain_attack_enemy_bonus=50.0,
+        chain_attack_neutral_bonus=18.0,
+    ),
+    "p4_chain_mobile_relay": from_base(
+        REGULAR_CONFIG,
+        enable_mobile_relay_attack=True,
+        mobile_relay_min_active_players=4,
+        mobile_relay_max_active_players=4,
+        mobile_relay_min_step=0,
+        mobile_relay_max_step=140,
+        mobile_relay_max_ships=18,
+        mobile_relay_min_production=1.0,
+        mobile_relay_goal_min_production=4.0,
+        mobile_relay_direct_min_eta=45,
+        mobile_relay_max_first_eta=30,
+        mobile_relay_max_second_eta=35,
+        mobile_relay_min_eta_savings=10,
+        mobile_relay_bonus=55.0,
+        mobile_relay_recent_source_window=45,
+    ),
+    "p4_chain_tail_inject": from_base(
+        REGULAR_CONFIG,
+        enable_third_party_tail_candidate_injection=True,
+        third_party_tail_candidate_limit=1,
+        third_party_tail_candidate_min_score=52.0,
+        third_party_tail_candidate_keep_front=1,
+    ),
+    "p4_vadasz_combo_relaxed_chain_tail": from_base(
+        REGULAR_CONFIG,
+        enable_recent_capture_chain_attack=True,
+        chain_attack_min_active_players=4,
+        chain_attack_max_active_players=4,
+        chain_attack_min_step=0,
+        chain_attack_max_step=140,
+        chain_attack_source_window=28,
+        chain_attack_source_min_production=3.0,
+        chain_attack_target_min_production=3.0,
+        chain_attack_max_eta=30,
+        chain_attack_source_order_bonus=1000.0,
+        chain_attack_enemy_bonus=50.0,
+        chain_attack_neutral_bonus=18.0,
+        enable_third_party_tail_candidate_injection=True,
+        third_party_tail_candidate_limit=1,
+        third_party_tail_candidate_min_score=52.0,
+        third_party_tail_candidate_keep_front=1,
+    ),
+    "p4_vadasz_combo_pressure": from_base(
+        REGULAR_CONFIG,
+        multiplayer_local_enemy_bonus=5.0,
+        multiplayer_leader_prod_bonus=1.5,
+        enable_third_party_tail_candidate_injection=True,
+        third_party_tail_candidate_limit=1,
+        third_party_tail_candidate_min_score=52.0,
+        third_party_tail_candidate_keep_front=1,
+    ),
 }
