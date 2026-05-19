@@ -96,6 +96,22 @@ simulator drift 时再使用 Kaggle 官方环境。
 
 项目级约定见 [AGENTS.md](AGENTS.md)。
 
+## 🧪 当前 regular rulebase
+
+当前 `REGULAR_CONFIG` 指向：
+
+`TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P2TRICKLE_S30_P4MIDBORDER_S40_REGULAR_CONFIG`
+
+提交/历史别名：
+
+`tail_m2_max14_net7_overpay4_p4lowhome_active4_p2trickle_s30_p4midborder_s40_regular`
+
+2026-05-19 fast-env / numba 验证摘要：
+
+- 2p opening high-production trickle：plan021 为 15-9 vs 7-17，plan022 为 24-16 vs 13-26-1，已晋级。
+- 4p midgame border source reserve：plan026 为 16-32 vs 13-35，plan027 为 20-60 vs 17-63，plan028 为 36-84 vs 30-90，已晋级。
+- 未晋级：p2 no-attack fallback、p2 front support、candidate limit widening、global attack priority、p4 local reserve/front support、leader pressure 单独微调。
+
 ## ⚠️ 注意事项
 
 1. 所有训练脚本都在 `training/` 目录下

@@ -361,6 +361,13 @@ class PublicRuleAgent:
     global_attack_roi_weight: float = PUBLIC_EXACT.global_attack_roi_weight
     global_attack_arrival_penalty: float = PUBLIC_EXACT.global_attack_arrival_penalty
     global_attack_max_failed_pairs: int = PUBLIC_EXACT.global_attack_max_failed_pairs
+    enable_no_attack_fallback: bool = PUBLIC_EXACT.enable_no_attack_fallback
+    no_attack_fallback_min_active_players: int = PUBLIC_EXACT.no_attack_fallback_min_active_players
+    no_attack_fallback_max_active_players: int = PUBLIC_EXACT.no_attack_fallback_max_active_players
+    no_attack_fallback_min_step: int = PUBLIC_EXACT.no_attack_fallback_min_step
+    no_attack_fallback_max_step: int = PUBLIC_EXACT.no_attack_fallback_max_step
+    no_attack_fallback_candidate_limit: int = PUBLIC_EXACT.no_attack_fallback_candidate_limit
+    no_attack_fallback_min_attack_delta: int = PUBLIC_EXACT.no_attack_fallback_min_attack_delta
     enable_multiplayer_diplomacy_score: bool = PUBLIC_EXACT.enable_multiplayer_diplomacy_score
     multiplayer_min_active_players: int = PUBLIC_EXACT.multiplayer_min_active_players
     multiplayer_far_enemy_distance: float = PUBLIC_EXACT.multiplayer_far_enemy_distance
@@ -439,6 +446,9 @@ class PublicRuleAgent:
         attack_count_before = len(self.fleet_trajectories)
         self._append_attacks(local, under_attack, exhausted_planet_ids, moves)
         self.did_attack_this_turn = len(self.fleet_trajectories) > attack_count_before
+        if not self.did_attack_this_turn:
+            self._append_no_attack_fallback(local, under_attack, exhausted_planet_ids, moves)
+            self.did_attack_this_turn = len(self.fleet_trajectories) > attack_count_before
         if self.enable_proactive_value_defense and self.proactive_defense_after_attacks:
             self._append_proactive_value_defense(local, under_attack, exhausted_planet_ids, moves)
         if self.enable_endgame_fleet_dump:
@@ -1727,6 +1737,56 @@ class PublicRuleAgent:
 
             if len(moves) == before_moves:
                 failed_pairs.add((source.id, target.id))
+
+    def _append_no_attack_fallback(
+        self,
+        local: LocalObs,
+        under_attack: dict[int, dict[str, object]],
+        exhausted_planet_ids: set[int],
+        moves: list[list[float | int]],
+    ) -> None:
+        if not self.enable_no_attack_fallback:
+            return
+        if local.step < self.no_attack_fallback_min_step or local.step > self.no_attack_fallback_max_step:
+            return
+        active_players = self._active_player_count(local)
+        if active_players < self.no_attack_fallback_min_active_players:
+            return
+        if self.no_attack_fallback_max_active_players > 0 and active_players > self.no_attack_fallback_max_active_players:
+            return
+
+        launch_pressure = self._enemy_launch_pressure(local)
+        original_min_attack = self.min_ships_mine_attack
+        self.min_ships_mine_attack = max(1, original_min_attack + self.no_attack_fallback_min_attack_delta)
+        try:
+            for source in sorted(local.mine, key=lambda p: p.ships, reverse=True):
+                if source.id in exhausted_planet_ids:
+                    continue
+                if self._available_local_attack_ships(source, local, under_attack) < self._source_min_attack(source, local):
+                    continue
+
+                candidate_targets = [
+                    target
+                    for target in local.targets
+                    if not self.skip_comet_targets or target.id not in local.comet_planet_ids
+                ]
+                candidate_targets.sort(
+                    key=lambda target: (
+                        self._target_score(source, target, local)
+                        + launch_pressure.get(target.id, 0.0)
+                        - self._source_threat_target_penalty(source, target, local)
+                    ),
+                    reverse=True,
+                )
+                candidate_targets = self._inject_tail_capture_candidates(source, candidate_targets, local)
+
+                for target in candidate_targets[: self.no_attack_fallback_candidate_limit]:
+                    if self.enable_single_attacks and self._try_single_attack(source, target, local, under_attack, exhausted_planet_ids, moves):
+                        return
+                    if self.enable_coop_attacks and self._try_coop_attack(source, target, local, under_attack, exhausted_planet_ids, moves):
+                        return
+        finally:
+            self.min_ships_mine_attack = original_min_attack
 
     def _inject_tail_capture_candidates(
         self,
