@@ -832,7 +832,16 @@ TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P2TRICKLE_S30_P4MIDBORDER_S40_P4CH
         "mobile_relay_source_target_bonus": 55.0,
     }
 )
-REGULAR_CONFIG = TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P2TRICKLE_S30_P4MIDBORDER_S40_P4CHAIN_SRC4_P4MOBILEBASE_REGULAR_CONFIG
+UNREAD260519_P4_TAIL_INJECT52_REGULAR_CONFIG = StrategyConfig(
+    **{
+        **TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P2TRICKLE_S30_P4MIDBORDER_S40_P4CHAIN_SRC4_P4MOBILEBASE_REGULAR_CONFIG.to_agent_kwargs(),
+        "enable_third_party_tail_candidate_injection": True,
+        "third_party_tail_candidate_limit": 1,
+        "third_party_tail_candidate_min_score": 52.0,
+        "third_party_tail_candidate_keep_front": 1,
+    }
+)
+REGULAR_CONFIG = UNREAD260519_P4_TAIL_INJECT52_REGULAR_CONFIG
 PRE_HOLDABILITY_REGULAR_CONFIG = StrategyConfig(
     target_candidate_limit=2,
     min_ships_mine_attack=12,
