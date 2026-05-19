@@ -46,7 +46,10 @@ previous feature schema.
 
 4. After stage1 recovers alignment, run stage1.5 advantage training.
    - Resume from the new stage1 checkpoint.
+   - Connect to the multi-node Ray cluster at `10.0.104.198:6380`.
    - Use fast simulator with numba.
+   - Schedule rollout actors on the remote `rollout_cpu` resource and use
+     fractional GPU trainers across the full remote GPU pool.
    - Keep paired-margin advantage mode.
    - Track `selected_proposal`, `fallback_targets`, and
      `eval/win_rate_vs_regular`.

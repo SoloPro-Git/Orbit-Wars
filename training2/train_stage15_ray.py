@@ -560,13 +560,22 @@ def main() -> None:
 
     swan = _init_swanlab({**train_cfg, **ray_cfg, **stage, "resume_from": resume}, args)
 
+    runtime_env: dict[str, Any] = {}
+    runtime_env_vars = dict(ray_cfg.get("runtime_env_vars", {}) or {})
+    runtime_env_vars.update(dict(stage.get("runtime_env_vars", {}) or {}))
+    runtime_env_id = stage.get("runtime_env_id")
+    if runtime_env_id:
+        runtime_env_vars["TRAINING2_RUNTIME_ENV_ID"] = str(runtime_env_id)
+    if runtime_env_vars:
+        runtime_env["env_vars"] = {str(k): str(v) for k, v in runtime_env_vars.items()}
+
     ray_address = stage.get("ray_address", ray_cfg.get("address"))
     if ray_address:
-        ray.init(address=str(ray_address), ignore_reinit_error=True)
+        ray.init(address=str(ray_address), ignore_reinit_error=True, runtime_env=runtime_env or None)
     else:
         ray_temp = Path(ray_cfg.get("temp_dir", "training2/.ray_temp")).resolve()
         ray_temp.mkdir(parents=True, exist_ok=True)
-        ray.init(ignore_reinit_error=True, include_dashboard=False, _temp_dir=str(ray_temp))
+        ray.init(ignore_reinit_error=True, include_dashboard=False, _temp_dir=str(ray_temp), runtime_env=runtime_env or None)
 
     trainers = [
         Stage15TrainerActor.options(num_cpus=cpus_per_trainer, num_gpus=gpus_per_trainer).remote(
@@ -625,6 +634,7 @@ def main() -> None:
                 "gpus_per_trainer": gpus_per_trainer,
                 "gpus_per_rollout": gpus_per_rollout,
                 "eval_gpus_per_worker": eval_gpus_per_worker,
+                "runtime_env_id": runtime_env_id,
                 "reward_mode": reward_mode,
                 "advantage_margin_threshold": advantage_margin_threshold,
                 "advantage_value_scale": advantage_value_scale,
