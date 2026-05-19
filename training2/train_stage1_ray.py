@@ -889,11 +889,19 @@ def main() -> None:
                     "调试时可显式加 --allow-no-swanlab。"
                 ) from exc
 
+    runtime_env: dict[str, Any] = {}
+    runtime_env_vars = dict(ray_cfg.get("runtime_env_vars", {}) or {})
+    runtime_env_id = ray_cfg.get("runtime_env_id")
+    if runtime_env_id:
+        runtime_env_vars["TRAINING2_RUNTIME_ENV_ID"] = str(runtime_env_id)
+    if runtime_env_vars:
+        runtime_env["env_vars"] = {str(k): str(v) for k, v in runtime_env_vars.items()}
+
     ray_temp = Path(ray_cfg.get("temp_dir", "training2/.ray_temp")).resolve()
     ray_temp.mkdir(parents=True, exist_ok=True)
     ray_address = ray_cfg.get("address")
     if ray_address:
-        ray.init(address=str(ray_address), ignore_reinit_error=True)
+        ray.init(address=str(ray_address), ignore_reinit_error=True, runtime_env=runtime_env or None)
     else:
         ray.init(
             ignore_reinit_error=True,
@@ -901,6 +909,7 @@ def main() -> None:
             _temp_dir=str(ray_temp),
             _memory=1_000_000_000,
             num_gpus=torch.cuda.device_count() if torch.cuda.is_available() else 0,
+            runtime_env=runtime_env or None,
         )
 
     trainer_actors = [
@@ -1006,6 +1015,7 @@ def main() -> None:
                 "trainer_workers": trainer_workers,
                 "cpus_per_trainer": cpus_per_trainer,
                 "gpus_per_trainer": gpus_per_trainer,
+                "runtime_env_id": runtime_env_id,
                 "weight_sync_interval": weight_sync_interval,
                 "sharded_offline": sharded_offline,
                 "data_four_player_prob": data_four_player_prob,

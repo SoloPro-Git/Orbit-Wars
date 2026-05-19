@@ -30,18 +30,19 @@ training:
   swanlab_mode: cloud
 
 ray:
-  # Use a fresh local Ray runtime for this schema refresh. The long-running
-  # shared cluster may have worker nodes with stale training2 imports.
-  num_trainer_workers: 24
+  # Stage1 uses the multi-node Ray cluster. runtime_env_id forces fresh worker
+  # processes so remote nodes do not reuse stale training2 imports.
+  num_trainer_workers: 45
   gpus_per_trainer: 0.333
   cpus_per_trainer: 0.5
   num_data_workers: 16
-  num_eval_workers: 4
+  num_eval_workers: 8
   episodes_per_worker: 2
   eval_gpus_per_worker: 0.0
   sharded_offline: true
   weight_sync_interval: 5
-  address:
+  address: 10.0.104.198:6380
+  runtime_env_id: tactical_entities_20260519_stage1_v2
   rollout_resource:
   temp_dir: data/ray_te_20260519
 

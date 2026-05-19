@@ -31,8 +31,9 @@ previous feature schema.
      `training2/checkpoints/stage1_tactical_entities_20260519`.
    - Load the offline dataset in trainer shards rather than reading the full
      dataset into every trainer.
-   - Use fractional GPU trainer actors, three trainers per GPU, to keep the
-     H20s saturated during stage1 and stage1.5.
+   - Connect to the multi-node Ray cluster and use fractional GPU trainer
+     actors, three trainers per GPU, to keep the full H20 pool saturated during
+     stage1 and stage1.5.
    - Keep model proposals disabled in stage1 eval.
 
 3. Watch the first 10-20 iterations.
