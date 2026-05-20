@@ -87,17 +87,25 @@ stage1:
   output_dir: training2/checkpoints/stage1_tactical_entities_20260519
 
 stage15:
-  resume_from: training2/checkpoints/stage1_tactical_entities_20260519/latest.pt
-  output_dir: training2/checkpoints/stage15_tactical_entities_20260519
-  swanlab_experiment: training2-stage15-tactical-entities-20260519
+  resume_from: training2/checkpoints/stage1_tactical_entities_20260519/best.pt
+  output_dir: training2/checkpoints/stage15_ppo_lite_tactical_entities_20260519
+  swanlab_experiment: training2-stage15-ppo-lite-tactical-entities-20260519
   oracle: rl_informed_regular
   ray_address: 10.0.104.198:6380
-  runtime_env_id: tactical_entities_20260519_stage15_v1
+  runtime_env_id: tactical_entities_20260519_stage15_ppo_v1
+  async_pipeline: true
+  training_mode: ppo_lite
+  proposal_overrides:
+    enabled: false
+    num_candidates: 2
+    send_threshold: 0.7
+    min_ship_ratio: 0.15
+    top_targets_per_source: 1
   max_iterations: 1000
   games_per_iteration: 128
   num_rollout_workers: 128
   games_per_rollout_task: 1
-  cpus_per_rollout: 1.0
+  cpus_per_rollout: 0.85
   rollout_resource: rollout_cpu
   num_trainer_workers: 45
   cpus_per_trainer: 0.5
@@ -110,12 +118,17 @@ stage15:
   eval_gpus_per_worker: 0.0
   batch_size: 2048
   learning_rate: 0.00005
-  updates_per_iteration: 30
+  updates_per_iteration: 20
   replay_capacity: 200000
   value_loss_weight: 0.5
   entropy_weight: 0.01
+  ppo_clip_coef: 0.12
+  ppo_value_clip_coef: 0.2
+  ppo_gamma: 0.999
+  ppo_gae_lambda: 0.95
+  bc_anchor_weight: 0.12
   four_player_prob: 0.3
-  temperature: 0.4
+  temperature: 0.25
   epsilon: 0.0
   reward_mode: paired_margin_advantage
   advantage_margin_threshold: 0.0
@@ -126,6 +139,112 @@ stage15:
   negative_policy_weight: 1.0
   eval_interval: 20
   eval_games: 100
+
+stage2:
+  resume_from: training2/checkpoints/stage15_ppo_lite_tactical_entities_20260519/best.pt
+  output_dir: training2/checkpoints/stage2_controlled_ppo_tactical_entities_20260519
+  swanlab_experiment: training2-stage2-controlled-ppo-tactical-entities-20260519
+  oracle: rl_informed_regular
+  ray_address: 10.0.104.198:6380
+  runtime_env_id: tactical_entities_20260519_stage2_ppo_v1
+  async_pipeline: true
+  training_mode: stage2
+  proposal_overrides:
+    num_candidates: 4
+    send_threshold: 0.6
+    min_ship_ratio: 0.12
+    top_targets_per_source: 1
+  max_iterations: 1000
+  games_per_iteration: 192
+  num_rollout_workers: 128
+  games_per_rollout_task: 1
+  cpus_per_rollout: 0.85
+  rollout_resource: rollout_cpu
+  num_trainer_workers: 45
+  cpus_per_trainer: 0.5
+  num_eval_workers: 8
+  device: cuda
+  rollout_device: cpu
+  eval_device: cpu
+  gpus_per_trainer: 0.333
+  gpus_per_rollout: 0.0
+  eval_gpus_per_worker: 0.0
+  batch_size: 2048
+  learning_rate: 0.00004
+  updates_per_iteration: 36
+  replay_capacity: 300000
+  value_loss_weight: 0.5
+  entropy_weight: 0.008
+  ppo_clip_coef: 0.18
+  ppo_value_clip_coef: 0.2
+  ppo_gamma: 0.999
+  ppo_gae_lambda: 0.95
+  bc_anchor_weight: 0.01
+  four_player_prob: 0.3
+  temperature: 1.0
+  epsilon: 0.01
+  reward_mode: paired_margin_advantage
+  advantage_margin_threshold: 0.0
+  advantage_value_scale: 2000.0
+  min_policy_weight: 0.25
+  max_policy_weight: 2.0
+  positive_policy_weight: 1.25
+  negative_policy_weight: 1.0
+  eval_interval: 20
+  eval_games: 150
+
+stage3:
+  resume_from: training2/checkpoints/stage2_controlled_ppo_tactical_entities_20260519/best.pt
+  output_dir: training2/checkpoints/stage3_full_ppo_tactical_entities_20260519
+  swanlab_experiment: training2-stage3-full-ppo-tactical-entities-20260519
+  oracle: rl_informed_regular
+  ray_address: 10.0.104.198:6380
+  runtime_env_id: tactical_entities_20260519_stage3_ppo_v1
+  async_pipeline: true
+  training_mode: stage3
+  proposal_overrides:
+    num_candidates: 8
+    send_threshold: 0.5
+    min_ship_ratio: 0.10
+    top_targets_per_source: 2
+  max_iterations: 1500
+  games_per_iteration: 256
+  num_rollout_workers: 128
+  games_per_rollout_task: 1
+  cpus_per_rollout: 0.85
+  rollout_resource: rollout_cpu
+  num_trainer_workers: 45
+  cpus_per_trainer: 0.5
+  num_eval_workers: 8
+  device: cuda
+  rollout_device: cpu
+  eval_device: cpu
+  gpus_per_trainer: 0.333
+  gpus_per_rollout: 0.0
+  eval_gpus_per_worker: 0.0
+  batch_size: 2048
+  learning_rate: 0.00003
+  updates_per_iteration: 40
+  replay_capacity: 400000
+  value_loss_weight: 0.5
+  entropy_weight: 0.006
+  ppo_clip_coef: 0.15
+  ppo_value_clip_coef: 0.2
+  ppo_gamma: 0.999
+  ppo_gae_lambda: 0.95
+  bc_anchor_weight: 0.003
+  four_player_prob: 0.35
+  temperature: 1.0
+  epsilon: 0.02
+  reward_mode: paired_margin_advantage
+  advantage_margin_threshold: 0.0
+  advantage_value_scale: 2000.0
+  min_policy_weight: 0.25
+  max_policy_weight: 2.0
+  positive_policy_weight: 1.25
+  negative_policy_weight: 1.0
+  eval_interval: 20
+  eval_games: 200
 
 env:
   backend: fast
