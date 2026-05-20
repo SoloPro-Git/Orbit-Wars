@@ -8,6 +8,7 @@ dependencies = [
     "numba>=0.65.1",
     "numpy>=2.4.4",
     "pyyaml>=6.0.3",
+    "ray>=2.55.1",
     "swanlab>=0.7.17",
     # PyTorch with CUDA 12.1 support
     # 安装时使用: uv pip install "torch>=2.5.0,<2.6" --index-url https://download.pytorch.org/whl/cu121
