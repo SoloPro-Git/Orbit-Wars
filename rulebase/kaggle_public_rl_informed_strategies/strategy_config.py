@@ -10051,6 +10051,38 @@ ABLATION_SUITES["vadasz_4p_relay_window45_bonus70_confirm"] = {
     ]["p4_relay_savings5_window45_bonus70"],
 }
 
+ABLATION_SUITES["vadasz_4p_relay_bonus_trim_after_promote"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "p4_relay_bonus60_keep_savings5": from_base(
+        REGULAR_CONFIG,
+        mobile_relay_source_target_bonus=60.0,
+    ),
+    "p4_relay_bonus55_keep_savings5": from_base(
+        REGULAR_CONFIG,
+        mobile_relay_source_target_bonus=55.0,
+    ),
+    "p4_relay_savings8_bonus70": from_base(
+        REGULAR_CONFIG,
+        mobile_relay_min_eta_savings=8,
+        mobile_relay_source_target_bonus=70.0,
+    ),
+    "p4_relay_savings10_bonus70": from_base(
+        REGULAR_CONFIG,
+        mobile_relay_min_eta_savings=10,
+        mobile_relay_source_target_bonus=70.0,
+    ),
+    "p4_relay_window35_bonus70": from_base(
+        REGULAR_CONFIG,
+        mobile_relay_recent_source_window=35,
+        mobile_relay_source_target_bonus=70.0,
+    ),
+    "p4_relay_order750_bonus60": from_base(
+        REGULAR_CONFIG,
+        mobile_relay_source_order_bonus=750.0,
+        mobile_relay_source_target_bonus=60.0,
+    ),
+}
+
 ABLATION_SUITES["myreplay_plan039_p4_doomed_tail_arb"] = {
     "regular": REGULAR_CONFIG.to_agent_kwargs(),
     "doomed_tail_exact_score45_s15_160": from_base(
