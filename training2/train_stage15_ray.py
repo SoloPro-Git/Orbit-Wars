@@ -254,9 +254,13 @@ class Stage15RolloutActor:
         device: str,
         env_backend: str = "kaggle",
         env_use_numba: bool = False,
+        torch_threads: int | None = None,
     ) -> None:
         self.worker_id = worker_id
         self.device = device
+        if torch_threads is not None and torch_threads > 0:
+            torch.set_num_threads(int(torch_threads))
+            torch.set_num_interop_threads(int(torch_threads))
         self.model = _make_model(model_cfg, device)
         self.model.eval()
         self.oracle = oracle
@@ -265,6 +269,7 @@ class Stage15RolloutActor:
         self.proposal_cfg = ProposalConfig(**proposal_cfg)
         self.env_backend = env_backend
         self.env_use_numba = env_use_numba
+        self.torch_threads = torch.get_num_threads()
 
     def _rulebase_margin(self, seed: int, players: int, model_pid: int) -> tuple[float, float]:
         env = make_orbit_wars_env(
@@ -504,6 +509,7 @@ class Stage15RolloutActor:
             "encode_sec": encode_sec,
             "model_forward_sec": model_forward_sec,
             "env_step_sec": env_step_sec,
+            "torch_threads": self.torch_threads,
         }
 
 
@@ -718,6 +724,8 @@ def main() -> None:
     device = str(stage.get("device", train_cfg.get("device", "cuda")))
     rollout_device = str(stage.get("rollout_device", "cpu"))
     eval_device = str(stage.get("eval_device", "cpu"))
+    rollout_torch_threads = stage.get("rollout_torch_threads", 1 if rollout_device == "cpu" else None)
+    rollout_torch_threads = int(rollout_torch_threads) if rollout_torch_threads is not None else None
     gpus_per_trainer = float(stage.get("gpus_per_trainer", ray_cfg.get("gpus_per_trainer", 1.0)))
     cpus_per_trainer = float(stage.get("cpus_per_trainer", 1.0))
     gpus_per_rollout = float(stage.get("gpus_per_rollout", 0.0 if rollout_device == "cpu" else 0.25))
@@ -786,6 +794,7 @@ def main() -> None:
             rollout_device,
             env_backend,
             env_use_numba,
+            rollout_torch_threads,
         )
         for i in range(rollout_workers)
     ]
@@ -824,6 +833,7 @@ def main() -> None:
                 "gpus_per_trainer": gpus_per_trainer,
                 "gpus_per_rollout": gpus_per_rollout,
                 "eval_gpus_per_worker": eval_gpus_per_worker,
+                "rollout_torch_threads": rollout_torch_threads,
                 "runtime_env_id": runtime_env_id,
                 "async_pipeline": async_pipeline,
                 "training_mode": training_mode,
@@ -1013,6 +1023,7 @@ def main() -> None:
                 "time/rollout_actor_env_step_sec": float(np.mean([p["env_step_sec"] for p in parts]))
                 if parts
                 else 0.0,
+                "runtime/rollout_torch_threads": float(np.mean([p["torch_threads"] for p in parts])) if parts else 0.0,
             }
             for part in train_parts:
                 for key, value in part.items():

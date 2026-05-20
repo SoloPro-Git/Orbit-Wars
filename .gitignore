@@ -22,3 +22,6 @@ training2/checkpoints/*
 data/*
 rulebase/**/experiments/
 training2/.ray_temp/*
+kaggle_ipynb/
+*.log
+training2/.ray_*

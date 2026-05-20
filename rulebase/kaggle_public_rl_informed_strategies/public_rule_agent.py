@@ -101,6 +101,10 @@ class PublicRuleAgent:
     contested_stop_loss_penalty: float = PUBLIC_EXACT.contested_stop_loss_penalty
     contested_stop_loss_min_hold: int = PUBLIC_EXACT.contested_stop_loss_min_hold
     contested_stop_loss_prod_hold_turns: int = PUBLIC_EXACT.contested_stop_loss_prod_hold_turns
+    enable_contested_stop_loss_connector_exception: bool = PUBLIC_EXACT.enable_contested_stop_loss_connector_exception
+    contested_stop_loss_connector_radius: float = PUBLIC_EXACT.contested_stop_loss_connector_radius
+    contested_stop_loss_connector_min_high_prod: float = PUBLIC_EXACT.contested_stop_loss_connector_min_high_prod
+    contested_stop_loss_connector_own_radius: float = PUBLIC_EXACT.contested_stop_loss_connector_own_radius
     enable_dynamic_posture: bool = PUBLIC_EXACT.enable_dynamic_posture
     posture_max_active_players: int = PUBLIC_EXACT.posture_max_active_players
     posture_defensive_min_step: int = PUBLIC_EXACT.posture_defensive_min_step
@@ -172,6 +176,15 @@ class PublicRuleAgent:
     doomed_evac_attack_source_bonus: float = PUBLIC_EXACT.doomed_evac_attack_source_bonus
     doomed_evac_safe_enemy_radius: float = PUBLIC_EXACT.doomed_evac_safe_enemy_radius
     doomed_evac_front_penalty: float = PUBLIC_EXACT.doomed_evac_front_penalty
+    doomed_evac_use_tail_capture_plan: bool = PUBLIC_EXACT.doomed_evac_use_tail_capture_plan
+    doomed_evac_tail_min_score: float = PUBLIC_EXACT.doomed_evac_tail_min_score
+    doomed_evac_tail_score_bonus: float = PUBLIC_EXACT.doomed_evac_tail_score_bonus
+    doomed_evac_tail_source_min_after: int = PUBLIC_EXACT.doomed_evac_tail_source_min_after
+    doomed_evac_tail_send_exact: bool = PUBLIC_EXACT.doomed_evac_tail_send_exact
+    doomed_evac_source_cooldown: int = PUBLIC_EXACT.doomed_evac_source_cooldown
+    doomed_evac_tail_min_enemy_arrival: int = PUBLIC_EXACT.doomed_evac_tail_min_enemy_arrival
+    doomed_evac_tail_min_enemy_post_capture: int = PUBLIC_EXACT.doomed_evac_tail_min_enemy_post_capture
+    doomed_evac_tail_max_ships: int = PUBLIC_EXACT.doomed_evac_tail_max_ships
     enable_proactive_value_defense: bool = PUBLIC_EXACT.enable_proactive_value_defense
     proactive_defense_min_active_players: int = PUBLIC_EXACT.proactive_defense_min_active_players
     proactive_defense_max_active_players: int = PUBLIC_EXACT.proactive_defense_max_active_players
@@ -350,6 +363,29 @@ class PublicRuleAgent:
     recent_loss_recapture_max_step: int = PUBLIC_EXACT.recent_loss_recapture_max_step
     recent_loss_recapture_bonus: float = PUBLIC_EXACT.recent_loss_recapture_bonus
     recent_loss_recapture_prod_weight: float = PUBLIC_EXACT.recent_loss_recapture_prod_weight
+    enable_enemy_recent_capture_disrupt: bool = PUBLIC_EXACT.enable_enemy_recent_capture_disrupt
+    enemy_recent_capture_disrupt_min_active_players: int = PUBLIC_EXACT.enemy_recent_capture_disrupt_min_active_players
+    enemy_recent_capture_disrupt_max_active_players: int = PUBLIC_EXACT.enemy_recent_capture_disrupt_max_active_players
+    enemy_recent_capture_disrupt_min_step: int = PUBLIC_EXACT.enemy_recent_capture_disrupt_min_step
+    enemy_recent_capture_disrupt_max_step: int = PUBLIC_EXACT.enemy_recent_capture_disrupt_max_step
+    enemy_recent_capture_disrupt_window: int = PUBLIC_EXACT.enemy_recent_capture_disrupt_window
+    enemy_recent_capture_disrupt_min_production: float = PUBLIC_EXACT.enemy_recent_capture_disrupt_min_production
+    enemy_recent_capture_disrupt_max_ships: int = PUBLIC_EXACT.enemy_recent_capture_disrupt_max_ships
+    enemy_recent_capture_disrupt_bonus: float = PUBLIC_EXACT.enemy_recent_capture_disrupt_bonus
+    enemy_recent_capture_disrupt_prod_weight: float = PUBLIC_EXACT.enemy_recent_capture_disrupt_prod_weight
+    enemy_recent_capture_disrupt_age_weight: float = PUBLIC_EXACT.enemy_recent_capture_disrupt_age_weight
+    enable_enemy_high_prod_pressure: bool = PUBLIC_EXACT.enable_enemy_high_prod_pressure
+    enemy_high_prod_pressure_min_active_players: int = PUBLIC_EXACT.enemy_high_prod_pressure_min_active_players
+    enemy_high_prod_pressure_max_active_players: int = PUBLIC_EXACT.enemy_high_prod_pressure_max_active_players
+    enemy_high_prod_pressure_min_step: int = PUBLIC_EXACT.enemy_high_prod_pressure_min_step
+    enemy_high_prod_pressure_max_step: int = PUBLIC_EXACT.enemy_high_prod_pressure_max_step
+    enemy_high_prod_pressure_min_production: float = PUBLIC_EXACT.enemy_high_prod_pressure_min_production
+    enemy_high_prod_pressure_max_ships: int = PUBLIC_EXACT.enemy_high_prod_pressure_max_ships
+    enemy_high_prod_pressure_max_eta: int = PUBLIC_EXACT.enemy_high_prod_pressure_max_eta
+    enemy_high_prod_pressure_bonus: float = PUBLIC_EXACT.enemy_high_prod_pressure_bonus
+    enemy_high_prod_pressure_prod_weight: float = PUBLIC_EXACT.enemy_high_prod_pressure_prod_weight
+    enemy_high_prod_pressure_ship_weight: float = PUBLIC_EXACT.enemy_high_prod_pressure_ship_weight
+    enemy_high_prod_pressure_eta_weight: float = PUBLIC_EXACT.enemy_high_prod_pressure_eta_weight
     enable_dynamic_front_base_recapture: bool = PUBLIC_EXACT.enable_dynamic_front_base_recapture
     dynamic_recapture_min_production: float = PUBLIC_EXACT.dynamic_recapture_min_production
     dynamic_recapture_enable_2p: bool = PUBLIC_EXACT.dynamic_recapture_enable_2p
@@ -443,6 +479,7 @@ class PublicRuleAgent:
     opening_tempo_source_min_production: float = PUBLIC_EXACT.opening_tempo_source_min_production
     opening_tempo_source_min_after: int = PUBLIC_EXACT.opening_tempo_source_min_after
     opening_tempo_candidate_limit: int = PUBLIC_EXACT.opening_tempo_candidate_limit
+    opening_tempo_allow_after_attack: bool = PUBLIC_EXACT.opening_tempo_allow_after_attack
     enable_recent_capture_chain_attack: bool = PUBLIC_EXACT.enable_recent_capture_chain_attack
     chain_attack_min_active_players: int = PUBLIC_EXACT.chain_attack_min_active_players
     chain_attack_max_active_players: int = PUBLIC_EXACT.chain_attack_max_active_players
@@ -450,11 +487,64 @@ class PublicRuleAgent:
     chain_attack_max_step: int = PUBLIC_EXACT.chain_attack_max_step
     chain_attack_source_window: int = PUBLIC_EXACT.chain_attack_source_window
     chain_attack_source_min_production: float = PUBLIC_EXACT.chain_attack_source_min_production
+    chain_attack_source_previous_owner: str = PUBLIC_EXACT.chain_attack_source_previous_owner
+    chain_attack_target_owner: str = PUBLIC_EXACT.chain_attack_target_owner
     chain_attack_target_min_production: float = PUBLIC_EXACT.chain_attack_target_min_production
     chain_attack_max_eta: int = PUBLIC_EXACT.chain_attack_max_eta
     chain_attack_source_order_bonus: float = PUBLIC_EXACT.chain_attack_source_order_bonus
     chain_attack_enemy_bonus: float = PUBLIC_EXACT.chain_attack_enemy_bonus
     chain_attack_neutral_bonus: float = PUBLIC_EXACT.chain_attack_neutral_bonus
+    enable_chain_attack_direction_bonus: bool = PUBLIC_EXACT.enable_chain_attack_direction_bonus
+    chain_attack_direction_max_angle: float = PUBLIC_EXACT.chain_attack_direction_max_angle
+    chain_attack_direction_enemy_bonus: float = PUBLIC_EXACT.chain_attack_direction_enemy_bonus
+    chain_attack_direction_neutral_bonus: float = PUBLIC_EXACT.chain_attack_direction_neutral_bonus
+    chain_attack_direction_high_prod_bonus: float = PUBLIC_EXACT.chain_attack_direction_high_prod_bonus
+    enable_chain_attack_hold_gate: bool = PUBLIC_EXACT.enable_chain_attack_hold_gate
+    chain_attack_hold_margin: int = PUBLIC_EXACT.chain_attack_hold_margin
+    chain_attack_hold_prod_turns: int = PUBLIC_EXACT.chain_attack_hold_prod_turns
+    chain_attack_hold_enemy_radius: float = PUBLIC_EXACT.chain_attack_hold_enemy_radius
+    chain_attack_hold_enemy_send_fraction: float = PUBLIC_EXACT.chain_attack_hold_enemy_send_fraction
+    chain_attack_hold_enemy_launch_window: int = PUBLIC_EXACT.chain_attack_hold_enemy_launch_window
+    chain_attack_hold_enemy_reserve_turns: int = PUBLIC_EXACT.chain_attack_hold_enemy_reserve_turns
+    chain_attack_hold_enemy_max_arrival: int = PUBLIC_EXACT.chain_attack_hold_enemy_max_arrival
+    chain_attack_hold_max_extra: int = PUBLIC_EXACT.chain_attack_hold_max_extra
+    chain_attack_hold_allow_block: bool = PUBLIC_EXACT.chain_attack_hold_allow_block
+    enable_chain_followup_support: bool = PUBLIC_EXACT.enable_chain_followup_support
+    chain_followup_support_min_active_players: int = PUBLIC_EXACT.chain_followup_support_min_active_players
+    chain_followup_support_max_active_players: int = PUBLIC_EXACT.chain_followup_support_max_active_players
+    chain_followup_support_min_step: int = PUBLIC_EXACT.chain_followup_support_min_step
+    chain_followup_support_max_step: int = PUBLIC_EXACT.chain_followup_support_max_step
+    chain_followup_support_recent_window: int = PUBLIC_EXACT.chain_followup_support_recent_window
+    chain_followup_support_min_source_production: float = PUBLIC_EXACT.chain_followup_support_min_source_production
+    chain_followup_support_min_target_production: float = PUBLIC_EXACT.chain_followup_support_min_target_production
+    chain_followup_support_base_margin: int = PUBLIC_EXACT.chain_followup_support_base_margin
+    chain_followup_support_prod_turns: int = PUBLIC_EXACT.chain_followup_support_prod_turns
+    chain_followup_support_enemy_radius: float = PUBLIC_EXACT.chain_followup_support_enemy_radius
+    chain_followup_support_front_bonus: int = PUBLIC_EXACT.chain_followup_support_front_bonus
+    chain_followup_support_max_eta: int = PUBLIC_EXACT.chain_followup_support_max_eta
+    chain_followup_support_min_send: int = PUBLIC_EXACT.chain_followup_support_min_send
+    chain_followup_support_max_send: int = PUBLIC_EXACT.chain_followup_support_max_send
+    chain_followup_support_source_min_after: int = PUBLIC_EXACT.chain_followup_support_source_min_after
+    chain_followup_support_source_prod_turns_after: int = PUBLIC_EXACT.chain_followup_support_source_prod_turns_after
+    chain_followup_support_max_targets: int = PUBLIC_EXACT.chain_followup_support_max_targets
+    enable_high_prod_capture_seed: bool = PUBLIC_EXACT.enable_high_prod_capture_seed
+    capture_seed_min_active_players: int = PUBLIC_EXACT.capture_seed_min_active_players
+    capture_seed_max_active_players: int = PUBLIC_EXACT.capture_seed_max_active_players
+    capture_seed_min_step: int = PUBLIC_EXACT.capture_seed_min_step
+    capture_seed_max_step: int = PUBLIC_EXACT.capture_seed_max_step
+    capture_seed_min_target_production: float = PUBLIC_EXACT.capture_seed_min_target_production
+    capture_seed_max_target_ships: int = PUBLIC_EXACT.capture_seed_max_target_ships
+    capture_seed_include_neutral: bool = PUBLIC_EXACT.capture_seed_include_neutral
+    capture_seed_include_enemy: bool = PUBLIC_EXACT.capture_seed_include_enemy
+    capture_seed_desired_post_capture: int = PUBLIC_EXACT.capture_seed_desired_post_capture
+    capture_seed_prod_turns: int = PUBLIC_EXACT.capture_seed_prod_turns
+    capture_seed_max_primary_eta: int = PUBLIC_EXACT.capture_seed_max_primary_eta
+    capture_seed_max_lag: int = PUBLIC_EXACT.capture_seed_max_lag
+    capture_seed_min_send: int = PUBLIC_EXACT.capture_seed_min_send
+    capture_seed_max_send: int = PUBLIC_EXACT.capture_seed_max_send
+    capture_seed_source_min_after: int = PUBLIC_EXACT.capture_seed_source_min_after
+    capture_seed_source_prod_turns_after: int = PUBLIC_EXACT.capture_seed_source_prod_turns_after
+    capture_seed_max_targets: int = PUBLIC_EXACT.capture_seed_max_targets
     enable_mobile_relay_attack: bool = PUBLIC_EXACT.enable_mobile_relay_attack
     mobile_relay_min_active_players: int = PUBLIC_EXACT.mobile_relay_min_active_players
     mobile_relay_max_active_players: int = PUBLIC_EXACT.mobile_relay_max_active_players
@@ -520,9 +610,13 @@ class PublicRuleAgent:
     home_anchor_positions: list[tuple[float, float]] = field(default_factory=list)
     previous_owner_by_planet: dict[int, int] = field(default_factory=dict)
     recently_captured_steps: dict[int, int] = field(default_factory=dict)
+    recent_capture_previous_owner: dict[int, int] = field(default_factory=dict)
+    recent_capture_vectors: dict[int, tuple[float, float]] = field(default_factory=dict)
+    enemy_recently_captured_steps: dict[int, int] = field(default_factory=dict)
     planet_flip_steps: dict[int, list[int]] = field(default_factory=dict)
     recently_lost_steps: dict[int, int] = field(default_factory=dict)
     third_party_tail_watchlist: dict[tuple[int, int], dict[str, object]] = field(default_factory=dict)
+    doomed_evacuation_source_steps: dict[int, int] = field(default_factory=dict)
     comet_remaining_by_planet: dict[int, int] = field(default_factory=dict)
     did_attack_this_turn: bool = False
     steps_seen: int = 0
@@ -573,8 +667,10 @@ class PublicRuleAgent:
             self._append_comet_evacuation(local, under_attack, exhausted_planet_ids, moves)
         attack_count_before = len(self.fleet_trajectories)
         self._append_attacks(local, under_attack, exhausted_planet_ids, moves)
+        self._append_high_prod_capture_seed(local, under_attack, exhausted_planet_ids, moves, attack_count_before)
+        self._append_chain_followup_support(local, under_attack, exhausted_planet_ids, moves, attack_count_before)
         self.did_attack_this_turn = len(self.fleet_trajectories) > attack_count_before
-        if not self.did_attack_this_turn:
+        if not self.did_attack_this_turn or self.opening_tempo_allow_after_attack:
             self._append_opening_tempo_neutral_fallback(local, under_attack, exhausted_planet_ids, moves)
             self.did_attack_this_turn = len(self.fleet_trajectories) > attack_count_before
         if not self.did_attack_this_turn:
@@ -626,23 +722,39 @@ class PublicRuleAgent:
                     flips.pop(0)
             if previous_owner is not None and previous_owner != local.player and planet.owner == local.player:
                 self.recently_captured_steps[planet.id] = local.step
+                self.recent_capture_previous_owner[planet.id] = previous_owner
+                vector = self._recent_capture_incoming_vector(planet)
+                if vector is not None:
+                    self.recent_capture_vectors[planet.id] = vector
                 self.recently_lost_steps.pop(planet.id, None)
+                self.enemy_recently_captured_steps.pop(planet.id, None)
             elif (
                 previous_owner == local.player
                 and planet.owner != local.player
                 and planet.production >= self._recent_loss_tracking_min_production(local)
             ):
                 self.recently_lost_steps[planet.id] = local.step
+            elif planet.owner in (-1, local.player):
+                self.enemy_recently_captured_steps.pop(planet.id, None)
+            if previous_owner is not None and previous_owner != planet.owner and planet.owner not in (-1, local.player):
+                if planet.production >= self.enemy_recent_capture_disrupt_min_production:
+                    self.enemy_recently_captured_steps[planet.id] = local.step
             self.previous_owner_by_planet[planet.id] = planet.owner
 
         keep_after = local.step - max(1, self.proactive_defense_recent_capture_window)
         for planet_id, step in list(self.recently_captured_steps.items()):
             if step < keep_after:
                 del self.recently_captured_steps[planet_id]
+                self.recent_capture_previous_owner.pop(planet_id, None)
+                self.recent_capture_vectors.pop(planet_id, None)
         keep_lost_after = local.step - max(1, self.recent_loss_recapture_window)
         for planet_id, step in list(self.recently_lost_steps.items()):
             if step < keep_lost_after:
                 del self.recently_lost_steps[planet_id]
+        keep_enemy_capture_after = local.step - max(1, self.enemy_recent_capture_disrupt_window)
+        for planet_id, step in list(self.enemy_recently_captured_steps.items()):
+            if step < keep_enemy_capture_after:
+                del self.enemy_recently_captured_steps[planet_id]
         keep_flip_after = local.step - max(1, self.contested_stop_loss_window)
         for planet_id, steps in list(self.planet_flip_steps.items()):
             kept = [step for step in steps if step >= keep_flip_after]
@@ -650,6 +762,30 @@ class PublicRuleAgent:
                 self.planet_flip_steps[planet_id] = kept
             else:
                 del self.planet_flip_steps[planet_id]
+
+    def _recent_capture_incoming_vector(self, planet: Planet) -> tuple[float, float] | None:
+        best: tuple[int, dict[str, object]] | None = None
+        for tracked in self.fleet_trajectories:
+            target = tracked["target"]
+            if target.id != planet.id:
+                continue
+            arrive_tick = int(tracked.get("arrive_tick", 999))
+            if arrive_tick > 2:
+                continue
+            if best is None or arrive_tick < best[0]:
+                best = (arrive_tick, tracked)
+        if best is None:
+            return None
+
+        tracked = best[1]
+        source_x = float(tracked.get("source_x", planet.x))
+        source_y = float(tracked.get("source_y", planet.y))
+        dx = float(planet.x) - source_x
+        dy = float(planet.y) - source_y
+        norm = math.hypot(dx, dy)
+        if norm <= 1e-6:
+            return None
+        return dx / norm, dy / norm
 
     def _update_third_party_tail_watchlist(self, local: LocalObs) -> None:
         if not self.enable_third_party_tail_watchlist:
@@ -1230,6 +1366,51 @@ class PublicRuleAgent:
             return adjusted
         return None
 
+    def _chain_attack_hold_adjusted_ships(
+        self,
+        source: Planet,
+        target: Planet,
+        total_ships: int,
+        arrive_tick: int,
+        available: int,
+        local: LocalObs,
+    ) -> int | None:
+        if not self.enable_chain_attack_hold_gate:
+            return total_ships
+        if self._recent_capture_chain_source_age(source, local) is None:
+            return total_ships
+        if target.owner == local.player or target.production < self.chain_attack_target_min_production:
+            return total_ships
+
+        post_capture = self._post_capture_ships(source, target, total_ships, local)
+        required = self.chain_attack_hold_margin + int(target.production * self.chain_attack_hold_prod_turns)
+        for enemy in local.planets:
+            if enemy.owner in (-1, local.player) or enemy.id == target.id:
+                continue
+            if distance(enemy, target) > self.chain_attack_hold_enemy_radius:
+                continue
+            sendable = int(enemy.ships * self.chain_attack_hold_enemy_send_fraction)
+            sendable += int(enemy.production * self.chain_attack_hold_enemy_launch_window)
+            sendable -= int(enemy.production * self.chain_attack_hold_enemy_reserve_turns)
+            sendable = max(0, sendable)
+            if sendable < self.min_ships_mine_attack:
+                continue
+            enemy_arrival = travel_ticks(enemy, target, sendable)
+            if enemy_arrival > self.chain_attack_hold_enemy_max_arrival:
+                continue
+            projected_defense = post_capture + int(target.production * max(0, enemy_arrival - arrive_tick))
+            required = max(required, sendable + self.chain_attack_hold_margin - projected_defense + post_capture)
+
+        if post_capture >= required:
+            return total_ships
+        extra = required - post_capture
+        if extra > self.chain_attack_hold_max_extra:
+            return None if self.chain_attack_hold_allow_block else total_ships
+        adjusted = total_ships + extra
+        if adjusted <= available:
+            return adjusted
+        return None if self.chain_attack_hold_allow_block else total_ships
+
     def _source_threat_target_penalty(self, source: Planet, target: Planet, local: LocalObs) -> float:
         if not self.enable_source_threat_target_penalty:
             return 0.0
@@ -1498,10 +1679,21 @@ class PublicRuleAgent:
             return
 
         planet_by_id = {planet.id: planet for planet in local.mine}
+        if self.doomed_evac_source_cooldown > 0:
+            live_source_ids = set(planet_by_id)
+            for source_id, step in list(self.doomed_evacuation_source_steps.items()):
+                if source_id not in live_source_ids or local.step - step > self.doomed_evac_source_cooldown:
+                    del self.doomed_evacuation_source_steps[source_id]
+
         doomed_rows: list[tuple[float, Planet, int, int]] = []
         for target_id, attack_row in under_attack.items():
             source = planet_by_id.get(target_id)
             if source is None or source.id in exhausted_planet_ids:
+                continue
+            if (
+                self.doomed_evac_source_cooldown > 0
+                and source.id in self.doomed_evacuation_source_steps
+            ):
                 continue
             if source.production < self.doomed_evac_min_production:
                 continue
@@ -1531,14 +1723,18 @@ class PublicRuleAgent:
             )
             if target_plan is None:
                 continue
-            target, angle, arrive_tick = target_plan
-            if self.enable_sun_avoidance and sun_collision(source, ships, angle):
+            target, angle, arrive_tick, send_ships = target_plan
+            if send_ships < self.doomed_evac_min_send or send_ships > ships:
                 continue
-            if not self._path_hits_target(source, target, ships, angle, arrive_tick, local):
+            if self.enable_sun_avoidance and sun_collision(source, send_ships, angle):
+                continue
+            if not self._path_hits_target(source, target, send_ships, angle, arrive_tick, local):
                 continue
 
-            moves.append([source.id, angle, ships])
+            moves.append([source.id, angle, send_ships])
             exhausted_planet_ids.add(source.id)
+            if self.doomed_evac_source_cooldown > 0:
+                self.doomed_evacuation_source_steps[source.id] = local.step
             evacuated += 1
             if target.owner == local.player:
                 self.reinforcement_trajectories.append(
@@ -1546,12 +1742,12 @@ class PublicRuleAgent:
                         "source_id": source.id,
                         "target": target,
                         "angle": angle,
-                        "total_ships": ships,
+                        "total_ships": send_ships,
                         "arrive_tick": arrive_tick,
                     }
                 )
             else:
-                self._track_attack(source, target, angle, ships, arrive_tick)
+                self._track_attack(source, target, angle, send_ships, arrive_tick)
 
     def _doomed_evacuation_pressure(
         self,
@@ -1601,14 +1797,51 @@ class PublicRuleAgent:
         under_attack: dict[int, dict[str, object]],
         doomed_ids: set[int],
         attack_row: dict[str, object],
-    ) -> tuple[Planet, float, int] | None:
-        scored: list[tuple[float, Planet, float, int]] = []
+    ) -> tuple[Planet, float, int, int] | None:
+        scored: list[tuple[float, Planet, float, int, int]] = []
         enemy_planets = [planet for planet in local.planets if planet.owner not in (-1, local.player)]
         attack_source_ids = {
             int(row["fleet"].from_planet_id)
             for row in attack_row.get("fleets", [])
             if int(row["fleet"].from_planet_id) >= 0
         }
+
+        if self.doomed_evac_use_tail_capture_plan:
+            tail_max_ships = ships
+            if self.doomed_evac_tail_max_ships > 0:
+                tail_max_ships = min(tail_max_ships, self.doomed_evac_tail_max_ships)
+            for target in local.targets:
+                if target.id == source.id or target.id in doomed_ids:
+                    continue
+                plan = self._third_party_tail_capture_plan(
+                    source,
+                    target,
+                    local,
+                    source_min_after_override=self.doomed_evac_tail_source_min_after,
+                    max_ships_override=tail_max_ships,
+                )
+                if plan is None:
+                    continue
+                if int(plan.get("enemy_arrival", 0)) < self.doomed_evac_tail_min_enemy_arrival:
+                    continue
+                if int(plan.get("enemy_post_capture", 0)) < self.doomed_evac_tail_min_enemy_post_capture:
+                    continue
+                plan_ships = int(plan["ships"])
+                if plan_ships < self.doomed_evac_min_send or plan_ships > ships:
+                    continue
+                if float(plan["score"]) < self.doomed_evac_tail_min_score:
+                    continue
+                send_ships = plan_ships if self.doomed_evac_tail_send_exact else ships
+                angle, arrive_tick = self._angle_and_arrival(source, target, send_ships, local)
+                if angle is None or arrive_tick is None:
+                    continue
+                score = (
+                    float(plan["score"])
+                    + self.doomed_evac_tail_score_bonus
+                    + target.production * self.doomed_evac_target_prod_weight
+                    - arrive_tick * 0.25
+                )
+                scored.append((score, target, angle, arrive_tick, send_ships))
 
         if self.doomed_evac_allow_own_target:
             for target in local.mine:
@@ -1629,7 +1862,7 @@ class PublicRuleAgent:
                     - arrive_tick
                     - front_penalty
                 )
-                scored.append((score, target, angle, arrive_tick))
+                scored.append((score, target, angle, arrive_tick, ships))
 
         if self.doomed_evac_allow_attack_target:
             for target in local.targets:
@@ -1661,13 +1894,13 @@ class PublicRuleAgent:
                     + (self.doomed_evac_enemy_target_bonus if target.owner not in (-1, local.player) else 0.0)
                     - arrive_tick
                 )
-                scored.append((score, target, angle, arrive_tick))
+                scored.append((score, target, angle, arrive_tick, ships))
 
         if not scored:
             return None
         scored.sort(key=lambda row: row[0], reverse=True)
-        _, target, angle, arrive_tick = scored[0]
-        return target, angle, arrive_tick
+        _, target, angle, arrive_tick, send_ships = scored[0]
+        return target, angle, arrive_tick, send_ships
 
     def _append_recent_high_prod_hub_support(
         self,
@@ -1758,6 +1991,97 @@ class PublicRuleAgent:
                 )
                 supported += 1
                 break
+
+    def _append_chain_followup_support(
+        self,
+        local: LocalObs,
+        under_attack: dict[int, dict[str, object]],
+        exhausted_planet_ids: set[int],
+        moves: list[list[float | int]],
+        attack_count_before: int,
+    ) -> None:
+        if not self.enable_chain_followup_support:
+            return
+        if local.step < self.chain_followup_support_min_step or local.step > self.chain_followup_support_max_step:
+            return
+        active_players = self._active_player_count(local)
+        if active_players < self.chain_followup_support_min_active_players:
+            return
+        if self.chain_followup_support_max_active_players > 0 and active_players > self.chain_followup_support_max_active_players:
+            return
+
+        mine_by_id = {planet.id: planet for planet in local.mine}
+        enemy_planets = [planet for planet in local.planets if planet.owner not in (-1, local.player)]
+        supported = 0
+        for attack in self.fleet_trajectories[attack_count_before:]:
+            source = mine_by_id.get(int(attack["source_id"]))
+            target = attack["target"]
+            if source is None or not isinstance(target, Planet):
+                continue
+            if source.production < self.chain_followup_support_min_source_production:
+                continue
+            captured_step = self.recently_captured_steps.get(source.id)
+            if captured_step is None:
+                continue
+            age = local.step - captured_step
+            if age < 0 or age > self.chain_followup_support_recent_window:
+                continue
+            if target.production < self.chain_followup_support_min_target_production:
+                continue
+            if source.id in under_attack:
+                continue
+
+            sent = int(attack["total_ships"])
+            post_attack_ships = max(0, int(source.ships) - sent)
+            incoming_support = sum(
+                int(row["total_ships"])
+                for row in self.reinforcement_trajectories
+                if row["target"].id == source.id and int(row["arrive_tick"]) <= self.chain_followup_support_max_eta
+            )
+            nearest_enemy = min((distance(source, enemy) for enemy in enemy_planets), default=10**9)
+            desired = self.chain_followup_support_base_margin + int(
+                source.production * self.chain_followup_support_prod_turns
+            )
+            if nearest_enemy <= self.chain_followup_support_enemy_radius:
+                desired += self.chain_followup_support_front_bonus
+            deficit = desired - post_attack_ships - incoming_support
+            if deficit < self.chain_followup_support_min_send:
+                continue
+
+            for supporter, _ in closest_planets_to_target(local.mine, source):
+                if supporter.id == source.id or supporter.id in exhausted_planet_ids:
+                    continue
+                reserve = self.chain_followup_support_source_min_after + int(
+                    supporter.production * self.chain_followup_support_source_prod_turns_after
+                )
+                available = self._available_ships(supporter, under_attack, reserve_outgoing_reinforcements=True)
+                ships_to_send = min(deficit, self.chain_followup_support_max_send, max(0, available - reserve))
+                if ships_to_send < self.chain_followup_support_min_send:
+                    continue
+                angle, arrive_tick = self._angle_and_arrival(supporter, source, ships_to_send, local)
+                if angle is None or arrive_tick is None or arrive_tick > self.chain_followup_support_max_eta:
+                    continue
+                if self.enable_sun_avoidance and sun_collision(supporter, ships_to_send, angle):
+                    continue
+                if not self._path_hits_target(supporter, source, ships_to_send, angle, arrive_tick, local):
+                    continue
+
+                moves.append([supporter.id, angle, ships_to_send])
+                exhausted_planet_ids.add(supporter.id)
+                self.reinforcement_trajectories.append(
+                    {
+                        "source_id": supporter.id,
+                        "target": source,
+                        "angle": angle,
+                        "total_ships": ships_to_send,
+                        "arrive_tick": arrive_tick,
+                    }
+                )
+                supported += 1
+                break
+
+            if supported >= self.chain_followup_support_max_targets:
+                return
 
     def _append_comet_evacuation(
         self,
@@ -2250,6 +2574,128 @@ class PublicRuleAgent:
                 if self.enable_coop_attacks and self._try_coop_attack(source, target, local, under_attack, exhausted_planet_ids, moves):
                     break
 
+    def _append_high_prod_capture_seed(
+        self,
+        local: LocalObs,
+        under_attack: dict[int, dict[str, object]],
+        exhausted_planet_ids: set[int],
+        moves: list[list[float | int]],
+        attack_count_before: int,
+    ) -> None:
+        if not self.enable_high_prod_capture_seed:
+            return
+        if local.step < self.capture_seed_min_step or local.step > self.capture_seed_max_step:
+            return
+        active_players = self._active_player_count(local)
+        if active_players < self.capture_seed_min_active_players:
+            return
+        if self.capture_seed_max_active_players > 0 and active_players > self.capture_seed_max_active_players:
+            return
+
+        recent_attacks = self.fleet_trajectories[attack_count_before:]
+        if not recent_attacks:
+            return
+
+        target_plans: dict[int, tuple[float, Planet, int]] = {}
+        for tracked in recent_attacks:
+            target = tracked["target"]
+            if target.owner == -1 and not self.capture_seed_include_neutral:
+                continue
+            if target.owner not in (-1, local.player) and not self.capture_seed_include_enemy:
+                continue
+            if target.owner == local.player:
+                continue
+            if target.production < self.capture_seed_min_target_production:
+                continue
+            if target.ships > self.capture_seed_max_target_ships:
+                continue
+            if self.skip_comet_targets and target.id in local.comet_planet_ids:
+                continue
+            primary_eta = int(tracked.get("arrive_tick", 999))
+            if primary_eta > self.capture_seed_max_primary_eta:
+                continue
+            post_capture = self._projected_post_capture_for_seed(target, primary_eta)
+            desired = self.capture_seed_desired_post_capture + int(target.production * self.capture_seed_prod_turns)
+            need = desired - post_capture
+            if need < self.capture_seed_min_send:
+                continue
+            score = target.production * 100.0 - target.ships - primary_eta
+            if target.owner not in (-1, local.player):
+                score += 25.0
+            previous = target_plans.get(target.id)
+            if previous is None or score > previous[0]:
+                target_plans[target.id] = (score, target, primary_eta)
+
+        if not target_plans:
+            return
+
+        seeded = 0
+        for _, target, primary_eta in sorted(target_plans.values(), key=lambda row: row[0], reverse=True):
+            if seeded >= self.capture_seed_max_targets:
+                return
+            seed_plan = self._best_high_prod_capture_seed_source(target, primary_eta, local, under_attack, exhausted_planet_ids)
+            if seed_plan is None:
+                continue
+            source, angle, ships, arrive_tick = seed_plan
+            moves.append([source.id, angle, ships])
+            exhausted_planet_ids.add(source.id)
+            self._track_attack(source, target, angle, ships, arrive_tick)
+            seeded += 1
+
+    def _projected_post_capture_for_seed(self, target: Planet, primary_eta: int) -> int:
+        en_route = sum(
+            int(row["total_ships"])
+            for row in self.fleet_trajectories
+            if row["target"].id == target.id
+        )
+        defense = int(target.ships)
+        if target.owner != -1:
+            defense += int(target.production * primary_eta)
+        return en_route - defense
+
+    def _best_high_prod_capture_seed_source(
+        self,
+        target: Planet,
+        primary_eta: int,
+        local: LocalObs,
+        under_attack: dict[int, dict[str, object]],
+        exhausted_planet_ids: set[int],
+    ) -> tuple[Planet, float, int, int] | None:
+        post_capture = self._projected_post_capture_for_seed(target, primary_eta)
+        desired = self.capture_seed_desired_post_capture + int(target.production * self.capture_seed_prod_turns)
+        ships_needed = max(self.capture_seed_min_send, desired - post_capture)
+        ships_needed = min(self.capture_seed_max_send, ships_needed)
+        if ships_needed < self.capture_seed_min_send:
+            return None
+
+        source_rows: list[tuple[float, Planet, float, int, int]] = []
+        for source, _ in closest_planets_to_target(local.mine, target):
+            if source.id == target.id or source.id in exhausted_planet_ids:
+                continue
+            reserve = self.capture_seed_source_min_after + int(source.production * self.capture_seed_source_prod_turns_after)
+            available = self._available_local_attack_ships(source, local, under_attack)
+            if available - ships_needed < reserve:
+                continue
+            angle, arrive_tick = self._angle_and_arrival(source, target, ships_needed, local)
+            if angle is None or arrive_tick is None:
+                continue
+            if arrive_tick > self.capture_seed_max_primary_eta:
+                continue
+            if arrive_tick > primary_eta + self.capture_seed_max_lag:
+                continue
+            if self.enable_sun_avoidance and sun_collision(source, ships_needed, angle):
+                continue
+            if not self._path_hits_target(source, target, ships_needed, angle, arrive_tick, local):
+                continue
+            score = -abs(arrive_tick - primary_eta) * 2.0 - arrive_tick + source.production * 3.0 + available * 0.05
+            source_rows.append((score, source, angle, ships_needed, arrive_tick))
+
+        if not source_rows:
+            return None
+        source_rows.sort(key=lambda row: row[0], reverse=True)
+        _, source, angle, ships, arrive_tick = source_rows[0]
+        return source, angle, ships, arrive_tick
+
     def _append_global_priority_attacks(
         self,
         local: LocalObs,
@@ -2472,10 +2918,35 @@ class PublicRuleAgent:
         captured_step = self.recently_captured_steps.get(source.id)
         if captured_step is None:
             return None
+        if not self._recent_capture_chain_source_previous_owner_matches(source, local):
+            return None
         age = local.step - captured_step
         if age < 0 or age > self.chain_attack_source_window:
             return None
         return age
+
+    def _recent_capture_chain_source_previous_owner_matches(self, source: Planet, local: LocalObs) -> bool:
+        mode = str(self.chain_attack_source_previous_owner or "any").lower()
+        if mode in ("", "any", "all"):
+            return True
+        previous_owner = self.recent_capture_previous_owner.get(source.id)
+        if previous_owner is None:
+            return False
+        if mode == "neutral":
+            return previous_owner == -1
+        if mode == "enemy":
+            return previous_owner not in (-1, local.player)
+        return True
+
+    def _recent_capture_chain_target_owner_matches(self, target: Planet, local: LocalObs) -> bool:
+        mode = str(self.chain_attack_target_owner or "any").lower()
+        if mode in ("", "any", "all"):
+            return target.owner != local.player
+        if mode == "neutral":
+            return target.owner == -1
+        if mode == "enemy":
+            return target.owner not in (-1, local.player)
+        return target.owner != local.player
 
     def _recent_capture_chain_source_priority(self, source: Planet, local: LocalObs) -> float:
         age = self._recent_capture_chain_source_age(source, local)
@@ -2487,7 +2958,9 @@ class PublicRuleAgent:
         age = self._recent_capture_chain_source_age(source, local)
         if age is None:
             return 0.0
-        if target.owner == local.player or target.production < self.chain_attack_target_min_production:
+        if not self._recent_capture_chain_target_owner_matches(target, local):
+            return 0.0
+        if target.production < self.chain_attack_target_min_production:
             return 0.0
         base_ships = self._base_ships_needed(target, local, source=source)
         if base_ships is None:
@@ -2498,7 +2971,33 @@ class PublicRuleAgent:
         bonus = self.chain_attack_neutral_bonus if target.owner == -1 else self.chain_attack_enemy_bonus
         urgency = max(0.0, 1.0 - age / max(1, self.chain_attack_source_window))
         eta_relief = max(0.0, 1.0 - arrive_tick / max(1, self.chain_attack_max_eta))
-        return bonus * (1.0 + 0.25 * urgency + 0.25 * eta_relief)
+        direction_bonus = self._recent_capture_chain_direction_bonus(source, target)
+        return bonus * (1.0 + 0.25 * urgency + 0.25 * eta_relief) + direction_bonus
+
+    def _recent_capture_chain_direction_bonus(self, source: Planet, target: Planet) -> float:
+        if not self.enable_chain_attack_direction_bonus:
+            return 0.0
+        incoming = self.recent_capture_vectors.get(source.id)
+        if incoming is None:
+            return 0.0
+        dx = float(target.x) - float(source.x)
+        dy = float(target.y) - float(source.y)
+        norm = math.hypot(dx, dy)
+        if norm <= 1e-6:
+            return 0.0
+        dot = incoming[0] * dx / norm + incoming[1] * dy / norm
+        min_dot = math.cos(math.radians(max(0.0, min(180.0, self.chain_attack_direction_max_angle))))
+        if dot < min_dot:
+            return 0.0
+        base = (
+            self.chain_attack_direction_neutral_bonus
+            if target.owner == -1
+            else self.chain_attack_direction_enemy_bonus
+        )
+        if target.production >= max(4.0, self.chain_attack_target_min_production):
+            base += self.chain_attack_direction_high_prod_bonus
+        alignment = (dot - min_dot) / max(1e-6, 1.0 - min_dot)
+        return base * (0.5 + 0.5 * alignment)
 
     def _mobile_relay_active(self, local: LocalObs) -> bool:
         if not self.enable_mobile_relay_attack:
@@ -2739,9 +3238,23 @@ class PublicRuleAgent:
         source: Planet,
         target: Planet,
         local: LocalObs,
+        source_min_after_override: int | None = None,
+        max_ships_override: int | None = None,
     ) -> dict[str, float] | None:
-        live_plan = self._live_third_party_tail_capture_plan(source, target, local)
-        watch_plan = self._watchlist_third_party_tail_capture_plan(source, target, local)
+        live_plan = self._live_third_party_tail_capture_plan(
+            source,
+            target,
+            local,
+            source_min_after_override=source_min_after_override,
+            max_ships_override=max_ships_override,
+        )
+        watch_plan = self._watchlist_third_party_tail_capture_plan(
+            source,
+            target,
+            local,
+            source_min_after_override=source_min_after_override,
+            max_ships_override=max_ships_override,
+        )
         if live_plan is None:
             return watch_plan
         if watch_plan is None:
@@ -2753,6 +3266,8 @@ class PublicRuleAgent:
         source: Planet,
         target: Planet,
         local: LocalObs,
+        source_min_after_override: int | None = None,
+        max_ships_override: int | None = None,
     ) -> dict[str, float] | None:
         if not self.enable_third_party_tail_capture:
             return None
@@ -2798,6 +3313,8 @@ class PublicRuleAgent:
                 local,
                 enemy_arrival,
                 enemy_post_capture,
+                source_min_after_override=source_min_after_override,
+                max_ships_override=max_ships_override,
             )
             if plan is None:
                 continue
@@ -2813,6 +3330,8 @@ class PublicRuleAgent:
         source: Planet,
         target: Planet,
         local: LocalObs,
+        source_min_after_override: int | None = None,
+        max_ships_override: int | None = None,
     ) -> dict[str, float] | None:
         if not (self.enable_third_party_tail_capture and self.enable_third_party_tail_watchlist):
             return None
@@ -2867,6 +3386,8 @@ class PublicRuleAgent:
                 enemy_arrival,
                 enemy_post_capture,
                 direct_need_override=direct_need,
+                source_min_after_override=source_min_after_override,
+                max_ships_override=max_ships_override,
             )
             if plan is None:
                 continue
@@ -2907,6 +3428,8 @@ class PublicRuleAgent:
         enemy_arrival: int,
         enemy_post_capture: int,
         direct_need_override: int | None = None,
+        source_min_after_override: int | None = None,
+        max_ships_override: int | None = None,
     ) -> dict[str, float] | None:
         if direct_need_override is None:
             direct_need = target.ships + 1
@@ -2917,7 +3440,15 @@ class PublicRuleAgent:
 
         min_ships = max(1, int(enemy_post_capture) + 1 + self.third_party_tail_margin)
         min_ships = max(min_ships, self.third_party_tail_min_send)
-        max_ships = min(int(self.third_party_tail_max_ships), int(source.ships - self.third_party_tail_source_min_after))
+        source_min_after = (
+            self.third_party_tail_source_min_after
+            if source_min_after_override is None
+            else int(source_min_after_override)
+        )
+        max_ships_limit = (
+            self.third_party_tail_max_ships if max_ships_override is None else int(max_ships_override)
+        )
+        max_ships = min(int(max_ships_limit), int(source.ships - source_min_after))
         if max_ships < min_ships:
             return None
 
@@ -3226,6 +3757,26 @@ class PublicRuleAgent:
                 if not self._path_hits_target(source, target, total_ships, angle, arrive_tick, local):
                     return False
 
+            adjusted_chain_hold_ships = self._chain_attack_hold_adjusted_ships(
+                source,
+                target,
+                total_ships,
+                arrive_tick,
+                available,
+                local,
+            )
+            if adjusted_chain_hold_ships is None:
+                return False
+            if adjusted_chain_hold_ships > total_ships:
+                total_ships = adjusted_chain_hold_ships
+                angle, arrive_tick = self._angle_and_arrival(source, target, total_ships, local)
+                if angle is None or arrive_tick is None:
+                    return False
+                if self.enable_sun_avoidance and sun_collision(source, total_ships, angle):
+                    return False
+                if not self._path_hits_target(source, target, total_ships, angle, arrive_tick, local):
+                    return False
+
             post_capture_ships = self._post_capture_ships(source, target, total_ships, local)
             if self._third_party_anti_tail_hold_blocks(target, local, post_capture_ships, arrive_tick):
                 return False
@@ -3320,6 +3871,8 @@ class PublicRuleAgent:
             return 0.0
         if target.production > self.contested_stop_loss_low_prod_max:
             return 0.0
+        if self._contested_stop_loss_connector_exception(target, local):
+            return 0.0
         extra_flips = max(0, flips - self.contested_stop_loss_flip_threshold)
         return self.contested_stop_loss_penalty * (1.0 + 0.35 * extra_flips)
 
@@ -3339,6 +3892,8 @@ class PublicRuleAgent:
             return False
         if target.production > self.contested_stop_loss_low_prod_max:
             return False
+        if self._contested_stop_loss_connector_exception(target, local):
+            return False
         post_capture = self._post_capture_ships(source, target, total_ships, local)
         required_hold = max(
             self.contested_stop_loss_min_hold,
@@ -3346,10 +3901,31 @@ class PublicRuleAgent:
         )
         return post_capture < required_hold
 
+    def _contested_stop_loss_connector_exception(self, target: Planet, local: LocalObs) -> bool:
+        if not self.enable_contested_stop_loss_connector_exception:
+            return False
+        has_own_link = any(
+            planet.owner == local.player
+            and planet.id != target.id
+            and distance(planet, target) <= self.contested_stop_loss_connector_own_radius
+            for planet in local.planets
+        )
+        if not has_own_link:
+            return False
+        return any(
+            planet.owner != -1
+            and planet.id != target.id
+            and planet.production >= self.contested_stop_loss_connector_min_high_prod
+            and distance(planet, target) <= self.contested_stop_loss_connector_radius
+            for planet in local.planets
+        )
+
     def _target_score(self, source: Planet, target: Planet, local: LocalObs) -> float:
         score = public_custom_score(source, target)
         score += self._early_neutral_score_adjustment(source, target, local)
         score += self._recent_loss_recapture_score(target, local)
+        score += self._enemy_recent_capture_disrupt_score(target, local)
+        score += self._enemy_high_prod_pressure_score(source, target, local)
         score -= self._contested_stop_loss_penalty(target, local)
         score += self._third_party_tail_capture_score(source, target, local)
         score += self._multiplayer_diplomacy_score(source, target, local)
@@ -3385,6 +3961,36 @@ class PublicRuleAgent:
         if self._early_neutral_allowed(source, target, local) and self.early_neutral_holdability_relief < 1.0:
             risk *= max(0.0, self.early_neutral_holdability_relief)
         return score - risk * self.holdability_weight
+
+    def _enemy_high_prod_pressure_score(self, source: Planet, target: Planet, local: LocalObs) -> float:
+        if not self.enable_enemy_high_prod_pressure:
+            return 0.0
+        if target.owner in (-1, local.player):
+            return 0.0
+        if local.step < self.enemy_high_prod_pressure_min_step or local.step > self.enemy_high_prod_pressure_max_step:
+            return 0.0
+        active_players = self._active_player_count(local)
+        if active_players < self.enemy_high_prod_pressure_min_active_players:
+            return 0.0
+        if self.enemy_high_prod_pressure_max_active_players > 0 and active_players > self.enemy_high_prod_pressure_max_active_players:
+            return 0.0
+        if target.production < self.enemy_high_prod_pressure_min_production:
+            return 0.0
+        if target.ships > self.enemy_high_prod_pressure_max_ships:
+            return 0.0
+
+        needed = self._base_ships_needed(target, local, source=source)
+        if needed is None:
+            return 0.0
+        eta = self._estimate_arrival_for_requirement(source, target, needed, local)
+        if eta > self.enemy_high_prod_pressure_max_eta:
+            return 0.0
+        return (
+            self.enemy_high_prod_pressure_bonus
+            + target.production * self.enemy_high_prod_pressure_prod_weight
+            - target.ships * self.enemy_high_prod_pressure_ship_weight
+            - eta * self.enemy_high_prod_pressure_eta_weight
+        )
 
     def _multiplayer_diplomacy_score(self, source: Planet, target: Planet, local: LocalObs) -> float:
         if not self.enable_multiplayer_diplomacy_score:
@@ -3447,6 +4053,35 @@ class PublicRuleAgent:
         age = max(0, local.step - lost_step)
         freshness = 1.0 - age / max(1, self.recent_loss_recapture_window)
         return self.recent_loss_recapture_bonus * freshness + target.production * self.recent_loss_recapture_prod_weight
+
+    def _enemy_recent_capture_disrupt_score(self, target: Planet, local: LocalObs) -> float:
+        if not self.enable_enemy_recent_capture_disrupt:
+            return 0.0
+        if local.step < self.enemy_recent_capture_disrupt_min_step or local.step > self.enemy_recent_capture_disrupt_max_step:
+            return 0.0
+        active_players = self._active_player_count(local)
+        if active_players < self.enemy_recent_capture_disrupt_min_active_players:
+            return 0.0
+        if self.enemy_recent_capture_disrupt_max_active_players > 0 and active_players > self.enemy_recent_capture_disrupt_max_active_players:
+            return 0.0
+        if target.owner in (-1, local.player):
+            return 0.0
+        if target.production < self.enemy_recent_capture_disrupt_min_production:
+            return 0.0
+        if target.ships > self.enemy_recent_capture_disrupt_max_ships:
+            return 0.0
+        captured_step = self.enemy_recently_captured_steps.get(target.id)
+        if captured_step is None:
+            return 0.0
+        age = local.step - captured_step
+        if age < 0 or age > self.enemy_recent_capture_disrupt_window:
+            return 0.0
+        freshness = 1.0 - age / max(1, self.enemy_recent_capture_disrupt_window)
+        return (
+            self.enemy_recent_capture_disrupt_bonus * freshness
+            + target.production * self.enemy_recent_capture_disrupt_prod_weight
+            - age * self.enemy_recent_capture_disrupt_age_weight
+        )
 
     def _recent_loss_tracking_min_production(self, local: LocalObs) -> float:
         if not self.enable_dynamic_front_base_recapture:
@@ -3897,6 +4532,8 @@ class PublicRuleAgent:
         self.fleet_trajectories.append(
             {
                 "source_id": source.id,
+                "source_x": source.x,
+                "source_y": source.y,
                 "target": target,
                 "angle": angle,
                 "total_ships": ships,
