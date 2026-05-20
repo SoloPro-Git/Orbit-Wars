@@ -144,6 +144,34 @@ class PublicRuleAgent:
     enemy_wave_preserve_max_targets: int = PUBLIC_EXACT.enemy_wave_preserve_max_targets
     enemy_wave_preserve_source_min_after: int = PUBLIC_EXACT.enemy_wave_preserve_source_min_after
     enemy_wave_preserve_source_prod_turns_after: int = PUBLIC_EXACT.enemy_wave_preserve_source_prod_turns_after
+    enable_doomed_planet_evacuation: bool = PUBLIC_EXACT.enable_doomed_planet_evacuation
+    doomed_evac_min_active_players: int = PUBLIC_EXACT.doomed_evac_min_active_players
+    doomed_evac_max_active_players: int = PUBLIC_EXACT.doomed_evac_max_active_players
+    doomed_evac_min_step: int = PUBLIC_EXACT.doomed_evac_min_step
+    doomed_evac_max_step: int = PUBLIC_EXACT.doomed_evac_max_step
+    doomed_evac_min_production: float = PUBLIC_EXACT.doomed_evac_min_production
+    doomed_evac_horizon: int = PUBLIC_EXACT.doomed_evac_horizon
+    doomed_evac_min_arrival: int = PUBLIC_EXACT.doomed_evac_min_arrival
+    doomed_evac_max_arrival: int = PUBLIC_EXACT.doomed_evac_max_arrival
+    doomed_evac_min_enemy_post_capture: int = PUBLIC_EXACT.doomed_evac_min_enemy_post_capture
+    doomed_evac_keep_ships: int = PUBLIC_EXACT.doomed_evac_keep_ships
+    doomed_evac_min_send: int = PUBLIC_EXACT.doomed_evac_min_send
+    doomed_evac_max_send: int = PUBLIC_EXACT.doomed_evac_max_send
+    doomed_evac_max_sources: int = PUBLIC_EXACT.doomed_evac_max_sources
+    doomed_evac_allow_own_target: bool = PUBLIC_EXACT.doomed_evac_allow_own_target
+    doomed_evac_allow_attack_target: bool = PUBLIC_EXACT.doomed_evac_allow_attack_target
+    doomed_evac_own_target_bonus: float = PUBLIC_EXACT.doomed_evac_own_target_bonus
+    doomed_evac_attack_target_bonus: float = PUBLIC_EXACT.doomed_evac_attack_target_bonus
+    doomed_evac_target_prod_weight: float = PUBLIC_EXACT.doomed_evac_target_prod_weight
+    doomed_evac_enemy_target_bonus: float = PUBLIC_EXACT.doomed_evac_enemy_target_bonus
+    doomed_evac_attack_max_arrival: int = PUBLIC_EXACT.doomed_evac_attack_max_arrival
+    doomed_evac_attack_min_production: float = PUBLIC_EXACT.doomed_evac_attack_min_production
+    doomed_evac_attack_enemy_only: bool = PUBLIC_EXACT.doomed_evac_attack_enemy_only
+    doomed_evac_attack_min_net_value: float = PUBLIC_EXACT.doomed_evac_attack_min_net_value
+    doomed_evac_attack_source_only: bool = PUBLIC_EXACT.doomed_evac_attack_source_only
+    doomed_evac_attack_source_bonus: float = PUBLIC_EXACT.doomed_evac_attack_source_bonus
+    doomed_evac_safe_enemy_radius: float = PUBLIC_EXACT.doomed_evac_safe_enemy_radius
+    doomed_evac_front_penalty: float = PUBLIC_EXACT.doomed_evac_front_penalty
     enable_proactive_value_defense: bool = PUBLIC_EXACT.enable_proactive_value_defense
     proactive_defense_min_active_players: int = PUBLIC_EXACT.proactive_defense_min_active_players
     proactive_defense_max_active_players: int = PUBLIC_EXACT.proactive_defense_max_active_players
@@ -537,6 +565,8 @@ class PublicRuleAgent:
             self._append_reinforcements(local, under_attack, exhausted_planet_ids, moves)
         if self.enable_enemy_wave_preserve_prod:
             self._append_enemy_wave_preserve_prod(local, under_attack, exhausted_planet_ids, moves)
+        if self.enable_doomed_planet_evacuation:
+            self._append_doomed_planet_evacuation(local, under_attack, exhausted_planet_ids, moves)
         if self.enable_recent_high_prod_hub_support:
             self._append_recent_high_prod_hub_support(local, under_attack, exhausted_planet_ids, moves)
         if self.enable_comet_evacuation:
@@ -1451,6 +1481,193 @@ class PublicRuleAgent:
             return None
         ships_needed = enemy_post_capture + self.enemy_wave_preserve_margin
         return max(self.enemy_wave_preserve_min_send, ships_needed), max(1, low_tick), enemy_post_capture
+
+    def _append_doomed_planet_evacuation(
+        self,
+        local: LocalObs,
+        under_attack: dict[int, dict[str, object]],
+        exhausted_planet_ids: set[int],
+        moves: list[list[float | int]],
+    ) -> None:
+        if local.step < self.doomed_evac_min_step or local.step > self.doomed_evac_max_step:
+            return
+        active_players = self._active_player_count(local)
+        if active_players < self.doomed_evac_min_active_players:
+            return
+        if self.doomed_evac_max_active_players > 0 and active_players > self.doomed_evac_max_active_players:
+            return
+
+        planet_by_id = {planet.id: planet for planet in local.mine}
+        doomed_rows: list[tuple[float, Planet, int, int]] = []
+        for target_id, attack_row in under_attack.items():
+            source = planet_by_id.get(target_id)
+            if source is None or source.id in exhausted_planet_ids:
+                continue
+            if source.production < self.doomed_evac_min_production:
+                continue
+            pressure = self._doomed_evacuation_pressure(source, attack_row)
+            if pressure is None:
+                continue
+            enemy_post_capture, fall_tick = pressure
+            ships = min(self.doomed_evac_max_send, max(0, int(source.ships) - self.doomed_evac_keep_ships))
+            if ships < self.doomed_evac_min_send:
+                continue
+            score = enemy_post_capture + source.production * 10.0 - fall_tick * 0.5
+            doomed_rows.append((score, source, ships, fall_tick))
+
+        doomed_rows.sort(key=lambda row: row[0], reverse=True)
+        doomed_ids = {source.id for _, source, _, _ in doomed_rows}
+        evacuated = 0
+        for _, source, ships, _ in doomed_rows:
+            if evacuated >= self.doomed_evac_max_sources:
+                break
+            target_plan = self._best_doomed_evacuation_target(
+                source,
+                ships,
+                local,
+                under_attack,
+                doomed_ids,
+                attack_row,
+            )
+            if target_plan is None:
+                continue
+            target, angle, arrive_tick = target_plan
+            if self.enable_sun_avoidance and sun_collision(source, ships, angle):
+                continue
+            if not self._path_hits_target(source, target, ships, angle, arrive_tick, local):
+                continue
+
+            moves.append([source.id, angle, ships])
+            exhausted_planet_ids.add(source.id)
+            evacuated += 1
+            if target.owner == local.player:
+                self.reinforcement_trajectories.append(
+                    {
+                        "source_id": source.id,
+                        "target": target,
+                        "angle": angle,
+                        "total_ships": ships,
+                        "arrive_tick": arrive_tick,
+                    }
+                )
+            else:
+                self._track_attack(source, target, angle, ships, arrive_tick)
+
+    def _doomed_evacuation_pressure(
+        self,
+        target: Planet,
+        attack_row: dict[str, object],
+    ) -> tuple[int, int] | None:
+        attacking = sorted(
+            [row for row in attack_row["fleets"] if int(row["arrive_tick"]) <= self.doomed_evac_horizon],
+            key=lambda row: row["arrive_tick"],
+        )
+        if not attacking:
+            return None
+
+        incoming = sorted(
+            [row for row in self.reinforcement_trajectories if row["target"].id == target.id],
+            key=lambda row: row["arrive_tick"],
+        )
+        available = int(target.ships)
+        previous_tick = 0
+        reinf_idx = 0
+        lowest_margin = available
+        low_tick = int(attacking[0]["arrive_tick"])
+        for attack in attacking:
+            arrive_tick = int(attack["arrive_tick"])
+            available += int((arrive_tick - previous_tick) * target.production)
+            while reinf_idx < len(incoming) and int(incoming[reinf_idx]["arrive_tick"]) <= arrive_tick:
+                available += int(incoming[reinf_idx]["total_ships"])
+                reinf_idx += 1
+            available -= int(attack["fleet"].ships)
+            previous_tick = arrive_tick
+            if available < lowest_margin:
+                lowest_margin = available
+                low_tick = arrive_tick
+
+        if low_tick < self.doomed_evac_min_arrival or low_tick > self.doomed_evac_max_arrival:
+            return None
+        enemy_post_capture = max(0, -int(lowest_margin))
+        if enemy_post_capture < self.doomed_evac_min_enemy_post_capture:
+            return None
+        return enemy_post_capture, max(1, low_tick)
+
+    def _best_doomed_evacuation_target(
+        self,
+        source: Planet,
+        ships: int,
+        local: LocalObs,
+        under_attack: dict[int, dict[str, object]],
+        doomed_ids: set[int],
+        attack_row: dict[str, object],
+    ) -> tuple[Planet, float, int] | None:
+        scored: list[tuple[float, Planet, float, int]] = []
+        enemy_planets = [planet for planet in local.planets if planet.owner not in (-1, local.player)]
+        attack_source_ids = {
+            int(row["fleet"].from_planet_id)
+            for row in attack_row.get("fleets", [])
+            if int(row["fleet"].from_planet_id) >= 0
+        }
+
+        if self.doomed_evac_allow_own_target:
+            for target in local.mine:
+                if target.id == source.id or target.id in doomed_ids or target.id in under_attack:
+                    continue
+                angle, arrive_tick = self._angle_and_arrival(source, target, ships, local)
+                if angle is None or arrive_tick is None:
+                    continue
+                nearest_enemy = min((distance(target, enemy) for enemy in enemy_planets), default=10**9)
+                front_penalty = 0.0
+                if nearest_enemy < self.doomed_evac_safe_enemy_radius:
+                    pressure = 1.0 - nearest_enemy / max(self.doomed_evac_safe_enemy_radius, 1.0)
+                    front_penalty = self.doomed_evac_front_penalty * pressure
+                score = (
+                    self.doomed_evac_own_target_bonus
+                    + target.production * self.doomed_evac_target_prod_weight
+                    + min(int(target.ships), ships) * 0.05
+                    - arrive_tick
+                    - front_penalty
+                )
+                scored.append((score, target, angle, arrive_tick))
+
+        if self.doomed_evac_allow_attack_target:
+            for target in local.targets:
+                if target.id == source.id:
+                    continue
+                is_attack_source = target.id in attack_source_ids
+                if self.doomed_evac_attack_source_only and not is_attack_source:
+                    continue
+                if self.doomed_evac_attack_enemy_only and target.owner in (-1, local.player):
+                    continue
+                if target.production < self.doomed_evac_attack_min_production:
+                    continue
+                needed = self._base_ships_needed(target, local, source=source)
+                if needed is None or ships < needed:
+                    continue
+                angle, arrive_tick = self._angle_and_arrival(source, target, ships, local)
+                if angle is None or arrive_tick is None:
+                    continue
+                if arrive_tick > self.doomed_evac_attack_max_arrival:
+                    continue
+                net_value = target.production * max(0, 500 - local.step - arrive_tick) - ships
+                if net_value < self.doomed_evac_attack_min_net_value:
+                    continue
+                score = (
+                    self._target_score(source, target, local)
+                    + self.doomed_evac_attack_target_bonus
+                    + (self.doomed_evac_attack_source_bonus if is_attack_source else 0.0)
+                    + target.production * self.doomed_evac_target_prod_weight
+                    + (self.doomed_evac_enemy_target_bonus if target.owner not in (-1, local.player) else 0.0)
+                    - arrive_tick
+                )
+                scored.append((score, target, angle, arrive_tick))
+
+        if not scored:
+            return None
+        scored.sort(key=lambda row: row[0], reverse=True)
+        _, target, angle, arrive_tick = scored[0]
+        return target, angle, arrive_tick
 
     def _append_recent_high_prod_hub_support(
         self,

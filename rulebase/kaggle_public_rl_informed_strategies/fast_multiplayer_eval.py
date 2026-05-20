@@ -59,10 +59,11 @@ def run_one(
     params: dict,
     opponents: list[str],
     use_numba: bool,
+    episode_steps: int,
 ) -> dict:
     agents = [make_named_agent(opponents[i % len(opponents)]) for i in range(3)]
     agents.insert(variant_seat, make_config_agent(dict(params)))
-    env = make_fast_orbit_wars({"seed": seed}, keep_history=False, use_numba=use_numba)
+    env = make_fast_orbit_wars({"seed": seed, "episodeSteps": episode_steps}, keep_history=False, use_numba=use_numba)
     env.run(agents)
     rewards = [env.steps[-1][idx]["reward"] for idx in range(4)]
     variant_reward = rewards[variant_seat]
@@ -91,10 +92,17 @@ def run_task(task: dict) -> dict:
         params=dict(task["params"]),
         opponents=list(task["opponents"]),
         use_numba=bool(task["use_numba"]),
+        episode_steps=int(task["episode_steps"]),
     )
 
 
-def build_tasks(variants: dict[str, dict], games_per_seat: int, opponents: list[str], use_numba: bool) -> list[dict]:
+def build_tasks(
+    variants: dict[str, dict],
+    games_per_seat: int,
+    opponents: list[str],
+    use_numba: bool,
+    episode_steps: int,
+) -> list[dict]:
     tasks = []
     for name, params in variants.items():
         for seat in range(4):
@@ -107,6 +115,7 @@ def build_tasks(variants: dict[str, dict], games_per_seat: int, opponents: list[
                         "variant_seat": seat,
                         "opponents": opponents,
                         "use_numba": use_numba,
+                        "episode_steps": episode_steps,
                     }
                 )
     return tasks
@@ -140,19 +149,28 @@ def parse_args() -> argparse.Namespace:
         default=["regular", "recapture_s45_e180_w50_b40_regular", "regular"],
     )
     parser.add_argument("--games-per-seat", type=int, default=10)
+    parser.add_argument("--episode-steps", type=int, default=500)
     parser.add_argument("--workers", type=int, default=min(8, max(1, (os.cpu_count() or 2) // 2)))
     parser.add_argument("--no-numba", action="store_true")
     return parser.parse_args()
 
 
-def main(suite: str, games_per_seat: int, workers: int, opponents: list[str], use_numba: bool) -> None:
+def main(
+    suite: str,
+    games_per_seat: int,
+    workers: int,
+    opponents: list[str],
+    use_numba: bool,
+    episode_steps: int,
+) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     variants = ABLATION_SUITES[suite]
-    tasks = build_tasks(variants, games_per_seat, opponents, use_numba)
+    tasks = build_tasks(variants, games_per_seat, opponents, use_numba, episode_steps)
     all_rows = []
     print(
         f"Running FAST 4P suite={suite}, opponents={opponents}: {len(tasks)} games, "
-        f"{len(variants)} variants, workers={workers}, games_per_seat={games_per_seat}, numba={use_numba}",
+        f"{len(variants)} variants, workers={workers}, games_per_seat={games_per_seat}, "
+        f"episode_steps={episode_steps}, numba={use_numba}",
         flush=True,
     )
     with ProcessPoolExecutor(max_workers=workers) as pool:
@@ -182,6 +200,7 @@ def main(suite: str, games_per_seat: int, workers: int, opponents: list[str], us
         "suite": suite,
         "opponents": opponents,
         "games_per_seat": games_per_seat,
+        "episode_steps": episode_steps,
         "workers": workers,
         "summaries": summaries,
         "games": all_rows,
@@ -212,4 +231,5 @@ if __name__ == "__main__":
         workers=args.workers,
         opponents=args.opponents,
         use_numba=not args.no_numba,
+        episode_steps=args.episode_steps,
     )
