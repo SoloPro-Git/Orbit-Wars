@@ -125,10 +125,15 @@ def proposal_pretrain_batch(
     planets = _pad_planets(rows, device)
     glob = _pad_global(rows, device)
     n_entities = planets.size(1)
-    proposal = model.proposal(planets, glob)
 
     entity_valid = (planets.abs().sum(dim=-1) > 0.0).float()
     prop_valid = _pad_float(rows, "proposal_valid", n_entities, device) * entity_valid
+    ship_valid = planets[..., 6] > 0.0
+    source_valid = (prop_valid > 0.0) & ship_valid
+    target_valid = planets[..., 17] > 0.5
+    if not bool(target_valid.any()):
+        target_valid = entity_valid > 0.0
+    proposal = model.proposal(planets, glob, source_mask=source_valid, target_mask=target_valid)
     prop_send = _pad_float(rows, "proposal_send", n_entities, device)
     prop_target = _pad_long(rows, "proposal_target", n_entities, device).clamp(max=max(n_entities - 1, 0))
     prop_ship = _pad_float(rows, "proposal_ship_ratio", n_entities, device)

@@ -135,8 +135,13 @@ def proposals_from_model(
         return []
     planet_features = torch.tensor(encode_planets(obs, player), dtype=torch.float32, device=device).unsqueeze(0)
     global_features = torch.tensor(encode_global(obs, player), dtype=torch.float32, device=device).unsqueeze(0)
+    source_mask = torch.zeros((1, planet_features.size(1)), dtype=torch.bool, device=device)
+    target_mask = torch.zeros((1, planet_features.size(1)), dtype=torch.bool, device=device)
+    for i, planet in enumerate(planets[: planet_features.size(1)]):
+        target_mask[0, i] = True
+        source_mask[0, i] = int(planet[1]) == player and float(planet[5]) >= 1.0
     with torch.no_grad():
-        pred = model.proposal(planet_features, global_features)
+        pred = model.proposal(planet_features, global_features, source_mask=source_mask, target_mask=target_mask)
     send_prob = torch.sigmoid(pred["send_logits"])[0].detach().cpu()
     target_logits = pred["target_logits"][0].detach().cpu()
     ship_ratio = torch.sigmoid(pred["ship_logits"])[0].detach().cpu()

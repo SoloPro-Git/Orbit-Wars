@@ -74,7 +74,6 @@ def train_batch(
     proposal_loss = torch.tensor(0.0, device=device)
     proposal_send_acc = torch.tensor(0.0, device=device)
     if any("proposal_valid" in row for row in rows):
-        proposal = model.proposal(planets, glob)
         n_entities = planets.size(1)
 
         def pad_float(key: str) -> torch.Tensor:
@@ -95,6 +94,12 @@ def train_batch(
 
         entity_valid = (planets.abs().sum(dim=-1) > 0.0).float()
         prop_valid = pad_float("proposal_valid") * entity_valid
+        ship_valid = planets[..., 6] > 0.0
+        source_valid = (prop_valid > 0.0) & ship_valid
+        target_valid = planets[..., 17] > 0.5
+        if not bool(target_valid.any()):
+            target_valid = entity_valid > 0.0
+        proposal = model.proposal(planets, glob, source_mask=source_valid, target_mask=target_valid)
         prop_send = pad_float("proposal_send")
         prop_target = pad_long("proposal_target")
         prop_ship = pad_float("proposal_ship_ratio")

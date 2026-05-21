@@ -68,18 +68,30 @@ class AlphaZeroLikeNet(nn.Module):
         glob = self.global_proj(global_features)
         return planet_emb, glob, torch.cat([pooled, glob], dim=-1)
 
-    def proposal(self, planets: torch.Tensor, global_features: torch.Tensor) -> dict[str, torch.Tensor]:
+    def proposal(
+        self,
+        planets: torch.Tensor,
+        global_features: torch.Tensor,
+        source_mask: torch.Tensor | None = None,
+        target_mask: torch.Tensor | None = None,
+    ) -> dict[str, torch.Tensor]:
         planet_mask = planets.abs().sum(dim=-1) <= 0.0
         planet_emb, glob, _ = self.encode_context(planets, global_features)
         glob_expanded = glob.unsqueeze(1).expand(-1, planet_emb.size(1), -1)
         per_entity = torch.cat([planet_emb, glob_expanded], dim=-1)
+        valid_sources = ~planet_mask if source_mask is None else source_mask.bool() & ~planet_mask
+        valid_targets = ~planet_mask if target_mask is None else target_mask.bool() & ~planet_mask
         target_logits = self.proposal_target(per_entity)[..., : planet_emb.size(1)]
-        target_logits = target_logits.masked_fill(planet_mask.unsqueeze(1), -1e9)
+        target_logits = target_logits.masked_fill(~valid_targets.unsqueeze(1), -1e9)
+        eye = torch.eye(planet_emb.size(1), dtype=torch.bool, device=planet_emb.device).unsqueeze(0)
+        target_logits = target_logits.masked_fill(eye, -1e9)
         return {
-            "send_logits": self.proposal_send(per_entity).squeeze(-1).masked_fill(planet_mask, -1e9),
+            "send_logits": self.proposal_send(per_entity).squeeze(-1).masked_fill(~valid_sources, -1e9),
             "target_logits": target_logits,
             "ship_logits": self.proposal_ship(per_entity).squeeze(-1),
             "entity_mask": planet_mask,
+            "source_mask": valid_sources,
+            "target_mask": valid_targets,
         }
 
     @staticmethod
