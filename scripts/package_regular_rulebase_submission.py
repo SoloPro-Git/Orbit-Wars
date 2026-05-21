@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import py_compile
+import re
 import shutil
 import tarfile
 from pathlib import Path
@@ -13,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "rulebase/kaggle_public_rl_informed_strategies"
 DEFAULT_OUTPUT = (
     ROOT
-    / ".kaggle/orbit_wars_regular_p4lowhome_active4_p2trickle_s30_p4midborder_s40_tail_m2_max14_net7_overpay4_slim_20260519.tar.gz"
+    / ".kaggle/orbit_wars_tail_m2_max12_net7_overpay4_p4lowhome_active4_p4seed_prod4_slim_20260521.tar.gz"
 )
 MODULES = [
     "__init__.py",
@@ -37,6 +38,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--build-dir", type=Path, default=None)
+    parser.add_argument(
+        "--config-name",
+        default=None,
+        help="Optional StrategyConfig constant to use as REGULAR_CONFIG in the packaged copy.",
+    )
     return parser.parse_args()
 
 
@@ -45,7 +51,21 @@ def remove_pycache(path: Path) -> None:
         shutil.rmtree(cache_dir)
 
 
-def build_submission(output: Path, build_dir: Path | None) -> None:
+def patch_config_name(strategy_config_path: Path, config_name: str) -> None:
+    text = strategy_config_path.read_text(encoding="utf-8")
+    if not re.search(rf"^{re.escape(config_name)}\s*=", text, flags=re.MULTILINE):
+        raise ValueError(f"unknown config constant: {config_name}")
+    text = re.sub(
+        r"^REGULAR_CONFIG\s*=\s*\([^\)]*\)|^REGULAR_CONFIG\s*=\s*[A-Z0-9_]+",
+        f"REGULAR_CONFIG = {config_name}",
+        text,
+        count=1,
+        flags=re.DOTALL | re.MULTILINE,
+    )
+    strategy_config_path.write_text(text, encoding="utf-8")
+
+
+def build_submission(output: Path, build_dir: Path | None, config_name: str | None) -> None:
     output = output.resolve()
     build_dir = (
         build_dir.resolve()
@@ -62,6 +82,8 @@ def build_submission(output: Path, build_dir: Path | None) -> None:
 
     for name in MODULES:
         shutil.copy2(PACKAGE / name, package_dst / name)
+    if config_name is not None:
+        patch_config_name(package_dst / "strategy_config.py", config_name)
 
     py_compile.compile(str(build_dir / "main.py"), doraise=True)
     for path in package_dst.glob("*.py"):
@@ -78,7 +100,7 @@ def build_submission(output: Path, build_dir: Path | None) -> None:
 
 def main() -> None:
     args = parse_args()
-    build_submission(args.output, args.build_dir)
+    build_submission(args.output, args.build_dir, args.config_name)
 
 
 if __name__ == "__main__":

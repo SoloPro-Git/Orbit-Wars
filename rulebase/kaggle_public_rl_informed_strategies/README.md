@@ -34,10 +34,10 @@ from rulebase.kaggle_public_rl_informed_strategies import agent
 Current best submission candidate:
 
 - Config name:
-  `tail_m2_max14_net7_overpay4_p4lowhome_active4_p2trickle_s30_p4midborder_s40_regular`
+  `tail_m2_max12_net7_overpay4_p4lowhome_active4_p4seed_prod4_regular`
 - Alias: `regular`
 - Packaged submission alias:
-  `orbit_wars_regular_p4src_w002_lead10_p4earlysrc_s35_80_t120_tail_m2_max14_net7_overpay4_p4lowhome_active4_p2trickle_s30_p4midborder_s40_slim_20260519`
+  `orbit_wars_tail_m2_max12_net7_overpay4_p4lowhome_active4_p4seed_prod4_slim_20260521`
 - Base: `mp_local3_neu5_comet12_path4p_hold4_terr30_s35_home6_posthold_recap_b35_p4src_w002_lead10_regular`
 - Added regular feature: `enable_capture_hold_margin_gate=True`,
   `capture_hold_margin=4`, plus `enable_opening_neutral_territory_score=True`,
@@ -76,24 +76,29 @@ Current best submission candidate:
   bonus `24.0`, and contested penalty `12.0`. This follows the strongest
   replay pattern where winners convert early production on low-home maps rather
   than waiting for perfect high-production targets.
-- Added 2026-05-19 replay-derived 2P low-home trickle feature: for exactly
-  two active players, enable opening high-production trickle through step `30`
-  from production `1+` sources into production `4+` neutral targets, capped at
-  `12` target ships with minimum send `5`. This targets the unread replay loss
-  pattern where Solo's low-production home starts under-converted into early
-  high-production neutral ownership.
-- Added 2026-05-19 replay-derived 4P midgame border reserve: for exactly four
-  active players, reserve border source ships on production `2+` planets from
-  steps `40-150`, enemy radius `60`, minimum after-send reserve `8`, one
-  production turn, and threat margin `5`. This targets the unread replay loss
-  pattern where Solo wins early expansion but loses midgame border sources to
-  nearby counter-pressure.
+- 2026-05-21 historical regular league: full champion pool, top-11 pool, and
+  final top-5 mutual leagues made the tail + 4P low-home config the historical
+  best regular. Later p2 trickle, p4 midgame border reserve, chain, and mobile
+  relay variants are retained as named historical configs because the finalist
+  mutual league favored the narrower version.
+- 2026-05-21 Vadasz-inspired follow-up: the small positive confirmation suite
+  `vadasz_historical_best_small_positive_confirm_fast_4p_ablation_20260521_143845_488612_74557c61`
+  tested narrow refinements on that historical best. The combined stricter
+  tail cap plus narrow 4P prod4 seed variant scored `77/320` wins, win rate
+  `24.1%`, average rank `1.759`; the historical best baseline scored `70/320`,
+  win rate `21.9%`, average rank `1.781`. `regular` now points at this
+  follow-up config, while the historical-best package/config name remains
+  available for rollback and comparison. 2P regression
+  `vadasz_historical_best_promote_regression_fast_ablation_20260521_144857`
+  was neutral against the historical best: both scored `98-94-8 / 200`.
 - Why this matters: the previous recapture champion, source-risk champion, and
   leader-containment/source-protection champions are kept under their own
   historical names, while `regular` now uses the validated early 4P
   source-protection improvement, the positive tail-capture candidate, the
-  replay-validated 4P low-home opening profile, the positive 2P low-home
-  trickle candidate, and the confirmed 4P midgame border reserve.
+  replay-validated 4P low-home opening profile, the stricter max12 tail cap,
+  and the narrow 4P prod4 seed follow-up. The positive-looking 2P low-home
+  trickle and 4P midgame border reserve remain named experiments instead of
+  live regular behavior.
 - Validation:
   `myreplay_plan011_leader_bonus_focus_4p_ablation_20260517_144638_809435_ac08fd31`
 - 4P result against recent champions: `356-844-0`, win rate `29.7%`,

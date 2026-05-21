@@ -100,11 +100,31 @@ simulator drift 时再使用 Kaggle 官方环境。
 
 当前 `REGULAR_CONFIG` 指向：
 
-`TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P2TRICKLE_S30_P4MIDBORDER_S40_REGULAR_CONFIG`
+`TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_REGULAR_CONFIG`
 
 提交/历史别名：
 
-`tail_m2_max14_net7_overpay4_p4lowhome_active4_p2trickle_s30_p4midborder_s40_regular`
+`tail_m2_max12_net7_overpay4_p4lowhome_active4_p4seed_prod4_regular`
+
+2026-05-21 historical regular league 结论：
+
+- full champion pool、top-11 pool、final top-5 mutual league 三轮混战后，
+  `tail_m2_max14_net7_overpay4_p4lowhome_active4_regular` 是 finalist
+  互打里最可靠的混战 regular。
+- `mp_local3_neu5_comet12_path4p_regular` 在大池子里非常接近，但 final
+  top-5 互打略低于 tail low-home；后续实验应优先以当前 `REGULAR_CONFIG`
+  作为强基线和强对手。
+- 后来的 p2 trickle、p4 midborder、chain/mobile relay 版本保留为命名历史
+  配置，但不再作为 live regular。
+- 后续 Vadasz-inspired 小确认组
+  `vadasz_historical_best_small_positive_confirm_fast_4p_ablation_20260521_143845_488612_74557c61`
+  在这个 historical best 上继续消融，`tail_max12_plus_p4_seed_prod4`
+  得到 `77/320`、win rate `24.1%`、avg rank `1.759`，高于原
+  historical best regular 的 `70/320`、win rate `21.9%`、avg rank
+  `1.781`，因此当前 `REGULAR_CONFIG` 收回为 tail max12 + 窄 4P prod4
+  seed 版本。2P 回归
+  `vadasz_historical_best_promote_regression_fast_ablation_20260521_144857`
+  对旧 historical best 持平：新旧都是 `98-94-8 / 200`。
 
 2026-05-19 fast-env / numba 验证摘要：
 

@@ -881,6 +881,31 @@ TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_REGULAR_CONFIG = StrategyConfig(
         "early_neutral_multiplayer_contested_penalty": 12.0,
     }
 )
+TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_REGULAR_CONFIG = StrategyConfig(
+    **{
+        **TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_REGULAR_CONFIG.to_agent_kwargs(),
+        "third_party_tail_max_ships": 12,
+        "third_party_tail_min_net_value": 7.0,
+        "enable_high_prod_capture_seed": True,
+        "capture_seed_min_active_players": 4,
+        "capture_seed_max_active_players": 4,
+        "capture_seed_min_step": 0,
+        "capture_seed_max_step": 60,
+        "capture_seed_min_target_production": 4.0,
+        "capture_seed_max_target_ships": 36,
+        "capture_seed_include_neutral": True,
+        "capture_seed_include_enemy": True,
+        "capture_seed_desired_post_capture": 7,
+        "capture_seed_prod_turns": 1,
+        "capture_seed_max_primary_eta": 28,
+        "capture_seed_max_lag": 8,
+        "capture_seed_min_send": 4,
+        "capture_seed_max_send": 10,
+        "capture_seed_source_min_after": 7,
+        "capture_seed_source_prod_turns_after": 1,
+        "capture_seed_max_targets": 1,
+    }
+)
 TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P2TRICKLE_S30_REGULAR_CONFIG = StrategyConfig(
     **{
         **TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_REGULAR_CONFIG.to_agent_kwargs(),
@@ -1014,9 +1039,13 @@ UNREAD260520_P4RELAY_SAVINGS5_WINDOW45_BONUS70_REGULAR_CONFIG = StrategyConfig(
         "mobile_relay_source_target_bonus": 70.0,
     }
 )
-REGULAR_CONFIG = (
-    UNREAD260520_P4RELAY_SAVINGS5_WINDOW45_BONUS70_REGULAR_CONFIG
-)
+# 2026-05-21 historical regular league:
+# full champion pool, top-11 pool, and final top-5 mutual leagues found this
+# tail + 4P low-home version to be the most reliable mixed-melee finalist.
+# A follow-up Vadasz-inspired ablation then found a small positive from the
+# stricter max12 tail cap plus narrow 4P prod4 seed; p2-trickle/midborder/
+# chain/relay variants remain named above for ablation and history.
+REGULAR_CONFIG = TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_REGULAR_CONFIG
 PRE_HOLDABILITY_REGULAR_CONFIG = StrategyConfig(
     target_candidate_limit=2,
     min_ships_mine_attack=12,
@@ -1254,6 +1283,7 @@ HISTORICAL_BEST_VARIANTS = {
     "tail_m2_max14_net7_regular_candidate": TAIL_M2_MAX14_NET7_REGULAR_CANDIDATE_CONFIG.to_agent_kwargs(),
     "tail_m2_max14_net7_overpay4_regular_candidate": TAIL_M2_MAX14_NET7_OVERPAY4_REGULAR_CANDIDATE_CONFIG.to_agent_kwargs(),
     "tail_m2_max14_net7_overpay4_p4lowhome_active4_regular": TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_REGULAR_CONFIG.to_agent_kwargs(),
+    "tail_m2_max12_net7_overpay4_p4lowhome_active4_p4seed_prod4_regular": TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_REGULAR_CONFIG.to_agent_kwargs(),
     "tail_m2_max14_net7_overpay4_p4lowhome_active4_p2trickle_s30_regular": TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P2TRICKLE_S30_REGULAR_CONFIG.to_agent_kwargs(),
     "tail_m2_max14_net7_overpay4_p4lowhome_active4_p2trickle_s30_p4midborder_s40_regular": TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P2TRICKLE_S30_P4MIDBORDER_S40_REGULAR_CONFIG.to_agent_kwargs(),
     "tail_m2_max14_net7_overpay4_p4lowhome_active4_p2trickle_s30_p4midborder_s40_p4chain_src4_regular": TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P2TRICKLE_S30_P4MIDBORDER_S40_P4CHAIN_SRC4_REGULAR_CONFIG.to_agent_kwargs(),
@@ -1879,6 +1909,7 @@ CHAMPION_OPPONENT_VARIANTS = {
     "tail_m2_max14_net7_overpay4_p4lowhome_active4_p2trickle_s30_p4midborder_s40_p4chain_src4_p4mobilebase_regular": TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P2TRICKLE_S30_P4MIDBORDER_S40_P4CHAIN_SRC4_P4MOBILEBASE_REGULAR_CONFIG.to_agent_kwargs(),
     "tail_m2_max14_net7_overpay4_p4lowhome_active4_p2trickle_s30_p4midborder_s40_p4chain_src4_regular": TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P2TRICKLE_S30_P4MIDBORDER_S40_P4CHAIN_SRC4_REGULAR_CONFIG.to_agent_kwargs(),
     "tail_m2_max14_net7_overpay4_p4lowhome_active4_regular": TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_REGULAR_CONFIG.to_agent_kwargs(),
+    "tail_m2_max12_net7_overpay4_p4lowhome_active4_p4seed_prod4_regular": TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_REGULAR_CONFIG.to_agent_kwargs(),
     "tail_m2_max14_net7_overpay4_regular_candidate": TAIL_M2_MAX14_NET7_OVERPAY4_REGULAR_CANDIDATE_CONFIG.to_agent_kwargs(),
     "tail_m2_max14_net7_regular_candidate": TAIL_M2_MAX14_NET7_REGULAR_CANDIDATE_CONFIG.to_agent_kwargs(),
     "mp_local3_neu5_comet12_path4p_hold4_terr30_s35_home6_posthold_recap_b35_p2src_w002_regular": MP_LOCAL3_NEU5_COMET12_PATH4P_HOLD4_TERR30_S35_HOME6_POSTHOLD_RECAP_B35_P2SRC_W002_REGULAR_CONFIG.to_agent_kwargs(),
@@ -10081,6 +10112,225 @@ ABLATION_SUITES["vadasz_4p_relay_bonus_trim_after_promote"] = {
         mobile_relay_source_order_bonus=750.0,
         mobile_relay_source_target_bonus=60.0,
     ),
+}
+
+ABLATION_SUITES["vadasz_historical_best_refine"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "p4_opening_tempo_prod3_safe_s45": from_base(
+        REGULAR_CONFIG,
+        enable_opening_tempo_neutral_fallback=True,
+        opening_tempo_allow_after_attack=False,
+        opening_tempo_min_active_players=4,
+        opening_tempo_max_active_players=4,
+        opening_tempo_step_limit=45,
+        opening_tempo_min_production=3.0,
+        opening_tempo_max_target_ships=18,
+        opening_tempo_max_eta=28,
+        opening_tempo_source_min_production=1.0,
+        opening_tempo_source_min_after=7,
+        opening_tempo_candidate_limit=3,
+    ),
+    "p4_lowprod_stoploss_w45_connector": from_base(
+        REGULAR_CONFIG,
+        enable_contested_stop_loss=True,
+        contested_stop_loss_min_active_players=4,
+        contested_stop_loss_max_active_players=4,
+        contested_stop_loss_window=45,
+        contested_stop_loss_flip_threshold=3,
+        contested_stop_loss_low_prod_max=2.0,
+        contested_stop_loss_high_prod_exception_min=3.0,
+        contested_stop_loss_penalty=28.0,
+        contested_stop_loss_min_hold=7,
+        contested_stop_loss_prod_hold_turns=2,
+        enable_contested_stop_loss_connector_exception=True,
+        contested_stop_loss_connector_radius=48.0,
+        contested_stop_loss_connector_min_high_prod=4.0,
+        contested_stop_loss_connector_own_radius=45.0,
+    ),
+    "p4_relay_prod4_savings10_tight": from_base(
+        REGULAR_CONFIG,
+        enable_mobile_relay_attack=True,
+        mobile_relay_min_active_players=4,
+        mobile_relay_max_active_players=4,
+        mobile_relay_min_step=0,
+        mobile_relay_max_step=120,
+        mobile_relay_max_ships=16,
+        mobile_relay_min_production=4.0,
+        mobile_relay_goal_min_production=4.0,
+        mobile_relay_direct_min_eta=18,
+        mobile_relay_max_first_eta=28,
+        mobile_relay_max_second_eta=34,
+        mobile_relay_min_eta_savings=10,
+        mobile_relay_bonus=50.0,
+        mobile_relay_comet_min_remaining=65,
+        mobile_relay_recent_source_window=35,
+        mobile_relay_source_order_bonus=650.0,
+        mobile_relay_source_target_bonus=35.0,
+    ),
+    "p4_relay_prod5_savings8_tight": from_base(
+        REGULAR_CONFIG,
+        enable_mobile_relay_attack=True,
+        mobile_relay_min_active_players=4,
+        mobile_relay_max_active_players=4,
+        mobile_relay_min_step=0,
+        mobile_relay_max_step=120,
+        mobile_relay_max_ships=18,
+        mobile_relay_min_production=5.0,
+        mobile_relay_goal_min_production=4.0,
+        mobile_relay_direct_min_eta=18,
+        mobile_relay_max_first_eta=30,
+        mobile_relay_max_second_eta=36,
+        mobile_relay_min_eta_savings=8,
+        mobile_relay_bonus=50.0,
+        mobile_relay_comet_min_remaining=65,
+        mobile_relay_recent_source_window=35,
+        mobile_relay_source_order_bonus=650.0,
+        mobile_relay_source_target_bonus=35.0,
+    ),
+    "tail_net8_max14": from_base(
+        REGULAR_CONFIG,
+        third_party_tail_min_net_value=8.0,
+    ),
+    "tail_net10_max14": from_base(
+        REGULAR_CONFIG,
+        third_party_tail_min_net_value=10.0,
+    ),
+    "tail_max12_net7": from_base(
+        REGULAR_CONFIG,
+        third_party_tail_max_ships=12,
+        third_party_tail_min_net_value=7.0,
+    ),
+    "tail_max16_net8": from_base(
+        REGULAR_CONFIG,
+        third_party_tail_max_ships=16,
+        third_party_tail_min_net_value=8.0,
+    ),
+    "p4_midborder_strict_no_p2trickle": from_base(
+        REGULAR_CONFIG,
+        enable_midgame_border_source_reserve=True,
+        midgame_border_min_active_players=4,
+        midgame_border_step_min=45,
+        midgame_border_step_max=140,
+        midgame_border_min_production=3.0,
+        midgame_border_enemy_radius=60.0,
+        midgame_border_min_after=12,
+        midgame_border_prod_turns_after=2,
+        midgame_border_threat_margin=8,
+    ),
+}
+
+ABLATION_SUITES["vadasz_historical_best_p0_followup"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "p4_relay_savings5_window45_bonus70": from_base(
+        REGULAR_CONFIG,
+        enable_mobile_relay_attack=True,
+        mobile_relay_min_active_players=4,
+        mobile_relay_max_active_players=4,
+        mobile_relay_min_eta_savings=5,
+        mobile_relay_min_production=4.0,
+        mobile_relay_goal_min_production=4.0,
+        mobile_relay_recent_source_window=45,
+        mobile_relay_source_order_bonus=900.0,
+        mobile_relay_source_target_bonus=70.0,
+    ),
+    "p4_enemy_wave_preserve_prod4_s35_160": from_base(
+        REGULAR_CONFIG,
+        enable_enemy_wave_preserve_prod=True,
+        enemy_wave_preserve_min_active_players=4,
+        enemy_wave_preserve_max_active_players=4,
+        enemy_wave_preserve_min_step=35,
+        enemy_wave_preserve_max_step=160,
+        enemy_wave_preserve_min_production=4.0,
+        enemy_wave_preserve_horizon=40,
+        enemy_wave_preserve_min_enemy_post_capture=35,
+        enemy_wave_preserve_margin=10,
+        enemy_wave_preserve_max_send=44,
+        enemy_wave_preserve_max_sources=2,
+    ),
+    "p4_chain_prod4_hold_gate_eta24": from_base(
+        REGULAR_CONFIG,
+        enable_recent_capture_chain_attack=True,
+        chain_attack_min_active_players=4,
+        chain_attack_max_active_players=4,
+        chain_attack_min_step=0,
+        chain_attack_max_step=120,
+        chain_attack_source_window=24,
+        chain_attack_source_min_production=4.0,
+        chain_attack_target_min_production=3.0,
+        chain_attack_max_eta=24,
+        chain_attack_source_order_bonus=900.0,
+        chain_attack_enemy_bonus=55.0,
+        chain_attack_neutral_bonus=5.0,
+        enable_chain_attack_hold_gate=True,
+        chain_attack_hold_margin=4,
+        chain_attack_hold_max_extra=14,
+    ),
+    "p4_seed_prod4_guard36_eta28_lag8_m10": from_base(
+        REGULAR_CONFIG,
+        enable_high_prod_capture_seed=True,
+        capture_seed_min_active_players=4,
+        capture_seed_max_active_players=4,
+        capture_seed_min_step=0,
+        capture_seed_max_step=60,
+        capture_seed_min_target_production=4.0,
+        capture_seed_max_target_ships=36,
+        capture_seed_include_neutral=True,
+        capture_seed_include_enemy=True,
+        capture_seed_desired_post_capture=7,
+        capture_seed_prod_turns=1,
+        capture_seed_max_primary_eta=28,
+        capture_seed_max_lag=8,
+        capture_seed_min_send=4,
+        capture_seed_max_send=10,
+        capture_seed_source_min_after=7,
+        capture_seed_source_prod_turns_after=1,
+        capture_seed_max_targets=1,
+    ),
+    "p4_stoploss_connector_p28": ABLATION_SUITES[
+        "vadasz_historical_best_refine"
+    ]["p4_lowprod_stoploss_w45_connector"],
+    "p4_opening_tempo_prod3_safe_s45": ABLATION_SUITES[
+        "vadasz_historical_best_refine"
+    ]["p4_opening_tempo_prod3_safe_s45"],
+}
+
+ABLATION_SUITES["vadasz_historical_best_small_positive_confirm"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "historical_tail_max14_p4lowhome": TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_REGULAR_CONFIG.to_agent_kwargs(),
+    "tail_max12_net7": ABLATION_SUITES[
+        "vadasz_historical_best_refine"
+    ]["tail_max12_net7"],
+    "p4_seed_prod4_guard36_eta28_lag8_m10": ABLATION_SUITES[
+        "vadasz_historical_best_p0_followup"
+    ]["p4_seed_prod4_guard36_eta28_lag8_m10"],
+    "tail_max12_plus_p4_seed_prod4": from_base(
+        REGULAR_CONFIG,
+        third_party_tail_max_ships=12,
+        third_party_tail_min_net_value=7.0,
+        enable_high_prod_capture_seed=True,
+        capture_seed_min_active_players=4,
+        capture_seed_max_active_players=4,
+        capture_seed_min_step=0,
+        capture_seed_max_step=60,
+        capture_seed_min_target_production=4.0,
+        capture_seed_max_target_ships=36,
+        capture_seed_include_neutral=True,
+        capture_seed_include_enemy=True,
+        capture_seed_desired_post_capture=7,
+        capture_seed_prod_turns=1,
+        capture_seed_max_primary_eta=28,
+        capture_seed_max_lag=8,
+        capture_seed_min_send=4,
+        capture_seed_max_send=10,
+        capture_seed_source_min_after=7,
+        capture_seed_source_prod_turns_after=1,
+        capture_seed_max_targets=1,
+    ),
+}
+
+ABLATION_SUITES["vadasz_historical_best_promote_regression"] = {
+    "current_regular": TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_REGULAR_CONFIG.to_agent_kwargs(),
+    "historical_tail_max14_p4lowhome": TAIL_M2_MAX14_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_REGULAR_CONFIG.to_agent_kwargs(),
 }
 
 ABLATION_SUITES["myreplay_plan039_p4_doomed_tail_arb"] = {
