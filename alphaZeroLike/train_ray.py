@@ -81,6 +81,26 @@ def _dataclass_kwargs(cls, cfg: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _resolve_worker_count(value: Any, resources: dict[str, float], ray_cfg: dict[str, Any], kind: str) -> int:
+    if isinstance(value, (int, float)):
+        return max(1, int(value))
+    raw = str(value).strip().lower()
+    if raw in {"auto_gpu_x3", "auto-gpu-x3", "auto_gpu_workers"}:
+        workers_per_gpu = int(ray_cfg.get("max_gpu_workers_per_gpu", 3))
+        return max(1, int(float(resources.get("GPU", 0.0)) * workers_per_gpu))
+    if raw in {"auto_rollout_cpu", "auto-rollout-cpu"}:
+        resource_name = str(ray_cfg.get("rollout_resource") or "")
+        resource = float(resources.get(resource_name, 0.0)) if resource_name else 0.0
+        if resource <= 0.0:
+            resource = float(resources.get("CPU", 1.0))
+        per_worker = float(ray_cfg.get("rollout_resource_per_worker", ray_cfg.get("cpus_per_rollout", 1.0)))
+        return max(1, int(resource // max(per_worker, 1e-9)))
+    if raw == "auto_cpu":
+        per_worker = float(ray_cfg.get(f"cpus_per_{kind}", 1.0))
+        return max(1, int(float(resources.get("CPU", 1.0)) // max(per_worker, 1e-9)))
+    return max(1, int(float(raw)))
+
+
 def _init_swanlab(config: dict[str, Any], args) -> Any | None:
     if args.no_swanlab:
         return None
@@ -310,14 +330,19 @@ def main() -> None:
         ray_temp.mkdir(parents=True, exist_ok=True)
         ray.init(ignore_reinit_error=True, include_dashboard=False, _temp_dir=str(ray_temp), runtime_env=runtime_env or None)
 
-    trainer_workers = int(ray_cfg.get("num_trainer_workers", 1))
-    rollout_workers = int(ray_cfg.get("num_rollout_workers", 1))
+    resources = ray.cluster_resources()
+    trainer_workers = _resolve_worker_count(ray_cfg.get("num_trainer_workers", 1), resources, ray_cfg, "trainer")
+    rollout_workers = _resolve_worker_count(ray_cfg.get("num_rollout_workers", 1), resources, ray_cfg, "rollout")
     rollout_options: dict[str, Any] = {
         "num_cpus": float(ray_cfg.get("cpus_per_rollout", 1.0)),
         "num_gpus": float(ray_cfg.get("gpus_per_rollout", 0.0)),
     }
     if ray_cfg.get("rollout_resource"):
-        rollout_options["resources"] = {str(ray_cfg["rollout_resource"]): float(ray_cfg.get("cpus_per_rollout", 1.0))}
+        rollout_options["resources"] = {
+            str(ray_cfg["rollout_resource"]): float(
+                ray_cfg.get("rollout_resource_per_worker", ray_cfg.get("cpus_per_rollout", 1.0))
+            )
+        }
 
     trainers = [
         AZTrainerActor.options(
@@ -346,7 +371,21 @@ def main() -> None:
         for i in range(rollout_workers)
     ]
     init_infos = ray.get([trainer.init_info.remote() for trainer in trainers])
-    print(json.dumps({"stage": stage_name, "resume": resume, "init_from_training2": init_from_training2, "init": init_infos[0]}, ensure_ascii=False), flush=True)
+    print(
+        json.dumps(
+            {
+                "stage": stage_name,
+                "resume": resume,
+                "init_from_training2": init_from_training2,
+                "train_workers": trainer_workers,
+                "rollout_workers": rollout_workers,
+                "ray_resources": resources,
+                "init": init_infos[0],
+            },
+            ensure_ascii=False,
+        ),
+        flush=True,
+    )
 
     iterations = int(train_cfg.get("max_iterations", 100))
     games_per_iteration = int(train_cfg.get("games_per_iteration", 64))

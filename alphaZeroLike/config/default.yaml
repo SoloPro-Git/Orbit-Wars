@@ -13,15 +13,17 @@ swanlab:
   mode: cloud
 
 ray:
-  address: 10.0.104.198:6380
+  address: auto
   temp_dir: alphaZeroLike/.ray_temp
-  num_rollout_workers: 16
-  num_trainer_workers: 4
+  num_rollout_workers: auto_rollout_cpu
+  num_trainer_workers: auto_gpu_x3
+  max_gpu_workers_per_gpu: 3
   cpus_per_rollout: 1.0
-  cpus_per_trainer: 0.5
+  cpus_per_trainer: 0.25
   gpus_per_rollout: 0.0
-  gpus_per_trainer: 1.0
-  rollout_resource:
+  gpus_per_trainer: 0.3333333333
+  rollout_resource: rollout_cpu
+  rollout_resource_per_worker: 1.0
   runtime_env_vars: {}
 
 env:

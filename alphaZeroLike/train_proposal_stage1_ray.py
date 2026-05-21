@@ -23,6 +23,7 @@ os.chdir(PROJECT_ROOT)
 
 import ray
 import torch
+from tqdm import tqdm
 
 from alphaZeroLike.compat import load_training2_stage1_backbone
 from alphaZeroLike.model import AlphaZeroLikeNet
@@ -79,6 +80,13 @@ def _average_state_dicts(states: list[dict[str, torch.Tensor]]) -> dict[str, tor
         else:
             avg[key] = value
     return avg
+
+
+def _resolve_worker_count(value: str, resources: dict[str, float], workers_per_gpu: int) -> int:
+    raw = str(value).strip().lower()
+    if raw in {"auto", "auto_gpu_x3", "auto-gpu-x3", "auto_gpu_workers"}:
+        return max(1, int(float(resources.get("GPU", 0.0)) * int(workers_per_gpu)))
+    return max(1, int(float(value)))
 
 
 @ray.remote
@@ -157,7 +165,8 @@ def main() -> None:
     parser.add_argument("--resume", default="alphaZeroLike/checkpoints/latest.pt")
     parser.add_argument("--init-from-training2", default="training2/checkpoints/stage1_tactical_entities_20260519/latest.pt")
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--workers", type=int, default=12)
+    parser.add_argument("--workers", default="auto_gpu_x3")
+    parser.add_argument("--workers-per-gpu", type=int, default=3)
     parser.add_argument("--gpus-per-worker", type=float, default=1.0 / 3.0)
     parser.add_argument("--cpus-per-worker", type=float, default=0.5)
     parser.add_argument("--steps", type=int, default=2000)
@@ -200,6 +209,8 @@ def main() -> None:
         temp_dir.mkdir(parents=True, exist_ok=True)
         ray.init(ignore_reinit_error=True, include_dashboard=False, _temp_dir=str(temp_dir))
 
+    resources = ray.cluster_resources()
+    workers = _resolve_worker_count(args.workers, resources, args.workers_per_gpu)
     actors = [
         ProposalTrainerActor.options(num_cpus=args.cpus_per_worker, num_gpus=args.gpus_per_worker).remote(
             i,
@@ -212,26 +223,47 @@ def main() -> None:
             args.seed,
             args.train_backbone,
         )
-        for i in range(args.workers)
+        for i in range(workers)
     ]
     init = ray.get(actors[0].init_report.remote())
-    print(json.dumps({"stage": "proposal_pretrain_ray", "workers": args.workers, "init": init}, ensure_ascii=False), flush=True)
+    print(
+        json.dumps(
+            {
+                "stage": "proposal_pretrain_ray",
+                "workers": workers,
+                "ray_resources": resources,
+                "init": init,
+            },
+            ensure_ascii=False,
+        ),
+        flush=True,
+    )
 
     completed = 0
-    while completed < args.steps:
-        chunk = min(args.sync_interval, args.steps - completed)
-        parts = ray.get([actor.train_steps.remote(chunk, args.batch_size, args.active_row_frac) for actor in actors])
-        states = ray.get([actor.state_dict_cpu.remote() for actor in actors])
-        avg_state = _average_state_dicts(states)
-        ray.get([actor.load_state_dict.remote(avg_state) for actor in actors])
-        completed += chunk
-        log: dict[str, float | int] = {"step": completed, "workers": args.workers}
-        for part in parts:
-            for key, value in part.items():
-                log[key] = float(log.get(key, 0.0)) + float(value) / max(len(parts), 1)
-        print(json.dumps(log, ensure_ascii=False), flush=True)
-        if swan is not None:
-            swan.log(log, step=completed)
+    progress = tqdm(total=args.steps, initial=completed, desc="[ProposalRay]", unit="step")
+    try:
+        while completed < args.steps:
+            chunk = min(args.sync_interval, args.steps - completed)
+            parts = ray.get([actor.train_steps.remote(chunk, args.batch_size, args.active_row_frac) for actor in actors])
+            states = ray.get([actor.state_dict_cpu.remote() for actor in actors])
+            avg_state = _average_state_dicts(states)
+            ray.get([actor.load_state_dict.remote(avg_state) for actor in actors])
+            completed += chunk
+            log: dict[str, float | int] = {"step": completed, "workers": workers}
+            for part in parts:
+                for key, value in part.items():
+                    log[key] = float(log.get(key, 0.0)) + float(value) / max(len(parts), 1)
+            print(json.dumps(log, ensure_ascii=False), flush=True)
+            if swan is not None:
+                swan.log(log, step=completed)
+            progress.update(chunk)
+            progress.set_postfix(
+                loss=f"{float(log.get('proposal/loss', 0.0)):.4f}",
+                send=f"{float(log.get('proposal/send_acc', 0.0)):.3f}",
+                target=f"{float(log.get('proposal/target_acc', 0.0)):.3f}",
+            )
+    finally:
+        progress.close()
 
     ray.get([actors[0].save.remote(out_path, args.steps, vars(args))])
     print(json.dumps({"saved": out_path, "steps": args.steps}, ensure_ascii=False), flush=True)
