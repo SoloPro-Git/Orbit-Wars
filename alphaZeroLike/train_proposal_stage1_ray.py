@@ -248,13 +248,19 @@ def main() -> None:
     workers = _resolve_worker_count(args.workers, resources, args.workers_per_gpu)
     initial_state, initial_info = _load_initial_state(resume, init_from_training2)
     initial_state_ref = ray.put(initial_state) if initial_state is not None else None
+    actor_resume = resume if initial_state_ref is None and resume and Path(resume).exists() else None
+    actor_init_from_training2 = (
+        init_from_training2
+        if initial_state_ref is None and init_from_training2 and Path(init_from_training2).exists()
+        else None
+    )
     actors = [
         ProposalTrainerActor.options(num_cpus=args.cpus_per_worker, num_gpus=args.gpus_per_worker).remote(
             i,
             data_path,
             args.device,
-            resume,
-            init_from_training2,
+            actor_resume,
+            actor_init_from_training2,
             args.lr,
             args.weight_decay,
             args.seed,
