@@ -15,6 +15,7 @@ swanlab:
 ray:
   address: auto
   temp_dir: alphaZeroLike/.ray_temp
+  working_dir: .
   num_rollout_workers: auto_rollout_cpu
   num_trainer_workers: auto_gpu_x3
   max_gpu_workers_per_gpu: 3

@@ -102,11 +102,16 @@ class ProposalTrainerActor:
         weight_decay: float,
         seed: int,
         train_backbone: bool,
+        initial_state_dict: dict[str, torch.Tensor] | None = None,
+        initial_info: dict[str, Any] | None = None,
     ) -> None:
         self.actor_id = actor_id
         self.device = device
         self.model = _make_model(device)
-        if resume and Path(resume).exists():
+        if initial_state_dict is not None:
+            self.model.load_state_dict(initial_state_dict, strict=False)
+            self.init_info = initial_info or {"driver_state_dict": True}
+        elif resume and Path(resume).exists():
             ckpt = torch.load(resume, map_location=device, weights_only=False)
             self.model.load_state_dict(ckpt["model_state_dict"], strict=False)
             self.init_info = {"resume": resume}
@@ -158,6 +163,25 @@ class ProposalTrainerActor:
         torch.save({"model_state_dict": self.model.state_dict(), "proposal_steps": steps, "args": args}, path)
 
 
+def _load_initial_state(
+    resume: str | None,
+    init_from_training2: str | None,
+    device: str = "cpu",
+) -> tuple[dict[str, torch.Tensor] | None, dict[str, Any]]:
+    model = _make_model(device)
+    if resume and Path(resume).exists():
+        ckpt = torch.load(resume, map_location=device, weights_only=False)
+        model.load_state_dict(ckpt["model_state_dict"], strict=False)
+        return {key: value.detach().cpu() for key, value in model.state_dict().items()}, {"resume": resume}
+    if init_from_training2 and Path(init_from_training2).exists():
+        report = load_training2_stage1_backbone(model, init_from_training2, map_location=device)
+        return (
+            {key: value.detach().cpu() for key, value in model.state_dict().items()},
+            {"init_from_training2": init_from_training2, "loaded_tensors": len(report["loaded"])},
+        )
+    return None, {"scratch": True}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", default="data/alphaZeroLike/proposal_regular_20260521")
@@ -179,6 +203,7 @@ def main() -> None:
     parser.add_argument("--train-backbone", action="store_true")
     parser.add_argument("--ray-address")
     parser.add_argument("--ray-temp-dir", default="/tmp/azpray")
+    parser.add_argument("--ray-working-dir", default=".")
     parser.add_argument("--swanlab-project", default="orbit-wars")
     parser.add_argument("--swanlab-experiment", default="alphaZeroLike-proposal-ray")
     parser.add_argument("--swanlab-mode", default="cloud")
@@ -202,15 +227,27 @@ def main() -> None:
         else:
             raise
 
+    runtime_env: dict[str, Any] = {
+        "env_vars": {
+            "PYTHONPATH": ".",
+            "RAY_ENABLE_UV_RUN_RUNTIME_ENV": "0",
+            "TF_CPP_MIN_LOG_LEVEL": "3",
+            "KAGGLE_ENGINES_LOG_LEVEL": "0",
+        }
+    }
+    if args.ray_working_dir:
+        runtime_env["working_dir"] = _resolve(args.ray_working_dir)
     if args.ray_address:
-        ray.init(address=args.ray_address, ignore_reinit_error=True)
+        ray.init(address=args.ray_address, ignore_reinit_error=True, runtime_env=runtime_env)
     else:
         temp_dir = Path(args.ray_temp_dir)
         temp_dir.mkdir(parents=True, exist_ok=True)
-        ray.init(ignore_reinit_error=True, include_dashboard=False, _temp_dir=str(temp_dir))
+        ray.init(ignore_reinit_error=True, include_dashboard=False, _temp_dir=str(temp_dir), runtime_env=runtime_env)
 
     resources = ray.cluster_resources()
     workers = _resolve_worker_count(args.workers, resources, args.workers_per_gpu)
+    initial_state, initial_info = _load_initial_state(resume, init_from_training2)
+    initial_state_ref = ray.put(initial_state) if initial_state is not None else None
     actors = [
         ProposalTrainerActor.options(num_cpus=args.cpus_per_worker, num_gpus=args.gpus_per_worker).remote(
             i,
@@ -222,6 +259,8 @@ def main() -> None:
             args.weight_decay,
             args.seed,
             args.train_backbone,
+            initial_state_ref,
+            initial_info,
         )
         for i in range(workers)
     ]
@@ -240,6 +279,7 @@ def main() -> None:
     )
 
     completed = 0
+    final_state: dict[str, torch.Tensor] | None = None
     progress = tqdm(total=args.steps, initial=completed, desc="[ProposalRay]", unit="step")
     try:
         while completed < args.steps:
@@ -247,6 +287,7 @@ def main() -> None:
             parts = ray.get([actor.train_steps.remote(chunk, args.batch_size, args.active_row_frac) for actor in actors])
             states = ray.get([actor.state_dict_cpu.remote() for actor in actors])
             avg_state = _average_state_dicts(states)
+            final_state = avg_state
             ray.get([actor.load_state_dict.remote(avg_state) for actor in actors])
             completed += chunk
             log: dict[str, float | int] = {"step": completed, "workers": workers}
@@ -265,7 +306,10 @@ def main() -> None:
     finally:
         progress.close()
 
-    ray.get([actors[0].save.remote(out_path, args.steps, vars(args))])
+    if final_state is None:
+        final_state = ray.get(actors[0].state_dict_cpu.remote())
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    torch.save({"model_state_dict": final_state, "proposal_steps": args.steps, "args": vars(args)}, out_path)
     print(json.dumps({"saved": out_path, "steps": args.steps}, ensure_ascii=False), flush=True)
     if swan is not None:
         swan.finish()

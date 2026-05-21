@@ -320,8 +320,14 @@ def main() -> None:
 
     runtime_env: dict[str, Any] = {}
     runtime_env_vars = {str(k): str(v) for k, v in dict(ray_cfg.get("runtime_env_vars", {}) or {}).items()}
+    runtime_env_vars.setdefault("PYTHONPATH", ".")
+    runtime_env_vars.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
+    runtime_env_vars.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+    runtime_env_vars.setdefault("KAGGLE_ENGINES_LOG_LEVEL", "0")
     if runtime_env_vars:
         runtime_env["env_vars"] = runtime_env_vars
+    if ray_cfg.get("working_dir", "."):
+        runtime_env["working_dir"] = str(Path(ray_cfg.get("working_dir", ".")).resolve())
     ray_address = ray_cfg.get("address")
     if ray_address:
         ray.init(address=str(ray_address), ignore_reinit_error=True, runtime_env=runtime_env or None)
