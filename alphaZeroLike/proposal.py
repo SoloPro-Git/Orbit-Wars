@@ -21,11 +21,16 @@ class ProposalConfig:
     enabled: bool = True
     num_candidates: int = 16
     num_full_actions: int = 8
+    num_sampled_actions: int = 8
     send_threshold: float = 0.45
     min_ship_ratio: float = 0.08
     ship_ratio_choices: tuple[float, ...] = (0.25, 0.4, 0.6, 0.85)
     top_targets_per_source: int = 2
     max_sources: int = 4
+    source_temperature: float = 1.0
+    target_temperature: float = 1.0
+    ship_noise_std: float = 0.12
+    sample_source_prob: float = 0.65
 
 
 def _fleet_speed(ships: float, max_speed: float = 6.0) -> float:
@@ -145,11 +150,14 @@ def proposals_from_model(
     send_prob = torch.sigmoid(pred["send_logits"])[0].detach().cpu()
     target_logits = pred["target_logits"][0].detach().cpu()
     ship_ratio = torch.sigmoid(pred["ship_logits"])[0].detach().cpu()
+    valid_source_indices = [
+        i for i, p in enumerate(planets) if int(p[1]) == player and float(p[5]) >= 1.0 and i < len(send_prob)
+    ]
 
     sources = [
         i
-        for i, p in enumerate(planets)
-        if int(p[1]) == player and float(p[5]) >= 1.0 and float(send_prob[i]) >= cfg.send_threshold
+        for i in valid_source_indices
+        if float(send_prob[i]) >= cfg.send_threshold
     ]
     sources.sort(key=lambda i: float(send_prob[i]), reverse=True)
     if not sources:
@@ -224,6 +232,63 @@ def proposals_from_model(
         add([move for i, move in enumerate(base_action) if i != drop_idx])
 
     out.extend(variants)
+
+    def sample_from_weights(indices: list[int], weights: list[float], k: int) -> list[int]:
+        selected: list[int] = []
+        pool = list(indices)
+        w = [max(float(x), 1e-6) for x in weights]
+        for _ in range(min(k, len(pool))):
+            total = sum(w)
+            if total <= 0:
+                break
+            r = torch.rand(1).item() * total
+            acc = 0.0
+            chosen = 0
+            for j, weight in enumerate(w):
+                acc += weight
+                if acc >= r:
+                    chosen = j
+                    break
+            selected.append(pool.pop(chosen))
+            w.pop(chosen)
+        return selected
+
+    source_temp = max(float(cfg.source_temperature), 1e-3)
+    target_temp = max(float(cfg.target_temperature), 1e-3)
+    for _ in range(max(0, cfg.num_sampled_actions)):
+        if not valid_source_indices:
+            break
+        source_weights = [min(max(float(send_prob[i]), 1e-4), 1.0) ** (1.0 / source_temp) for i in valid_source_indices]
+        sampled_sources = [
+            idx
+            for idx in sample_from_weights(valid_source_indices, source_weights, cfg.max_sources)
+            if torch.rand(1).item() < max(min(float(cfg.sample_source_prob), 1.0), 0.0) or float(send_prob[idx]) >= cfg.send_threshold
+        ]
+        if not sampled_sources:
+            sampled_sources = sample_from_weights(valid_source_indices, source_weights, 1)
+        action: list[list] = []
+        for src_idx in sampled_sources:
+            src = planets[src_idx]
+            logits = target_logits[src_idx].clone()
+            if len(logits) > len(planets):
+                logits[len(planets) :] = -1e9
+            logits[src_idx] = -1e9
+            probs = torch.softmax(logits[: len(planets)] / target_temp, dim=-1)
+            if not torch.isfinite(probs).all() or float(probs.sum()) <= 0.0:
+                continue
+            target_idx = int(torch.multinomial(probs, num_samples=1).item())
+            if target_idx == src_idx or target_idx >= len(planets):
+                continue
+            ratio = float(ship_ratio[src_idx])
+            if cfg.ship_noise_std > 0:
+                ratio += float(torch.randn(1).item()) * float(cfg.ship_noise_std)
+            ratio = min(max(ratio, cfg.min_ship_ratio), 1.0)
+            ships = max(1, min(int(float(src[5])), int(float(src[5]) * ratio)))
+            target = planets[target_idx]
+            action.append([int(src[0]), float(aim_angle(obs, src, target, ships)), int(ships)])
+        if action:
+            add(action)
+
     deduped: list[list[list]] = []
     seen.clear()
     for action in out:

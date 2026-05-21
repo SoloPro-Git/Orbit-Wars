@@ -20,6 +20,42 @@ from training2 import make_fast_orbit_wars
 from training2.rulebase_bridge import make_rulebase_agent
 
 
+class OpponentPool:
+    def __init__(
+        self,
+        *,
+        rulebase_oracle: str = "rl_informed_regular",
+        checkpoint_paths: list[str] | None = None,
+        rulebase_weight: float = 1.0,
+        checkpoint_weight: float = 0.0,
+        device: str = "cpu",
+    ) -> None:
+        self.rulebase_oracle = rulebase_oracle
+        self.checkpoint_paths = [str(p) for p in checkpoint_paths or [] if p]
+        self.rulebase_weight = max(float(rulebase_weight), 0.0)
+        self.checkpoint_weight = max(float(checkpoint_weight), 0.0)
+        self.device = device
+        self._model_agents: dict[str, object] = {}
+
+    def make_agent(self, rng: random.Random):
+        total = self.rulebase_weight + (self.checkpoint_weight if self.checkpoint_paths else 0.0)
+        if total <= 0.0 or not self.checkpoint_paths or rng.random() < self.rulebase_weight / total:
+            return make_rulebase_agent(self.rulebase_oracle)
+        path = rng.choice(self.checkpoint_paths)
+        agent = self._model_agents.get(path)
+        if agent is None:
+            from alphaZeroLike.agent import AlphaZeroLikeAgent
+
+            agent = AlphaZeroLikeAgent(
+                checkpoint=path,
+                device=self.device,
+                use_model_proposals=True,
+                proposal_config=ProposalConfig(enabled=True, num_candidates=16, num_full_actions=8),
+            )
+            self._model_agents[path] = agent
+        return agent.act
+
+
 def generate_game(
     model: AlphaZeroLikeNet,
     *,
@@ -32,19 +68,30 @@ def generate_game(
     mcts_cfg: MCTSConfig | None = None,
     candidate_cfg: CandidateConfig | None = None,
     proposal_cfg: ProposalConfig | None = None,
+    opponent_checkpoints: list[str] | None = None,
+    opponent_rulebase_weight: float = 1.0,
+    opponent_checkpoint_weight: float = 0.0,
+    opponent_device: str = "cpu",
 ) -> list[dict]:
     env = make_fast_orbit_wars({"episodeSteps": episode_steps, "seed": seed}, keep_history=False, use_numba=use_numba)
     env.reset(players)
     rng = random.Random(seed)
+    opponent_pool = OpponentPool(
+        rulebase_oracle=opponent_oracle,
+        checkpoint_paths=opponent_checkpoints,
+        rulebase_weight=opponent_rulebase_weight,
+        checkpoint_weight=opponent_checkpoint_weight,
+        device=opponent_device,
+    )
     search = ShallowPUCTSearch(
         model,
         CandidateGenerator(candidate_cfg),
         mcts_cfg or MCTSConfig(),
         device=device,
-        opponent_factory=lambda: make_rulebase_agent(opponent_oracle),
+        opponent_factory=lambda: opponent_pool.make_agent(rng),
         proposal_cfg=proposal_cfg or ProposalConfig(enabled=True),
     )
-    opponents = {pid: make_rulebase_agent(opponent_oracle) for pid in range(players)}
+    opponents = {pid: opponent_pool.make_agent(rng) for pid in range(players)}
     pending: list[dict] = []
     model_pid = seed % players
 
@@ -96,6 +143,10 @@ def main() -> None:
     parser.add_argument("--episode-steps", type=int, default=500)
     parser.add_argument("--no-numba", action="store_true")
     parser.add_argument("--opponent-oracle", default="rl_informed_regular")
+    parser.add_argument("--opponent-checkpoint", action="append", default=[])
+    parser.add_argument("--opponent-rulebase-weight", type=float, default=1.0)
+    parser.add_argument("--opponent-checkpoint-weight", type=float, default=0.0)
+    parser.add_argument("--opponent-device", default="cpu")
     parser.add_argument("--simulations", type=int, default=16)
     parser.add_argument("--rollout-depth", type=int, default=4)
     parser.add_argument("--device", default="cpu")
@@ -144,6 +195,10 @@ def main() -> None:
                 mcts_cfg=mcts_cfg,
                 candidate_cfg=candidate_cfg,
                 proposal_cfg=proposal_cfg,
+                opponent_checkpoints=args.opponent_checkpoint,
+                opponent_rulebase_weight=args.opponent_rulebase_weight,
+                opponent_checkpoint_weight=args.opponent_checkpoint_weight,
+                opponent_device=args.opponent_device,
             )
             for row in rows:
                 f.write(json.dumps(row) + "\n")

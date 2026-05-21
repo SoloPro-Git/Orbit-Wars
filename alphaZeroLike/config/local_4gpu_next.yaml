@@ -51,11 +51,23 @@ proposal:
   enabled: true
   num_candidates: 32
   num_full_actions: 16
+  num_sampled_actions: 16
   send_threshold: 0.45
   min_ship_ratio: 0.08
   ship_ratio_choices: [0.25, 0.40, 0.60, 0.85]
   top_targets_per_source: 2
   max_sources: 4
+  source_temperature: 1.15
+  target_temperature: 1.10
+  ship_noise_std: 0.10
+  sample_source_prob: 0.65
+
+opponents:
+  rulebase_weight: 0.60
+  checkpoint_weight: 0.40
+  device: cpu
+  checkpoints:
+    - alphaZeroLike/checkpoints/latest.pt
 
 training:
   init_from_training2: training2/checkpoints/stage1_tactical_entities_20260519/latest.pt

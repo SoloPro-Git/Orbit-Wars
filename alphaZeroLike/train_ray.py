@@ -111,6 +111,7 @@ class AZRolloutActor:
         mcts_cfg: dict[str, Any],
         candidate_cfg: dict[str, Any],
         proposal_cfg: dict[str, Any],
+        opponent_cfg: dict[str, Any],
         device: str,
         torch_threads: int | None = None,
     ) -> None:
@@ -124,6 +125,7 @@ class AZRolloutActor:
         self.mcts_cfg = MCTSConfig(**_dataclass_kwargs(MCTSConfig, mcts_cfg))
         self.candidate_cfg = CandidateConfig(**_dataclass_kwargs(CandidateConfig, candidate_cfg))
         self.proposal_cfg = ProposalConfig(**_dataclass_kwargs(ProposalConfig, proposal_cfg))
+        self.opponent_cfg = opponent_cfg or {}
 
     def rollout(self, state_dict: dict[str, torch.Tensor], games: int, seed_offset: int) -> dict[str, Any]:
         self.model.load_state_dict(state_dict, strict=False)
@@ -144,6 +146,13 @@ class AZRolloutActor:
                 mcts_cfg=self.mcts_cfg,
                 candidate_cfg=self.candidate_cfg,
                 proposal_cfg=self.proposal_cfg,
+                opponent_checkpoints=[
+                    _resolve(str(path)) or str(path)
+                    for path in self.opponent_cfg.get("checkpoints", [])
+                ],
+                opponent_rulebase_weight=float(self.opponent_cfg.get("rulebase_weight", 1.0)),
+                opponent_checkpoint_weight=float(self.opponent_cfg.get("checkpoint_weight", 0.0)),
+                opponent_device=str(self.opponent_cfg.get("device", "cpu")),
             )
             rows.extend(game_rows)
             lengths.append(len(game_rows))
@@ -331,6 +340,7 @@ def main() -> None:
             cfg.get("mcts", {}),
             cfg.get("candidate", {}),
             cfg.get("proposal", {}),
+            cfg.get("opponents", {}),
             str(train_cfg.get("rollout_device", "cpu")),
         )
         for i in range(rollout_workers)
