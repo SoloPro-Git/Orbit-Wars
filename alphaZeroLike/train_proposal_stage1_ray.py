@@ -294,6 +294,8 @@ def main() -> None:
             for part in parts:
                 for key, value in part.items():
                     log[key] = float(log.get(key, 0.0)) + float(value) / max(len(parts), 1)
+            Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+            torch.save({"model_state_dict": final_state, "proposal_steps": completed, "args": vars(args)}, out_path)
             print(json.dumps(log, ensure_ascii=False), flush=True)
             if swan is not None:
                 swan.log(log, step=completed)
