@@ -189,7 +189,10 @@ def _load_initial_state(
     if resume and Path(resume).exists():
         ckpt = torch.load(resume, map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model_state_dict"], strict=False)
-        return {key: value.detach().cpu() for key, value in model.state_dict().items()}, {"resume": resume}
+        return (
+            {key: value.detach().cpu() for key, value in model.state_dict().items()},
+            {"resume": resume, "resume_steps": int(ckpt.get("proposal_steps", ckpt.get("step", 0)) or 0)},
+        )
     if init_from_training2 and Path(init_from_training2).exists():
         report = load_training2_stage1_backbone(model, init_from_training2, map_location=device)
         return (
@@ -310,6 +313,7 @@ def main() -> None:
     )
 
     completed = 0
+    base_steps = int(initial_info.get("resume_steps", 0) or 0)
     final_state: dict[str, torch.Tensor] | None = None
     progress = tqdm(total=args.steps, initial=completed, desc="[ProposalRay]", unit="step")
     try:
@@ -321,12 +325,13 @@ def main() -> None:
             final_state = avg_state
             ray.get([actor.load_state_dict.remote(avg_state) for actor in actors])
             completed += chunk
-            log: dict[str, float | int] = {"step": completed, "workers": workers}
+            global_step = base_steps + completed
+            log: dict[str, float | int] = {"step": global_step, "local_step": completed, "workers": workers}
             for part in parts:
                 for key, value in part.items():
                     log[key] = float(log.get(key, 0.0)) + float(value) / max(len(parts), 1)
             Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-            torch.save({"model_state_dict": final_state, "proposal_steps": completed, "args": vars(args)}, out_path)
+            torch.save({"model_state_dict": final_state, "proposal_steps": global_step, "args": vars(args)}, out_path)
             print(json.dumps(log, ensure_ascii=False), flush=True)
             if swan is not None:
                 swan.log(log, step=completed)
@@ -342,8 +347,8 @@ def main() -> None:
     if final_state is None:
         final_state = ray.get(actors[0].state_dict_cpu.remote())
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"model_state_dict": final_state, "proposal_steps": args.steps, "args": vars(args)}, out_path)
-    print(json.dumps({"saved": out_path, "steps": args.steps}, ensure_ascii=False), flush=True)
+    torch.save({"model_state_dict": final_state, "proposal_steps": base_steps + args.steps, "args": vars(args)}, out_path)
+    print(json.dumps({"saved": out_path, "steps": base_steps + args.steps, "local_steps": args.steps}, ensure_ascii=False), flush=True)
     if swan is not None:
         swan.finish()
 
