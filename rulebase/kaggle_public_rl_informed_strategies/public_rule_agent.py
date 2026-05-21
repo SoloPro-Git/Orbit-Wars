@@ -527,6 +527,45 @@ class PublicRuleAgent:
     chain_followup_support_source_min_after: int = PUBLIC_EXACT.chain_followup_support_source_min_after
     chain_followup_support_source_prod_turns_after: int = PUBLIC_EXACT.chain_followup_support_source_prod_turns_after
     chain_followup_support_max_targets: int = PUBLIC_EXACT.chain_followup_support_max_targets
+    enable_recent_capture_activation: bool = PUBLIC_EXACT.enable_recent_capture_activation
+    activation_enable_extra_attack: bool = PUBLIC_EXACT.activation_enable_extra_attack
+    activation_enable_attack_priority: bool = PUBLIC_EXACT.activation_enable_attack_priority
+    activation_enable_trickle: bool = PUBLIC_EXACT.activation_enable_trickle
+    activation_attack_source_bonus: float = PUBLIC_EXACT.activation_attack_source_bonus
+    activation_attack_target_bonus: float = PUBLIC_EXACT.activation_attack_target_bonus
+    activation_trickle_min_send: int = PUBLIC_EXACT.activation_trickle_min_send
+    activation_trickle_max_send: int = PUBLIC_EXACT.activation_trickle_max_send
+    activation_trickle_send_fraction: float = PUBLIC_EXACT.activation_trickle_send_fraction
+    activation_min_prod_diff: float = PUBLIC_EXACT.activation_min_prod_diff
+    activation_min_ship_diff: float = PUBLIC_EXACT.activation_min_ship_diff
+    activation_min_planet_diff: int = PUBLIC_EXACT.activation_min_planet_diff
+    activation_max_recent_highprod_losses: int = PUBLIC_EXACT.activation_max_recent_highprod_losses
+    activation_min_active_players: int = PUBLIC_EXACT.activation_min_active_players
+    activation_max_active_players: int = PUBLIC_EXACT.activation_max_active_players
+    activation_min_step: int = PUBLIC_EXACT.activation_min_step
+    activation_max_step: int = PUBLIC_EXACT.activation_max_step
+    activation_source_window: int = PUBLIC_EXACT.activation_source_window
+    activation_source_min_production: float = PUBLIC_EXACT.activation_source_min_production
+    activation_enable_front_base_source: bool = PUBLIC_EXACT.activation_enable_front_base_source
+    activation_front_base_max_production: float = PUBLIC_EXACT.activation_front_base_max_production
+    activation_front_base_enemy_radius: float = PUBLIC_EXACT.activation_front_base_enemy_radius
+    activation_source_min_after: int = PUBLIC_EXACT.activation_source_min_after
+    activation_source_prod_turns_after: int = PUBLIC_EXACT.activation_source_prod_turns_after
+    activation_min_send: int = PUBLIC_EXACT.activation_min_send
+    activation_max_send: int = PUBLIC_EXACT.activation_max_send
+    activation_target_min_production: float = PUBLIC_EXACT.activation_target_min_production
+    activation_include_neutral_targets: bool = PUBLIC_EXACT.activation_include_neutral_targets
+    activation_include_enemy_targets: bool = PUBLIC_EXACT.activation_include_enemy_targets
+    activation_max_eta: int = PUBLIC_EXACT.activation_max_eta
+    activation_candidate_limit: int = PUBLIC_EXACT.activation_candidate_limit
+    activation_max_attacks_per_turn: int = PUBLIC_EXACT.activation_max_attacks_per_turn
+    activation_enemy_bonus: float = PUBLIC_EXACT.activation_enemy_bonus
+    activation_neutral_bonus: float = PUBLIC_EXACT.activation_neutral_bonus
+    activation_prod_weight: float = PUBLIC_EXACT.activation_prod_weight
+    activation_eta_weight: float = PUBLIC_EXACT.activation_eta_weight
+    activation_ship_weight: float = PUBLIC_EXACT.activation_ship_weight
+    activation_direction_bonus: float = PUBLIC_EXACT.activation_direction_bonus
+    activation_front_base_target_bonus: float = PUBLIC_EXACT.activation_front_base_target_bonus
     enable_high_prod_capture_seed: bool = PUBLIC_EXACT.enable_high_prod_capture_seed
     capture_seed_min_active_players: int = PUBLIC_EXACT.capture_seed_min_active_players
     capture_seed_max_active_players: int = PUBLIC_EXACT.capture_seed_max_active_players
@@ -615,6 +654,7 @@ class PublicRuleAgent:
     enemy_recently_captured_steps: dict[int, int] = field(default_factory=dict)
     planet_flip_steps: dict[int, list[int]] = field(default_factory=dict)
     recently_lost_steps: dict[int, int] = field(default_factory=dict)
+    activation_recently_captured_steps: dict[int, int] = field(default_factory=dict)
     third_party_tail_watchlist: dict[tuple[int, int], dict[str, object]] = field(default_factory=dict)
     doomed_evacuation_source_steps: dict[int, int] = field(default_factory=dict)
     comet_remaining_by_planet: dict[int, int] = field(default_factory=dict)
@@ -667,6 +707,8 @@ class PublicRuleAgent:
             self._append_comet_evacuation(local, under_attack, exhausted_planet_ids, moves)
         attack_count_before = len(self.fleet_trajectories)
         self._append_attacks(local, under_attack, exhausted_planet_ids, moves)
+        self._append_recent_capture_trickle(local, under_attack, exhausted_planet_ids, moves)
+        self._append_recent_capture_activation(local, under_attack, exhausted_planet_ids, moves)
         self._append_high_prod_capture_seed(local, under_attack, exhausted_planet_ids, moves, attack_count_before)
         self._append_chain_followup_support(local, under_attack, exhausted_planet_ids, moves, attack_count_before)
         self.did_attack_this_turn = len(self.fleet_trajectories) > attack_count_before
@@ -712,6 +754,7 @@ class PublicRuleAgent:
                 self.reinforcement_trajectories.remove(tracked)
 
     def _update_recent_captures(self, local: LocalObs) -> None:
+        activation_step = self._agent_turn_step(local)
         for planet in local.planets:
             previous_owner = self.previous_owner_by_planet.get(planet.id)
             if previous_owner is not None and previous_owner != planet.owner:
@@ -722,6 +765,7 @@ class PublicRuleAgent:
                     flips.pop(0)
             if previous_owner is not None and previous_owner != local.player and planet.owner == local.player:
                 self.recently_captured_steps[planet.id] = local.step
+                self.activation_recently_captured_steps[planet.id] = activation_step
                 self.recent_capture_previous_owner[planet.id] = previous_owner
                 vector = self._recent_capture_incoming_vector(planet)
                 if vector is not None:
@@ -734,6 +778,7 @@ class PublicRuleAgent:
                 and planet.production >= self._recent_loss_tracking_min_production(local)
             ):
                 self.recently_lost_steps[planet.id] = local.step
+                self.activation_recently_captured_steps.pop(planet.id, None)
             elif planet.owner in (-1, local.player):
                 self.enemy_recently_captured_steps.pop(planet.id, None)
             if previous_owner is not None and previous_owner != planet.owner and planet.owner not in (-1, local.player):
@@ -747,6 +792,10 @@ class PublicRuleAgent:
                 del self.recently_captured_steps[planet_id]
                 self.recent_capture_previous_owner.pop(planet_id, None)
                 self.recent_capture_vectors.pop(planet_id, None)
+        keep_activation_after = activation_step - max(1, self.activation_source_window)
+        for planet_id, step in list(self.activation_recently_captured_steps.items()):
+            if step < keep_activation_after:
+                del self.activation_recently_captured_steps[planet_id]
         keep_lost_after = local.step - max(1, self.recent_loss_recapture_window)
         for planet_id, step in list(self.recently_lost_steps.items()):
             if step < keep_lost_after:
@@ -2537,6 +2586,7 @@ class PublicRuleAgent:
             key=lambda p: (
                 self._recent_capture_chain_source_priority(p, local)
                 + self._mobile_relay_source_priority(p, local),
+                self._activation_attack_source_priority(p, local),
                 p.ships,
             ),
             reverse=True,
@@ -2561,6 +2611,7 @@ class PublicRuleAgent:
                     + self._recent_capture_chain_target_bonus(source, target, local)
                     + self._mobile_relay_score(source, target, local)
                     + self._mobile_relay_source_target_bonus(source, target, local)
+                    + self._activation_attack_target_bonus(source, target, local)
                     + launch_pressure.get(target.id, 0.0)
                     - self._source_threat_target_penalty(source, target, local)
                 ),
@@ -2573,6 +2624,368 @@ class PublicRuleAgent:
                     break
                 if self.enable_coop_attacks and self._try_coop_attack(source, target, local, under_attack, exhausted_planet_ids, moves):
                     break
+
+    def _append_recent_capture_activation(
+        self,
+        local: LocalObs,
+        under_attack: dict[int, dict[str, object]],
+        exhausted_planet_ids: set[int],
+        moves: list[list[float | int]],
+    ) -> None:
+        activation_step = self._agent_turn_step(local)
+        if not self.enable_recent_capture_activation:
+            return
+        if not self.activation_enable_extra_attack:
+            return
+        if activation_step < self.activation_min_step or activation_step > self.activation_max_step:
+            return
+        active_players = self._active_player_count(local)
+        if active_players < self.activation_min_active_players:
+            return
+        if self.activation_max_active_players > 0 and active_players > self.activation_max_active_players:
+            return
+        if not self._activation_context_allowed(local):
+            return
+
+        source_rows: list[tuple[float, Planet, int]] = []
+        for source in local.mine:
+            if source.id in exhausted_planet_ids:
+                continue
+            captured_step = self.activation_recently_captured_steps.get(source.id)
+            if captured_step is None:
+                continue
+            age = activation_step - captured_step
+            if age < 1 or age > self.activation_source_window:
+                continue
+            is_front_base = self._activation_front_base_source(source, local)
+            if source.production < self.activation_source_min_production and not is_front_base:
+                continue
+            reserve = self.activation_source_min_after + int(source.production * self.activation_source_prod_turns_after)
+            available = self._available_local_attack_ships(source, local, under_attack)
+            if available - reserve < self.activation_min_send:
+                continue
+            urgency = max(0, self.activation_source_window - age)
+            source_score = source.production * 20.0 + urgency + available * 0.05
+            if is_front_base:
+                source_score += 12.0
+            source_rows.append((source_score, source, reserve))
+
+        if not source_rows:
+            return
+
+        launched = 0
+        original_min_attack = self.min_ships_mine_attack
+        self.min_ships_mine_attack = min(original_min_attack, max(1, self.activation_min_send))
+        try:
+            for _, source, reserve in sorted(source_rows, key=lambda row: row[0], reverse=True):
+                if launched >= self.activation_max_attacks_per_turn:
+                    return
+                if source.id in exhausted_planet_ids:
+                    continue
+                target_rows = self._activation_target_rows(source, reserve, local, under_attack)
+                for _, target in target_rows[: self.activation_candidate_limit]:
+                    before = len(moves)
+                    if self._try_single_attack(source, target, local, under_attack, exhausted_planet_ids, moves):
+                        launched += 1
+                        break
+                    if len(moves) != before:
+                        launched += 1
+                        break
+        finally:
+            self.min_ships_mine_attack = original_min_attack
+
+    def _activation_target_rows(
+        self,
+        source: Planet,
+        reserve: int,
+        local: LocalObs,
+        under_attack: dict[int, dict[str, object]],
+    ) -> list[tuple[float, Planet]]:
+        available = self._available_local_attack_ships(source, local, under_attack)
+        rows: list[tuple[float, Planet]] = []
+        for target in local.targets:
+            if target.owner == -1 and not self.activation_include_neutral_targets:
+                continue
+            if target.owner not in (-1, local.player) and not self.activation_include_enemy_targets:
+                continue
+            if self.skip_comet_targets and target.id in local.comet_planet_ids:
+                continue
+            if target.production < self.activation_target_min_production:
+                continue
+            needed = self._base_ships_needed(target, local, source=source)
+            if needed is None:
+                continue
+            if self.activation_max_send > 0 and needed > self.activation_max_send:
+                continue
+            if available - needed < reserve:
+                continue
+            eta = self._estimate_arrival_for_requirement(source, target, needed, local)
+            if eta > self.activation_max_eta:
+                continue
+            score = self._target_score(source, target, local) * 0.25
+            score += target.production * self.activation_prod_weight
+            score -= target.ships * self.activation_ship_weight
+            score -= eta * self.activation_eta_weight
+            score += self.activation_neutral_bonus if target.owner == -1 else self.activation_enemy_bonus
+            score += self._activation_direction_score(source, target)
+            score += self._activation_front_base_target_score(target, local)
+            rows.append((score, target))
+        rows.sort(key=lambda row: row[0], reverse=True)
+        return rows
+
+    def _append_recent_capture_trickle(
+        self,
+        local: LocalObs,
+        under_attack: dict[int, dict[str, object]],
+        exhausted_planet_ids: set[int],
+        moves: list[list[float | int]],
+    ) -> None:
+        if not self.enable_recent_capture_activation or not self.activation_enable_trickle:
+            return
+        activation_step = self._agent_turn_step(local)
+        if activation_step < self.activation_min_step or activation_step > self.activation_max_step:
+            return
+        active_players = self._active_player_count(local)
+        if active_players < self.activation_min_active_players:
+            return
+        if self.activation_max_active_players > 0 and active_players > self.activation_max_active_players:
+            return
+        if not self._activation_context_allowed(local):
+            return
+
+        source_rows: list[tuple[float, Planet, int, int]] = []
+        for source in local.mine:
+            if source.id in exhausted_planet_ids:
+                continue
+            captured_step = self.activation_recently_captured_steps.get(source.id)
+            if captured_step is None:
+                continue
+            age = activation_step - captured_step
+            if age < 1 or age > self.activation_source_window:
+                continue
+            is_front_base = self._activation_front_base_source(source, local)
+            if source.production < self.activation_source_min_production and not is_front_base:
+                continue
+            reserve = self.activation_source_min_after + int(source.production * self.activation_source_prod_turns_after)
+            available = self._available_local_attack_ships(source, local, under_attack)
+            sendable = available - reserve
+            if sendable < self.activation_trickle_min_send:
+                continue
+            ships = int(sendable * max(0.05, min(1.0, self.activation_trickle_send_fraction)))
+            ships = max(self.activation_trickle_min_send, ships)
+            if self.activation_trickle_max_send > 0:
+                ships = min(ships, self.activation_trickle_max_send)
+            ships = min(ships, sendable)
+            if ships < self.activation_trickle_min_send:
+                continue
+            source_score = source.production * 20.0 + max(0, self.activation_source_window - age) + ships * 0.25
+            source_rows.append((source_score, source, reserve, ships))
+
+        launched = 0
+        for _, source, reserve, ships in sorted(source_rows, key=lambda row: row[0], reverse=True):
+            if launched >= self.activation_max_attacks_per_turn:
+                return
+            if source.id in exhausted_planet_ids:
+                continue
+            for _, target in self._activation_trickle_target_rows(source, ships, local)[: self.activation_candidate_limit]:
+                if self._try_activation_trickle(source, target, ships, local, exhausted_planet_ids, moves):
+                    launched += 1
+                    break
+
+    def _activation_trickle_target_rows(self, source: Planet, ships: int, local: LocalObs) -> list[tuple[float, Planet]]:
+        rows: list[tuple[float, Planet]] = []
+        for target in local.targets:
+            if target.owner == local.player:
+                continue
+            if target.owner == -1 and not self.activation_include_neutral_targets:
+                continue
+            if target.owner not in (-1, local.player) and not self.activation_include_enemy_targets:
+                continue
+            if self.skip_comet_targets and target.id in local.comet_planet_ids:
+                continue
+            if target.production < self.activation_target_min_production:
+                continue
+            angle, eta = self._angle_and_arrival(source, target, ships, local)
+            if angle is None or eta is None or eta > self.activation_max_eta:
+                continue
+            incoming = sum(
+                int(row["total_ships"])
+                for row in self.fleet_trajectories
+                if int(row["target"].id) == target.id and int(row["arrive_tick"]) >= 0
+            )
+            score = self._target_score(source, target, local) * 0.15
+            score += target.production * self.activation_prod_weight
+            score -= max(0.0, target.ships - incoming) * self.activation_ship_weight
+            score -= eta * self.activation_eta_weight
+            score += self.activation_neutral_bonus if target.owner == -1 else self.activation_enemy_bonus
+            score += self._activation_direction_score(source, target)
+            score += self._activation_front_base_target_score(target, local)
+            rows.append((score, target))
+        rows.sort(key=lambda row: row[0], reverse=True)
+        return rows
+
+    def _try_activation_trickle(
+        self,
+        source: Planet,
+        target: Planet,
+        ships: int,
+        local: LocalObs,
+        exhausted_planet_ids: set[int],
+        moves: list[list[float | int]],
+    ) -> bool:
+        angle, arrive_tick = self._angle_and_arrival(source, target, ships, local)
+        if angle is None or arrive_tick is None:
+            return False
+        if self.enable_sun_avoidance and sun_collision(source, ships, angle):
+            return False
+        path_target = self._resolve_path_target(source, target, ships, angle, arrive_tick, local)
+        if path_target is None or path_target.owner == local.player:
+            return False
+        if path_target.id != target.id:
+            target = path_target
+            angle, arrive_tick = self._angle_and_arrival(source, target, ships, local)
+            if angle is None or arrive_tick is None:
+                return False
+            if self.enable_sun_avoidance and sun_collision(source, ships, angle):
+                return False
+            if not self._path_hits_target(source, target, ships, angle, arrive_tick, local):
+                return False
+        if self._source_exposed_after_send(source, target, ships, arrive_tick, local):
+            return False
+        moves.append([source.id, angle, ships])
+        exhausted_planet_ids.add(source.id)
+        self._track_attack(source, target, angle, ships, arrive_tick)
+        return True
+
+    def _activation_front_base_source(self, source: Planet, local: LocalObs) -> bool:
+        if not self.activation_enable_front_base_source:
+            return False
+        if source.production > self.activation_front_base_max_production:
+            return False
+        return self._nearest_enemy_distance(source, local) <= self.activation_front_base_enemy_radius
+
+    def _activation_attack_source_priority(self, source: Planet, local: LocalObs) -> float:
+        if not self.activation_enable_attack_priority:
+            return 0.0
+        activation_step = self._agent_turn_step(local)
+        if activation_step < self.activation_min_step or activation_step > self.activation_max_step:
+            return 0.0
+        active_players = self._active_player_count(local)
+        if active_players < self.activation_min_active_players:
+            return 0.0
+        if self.activation_max_active_players > 0 and active_players > self.activation_max_active_players:
+            return 0.0
+        if not self._activation_context_allowed(local):
+            return 0.0
+        captured_step = self.activation_recently_captured_steps.get(source.id)
+        if captured_step is None:
+            return 0.0
+        age = activation_step - captured_step
+        if age < 1 or age > self.activation_source_window:
+            return 0.0
+        if source.production < self.activation_source_min_production and not self._activation_front_base_source(source, local):
+            return 0.0
+        urgency = max(0.0, 1.0 - age / max(1.0, float(self.activation_source_window)))
+        return self.activation_attack_source_bonus * (0.50 + 0.50 * urgency)
+
+    def _activation_context_allowed(self, local: LocalObs) -> bool:
+        if (
+            self.activation_min_prod_diff <= -900.0
+            and self.activation_min_ship_diff <= -90000.0
+            and self.activation_min_planet_diff <= -900
+            and self.activation_max_recent_highprod_losses >= 900
+        ):
+            return True
+        own_planets = [planet for planet in local.planets if planet.owner == local.player]
+        enemy_planets = [planet for planet in local.planets if planet.owner not in (-1, local.player)]
+        own_prod = sum(planet.production for planet in own_planets)
+        enemy_prod = sum(planet.production for planet in enemy_planets)
+        own_ships = sum(planet.ships for planet in own_planets) + sum(fleet.ships for fleet in local.fleets if fleet.owner == local.player)
+        enemy_ships = sum(planet.ships for planet in enemy_planets) + sum(
+            fleet.ships for fleet in local.fleets if fleet.owner not in (-1, local.player)
+        )
+        if own_prod - enemy_prod < self.activation_min_prod_diff:
+            return False
+        if own_ships - enemy_ships < self.activation_min_ship_diff:
+            return False
+        if len(own_planets) - len(enemy_planets) < self.activation_min_planet_diff:
+            return False
+        if self.activation_max_recent_highprod_losses < 900:
+            activation_step = self._agent_turn_step(local)
+            recent_losses = 0
+            for planet_id, lost_step in self.recently_lost_steps.items():
+                if activation_step - lost_step <= self.activation_source_window:
+                    planet = next((item for item in local.planets if item.id == planet_id), None)
+                    if planet is not None and planet.production >= self.activation_source_min_production:
+                        recent_losses += 1
+            if recent_losses > self.activation_max_recent_highprod_losses:
+                return False
+        return True
+
+    def _activation_attack_target_bonus(self, source: Planet, target: Planet, local: LocalObs) -> float:
+        if not self.activation_enable_attack_priority:
+            return 0.0
+        if self._activation_attack_source_priority(source, local) <= 0.0:
+            return 0.0
+        if target.production < self.activation_target_min_production:
+            return 0.0
+        if target.owner == -1 and not self.activation_include_neutral_targets:
+            return 0.0
+        if target.owner not in (-1, local.player) and not self.activation_include_enemy_targets:
+            return 0.0
+        eta = self._estimate_arrival_for_requirement(source, target, max(1, self.activation_min_send), local)
+        if eta > self.activation_max_eta:
+            return 0.0
+        owner_bonus = self.activation_enemy_bonus if target.owner not in (-1, local.player) else self.activation_neutral_bonus
+        score = self.activation_attack_target_bonus
+        score += owner_bonus * 0.35
+        score += target.production * (self.activation_prod_weight * 0.35)
+        score -= target.ships * (self.activation_ship_weight * 0.50)
+        score -= eta * (self.activation_eta_weight * 0.50)
+        score += self._activation_direction_score(source, target) * 0.50
+        score += self._activation_front_base_target_score(target, local) * 0.50
+        return score
+
+    def _activation_front_base_target_score(self, target: Planet, local: LocalObs) -> float:
+        if self.activation_front_base_target_bonus <= 0:
+            return 0.0
+        if target.owner == local.player:
+            return 0.0
+        nearest_own = min(
+            (distance(target, own) for own in local.mine if own.id != target.id),
+            default=10**9,
+        )
+        nearest_enemy = self._nearest_enemy_distance(target, local)
+        if nearest_own > self.activation_front_base_enemy_radius:
+            return 0.0
+        if nearest_enemy > self.activation_front_base_enemy_radius:
+            return 0.0
+        return self.activation_front_base_target_bonus * max(0.0, 1.0 - nearest_enemy / max(1.0, self.activation_front_base_enemy_radius))
+
+    def _activation_direction_score(self, source: Planet, target: Planet) -> float:
+        if self.activation_direction_bonus <= 0:
+            return 0.0
+        incoming = self.recent_capture_vectors.get(source.id)
+        if incoming is None:
+            return 0.0
+        dx = float(target.x) - float(source.x)
+        dy = float(target.y) - float(source.y)
+        norm = math.hypot(dx, dy)
+        if norm <= 1e-6:
+            return 0.0
+        dot = incoming[0] * dx / norm + incoming[1] * dy / norm
+        if dot <= 0.0:
+            return 0.0
+        return self.activation_direction_bonus * dot
+
+    def _nearest_enemy_distance(self, planet: Planet, local: LocalObs) -> float:
+        return min(
+            (distance(planet, enemy) for enemy in local.planets if enemy.owner not in (-1, local.player)),
+            default=10**9,
+        )
+
+    def _agent_turn_step(self, local: LocalObs) -> int:
+        return max(int(local.step), max(0, int(self.steps_seen) - 1))
 
     def _append_high_prod_capture_seed(
         self,

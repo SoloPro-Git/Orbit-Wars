@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import json
 import os
@@ -19,7 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from rulebase.kaggle_public_rl_informed_strategies.rl_informed_agent import RLInformedPublicRuleAgent
-from rulebase.kaggle_public_rl_informed_strategies.state import LocalObs, Planet, parse_observation
+from rulebase.kaggle_public_rl_informed_strategies.state import LocalObs, Planet, obs_get, parse_observation
 from rulebase.kaggle_public_rl_informed_strategies.strategy_config import ABLATION_SUITES, CHAMPION_OPPONENT_VARIANTS
 from training2.fast_orbit_wars import make_fast_orbit_wars
 
@@ -78,6 +79,16 @@ def _empty_diag() -> dict[str, object]:
         "enemy_hp_pressure_score_sum": 0.0,
         "contested_stoploss_blocks": 0,
         "contested_stoploss_penalty_positive": 0,
+        "activation_moves": 0,
+        "activation_turns": 0,
+        "activation_source_prod_sum": 0.0,
+        "activation_target_prod_sum": 0.0,
+        "activation_target_enemy": 0,
+        "activation_target_neutral": 0,
+        "activation_prod_diff_sum": 0.0,
+        "activation_ship_diff_sum": 0.0,
+        "activation_planet_diff_sum": 0.0,
+        "activation_step_sum": 0.0,
         "final_step": 0,
     }
 
@@ -93,13 +104,33 @@ class InstrumentedAgent(RLInformedPublicRuleAgent):
     current_player_for_diag: int = -1
     reinf_len_before_diag: int = 0
 
+    def _observation_with_diag_step(self, obs):
+        if obs_get(obs, "step", None) is not None:
+            return obs
+
+        fallback_step = max(0, self.steps_seen - 1)
+        if isinstance(obs, dict):
+            patched = dict(obs)
+            patched["step"] = fallback_step
+            return patched
+
+        patched = copy.copy(obs)
+        setattr(patched, "step", fallback_step)
+        return patched
+
     def act(self, obs) -> list[list[float | int]]:
-        local = parse_observation(obs)
+        self.steps_seen += 1
+        if self.steps_seen <= self.warmup_steps:
+            return []
+
+        diag_obs = self._observation_with_diag_step(obs)
+        local = parse_observation(diag_obs)
         self.current_step_for_diag = local.step
         self.current_player_for_diag = local.player
         self.reinf_len_before_diag = len(self.reinforcement_trajectories)
         self._record_state(local)
 
+        self.steps_seen -= 1
         moves = RLInformedPublicRuleAgent.act(self, obs)
 
         phase = _phase(local.step)
@@ -200,6 +231,32 @@ class InstrumentedAgent(RLInformedPublicRuleAgent):
             self.diag["contested_stoploss_penalty_positive"] += 1
         return penalty
 
+    def _append_recent_capture_activation(self, local, under_attack, exhausted_planet_ids, moves) -> None:
+        before_moves = len(moves)
+        before_tracks = len(self.fleet_trajectories)
+        stats = _owner_stats(local, local.player)
+        RLInformedPublicRuleAgent._append_recent_capture_activation(self, local, under_attack, exhausted_planet_ids, moves)
+        delta = len(moves) - before_moves
+        if delta <= 0:
+            return
+        self.diag["activation_moves"] += delta
+        self.diag["activation_turns"] += 1
+        new_tracks = self.fleet_trajectories[before_tracks:]
+        for row in new_tracks[:delta]:
+            source = next((planet for planet in local.planets if planet.id == int(row["source_id"])), None)
+            target = row["target"]
+            if source is not None:
+                self.diag["activation_source_prod_sum"] += float(source.production)
+            self.diag["activation_target_prod_sum"] += float(target.production)
+            if target.owner == -1:
+                self.diag["activation_target_neutral"] += 1
+            elif target.owner != local.player:
+                self.diag["activation_target_enemy"] += 1
+        self.diag["activation_prod_diff_sum"] += float(stats["prod_diff"]) * delta
+        self.diag["activation_ship_diff_sum"] += float(stats["ship_diff"]) * delta
+        self.diag["activation_planet_diff_sum"] += float(stats["planet_diff"]) * delta
+        self.diag["activation_step_sum"] += float(self._agent_turn_step(local)) * delta
+
 
 def make_agent(params: dict, *, instrument: bool):
     instance = InstrumentedAgent(**params) if instrument else RLInformedPublicRuleAgent(**params)
@@ -239,10 +296,21 @@ def flatten_diag(diag: dict[str, object]) -> dict[str, float | int | str | None]
         "enemy_hp_pressure_positive",
         "contested_stoploss_blocks",
         "contested_stoploss_penalty_positive",
+        "activation_moves",
+        "activation_turns",
+        "activation_target_enemy",
+        "activation_target_neutral",
         "final_step",
     ):
         out[key] = diag[key]
     out["enemy_hp_pressure_score_sum"] = float(diag["enemy_hp_pressure_score_sum"])
+    activation_moves = max(1, int(diag["activation_moves"]))
+    out["activation_avg_source_prod"] = float(diag["activation_source_prod_sum"]) / activation_moves
+    out["activation_avg_target_prod"] = float(diag["activation_target_prod_sum"]) / activation_moves
+    out["activation_avg_prod_diff"] = float(diag["activation_prod_diff_sum"]) / activation_moves
+    out["activation_avg_ship_diff"] = float(diag["activation_ship_diff_sum"]) / activation_moves
+    out["activation_avg_planet_diff"] = float(diag["activation_planet_diff_sum"]) / activation_moves
+    out["activation_avg_step"] = float(diag["activation_step_sum"]) / activation_moves
     return out
 
 
