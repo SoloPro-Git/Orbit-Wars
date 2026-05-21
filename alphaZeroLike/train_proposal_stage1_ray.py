@@ -12,6 +12,8 @@ from typing import Any
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["KAGGLE_ENGINES_LOG_LEVEL"] = "0"
+os.environ["SWANLAB_NO_INTERACTIVE"] = "1"
+os.environ["SWANLAB_DISABLE_INTERACTIVE"] = "1"
 os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -44,6 +46,26 @@ def _resolve(path: str | None) -> str | None:
 
 def _make_model(device: str) -> AlphaZeroLikeNet:
     return AlphaZeroLikeNet().to(device)
+
+
+def _init_swanlab(args: argparse.Namespace) -> Any | None:
+    if args.no_swanlab:
+        return None
+    key = os.environ.get("SWANLAB_API_KEY")
+    key_path = PROJECT_ROOT / "training/config/swanlab_key.txt"
+    if not key and key_path.exists():
+        key = key_path.read_text().strip()
+    if key:
+        os.environ["SWANLAB_API_KEY"] = key
+
+    import swanlab
+
+    return swanlab.init(
+        project=str(args.swanlab_project),
+        experiment_name=str(args.swanlab_experiment),
+        mode=str(args.swanlab_mode),
+        config={"alphaZeroLike_proposal_ray": vars(args)},
+    )
 
 
 def _average_state_dicts(states: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
@@ -148,6 +170,11 @@ def main() -> None:
     parser.add_argument("--train-backbone", action="store_true")
     parser.add_argument("--ray-address")
     parser.add_argument("--ray-temp-dir", default="/tmp/azpray")
+    parser.add_argument("--swanlab-project", default="orbit-wars")
+    parser.add_argument("--swanlab-experiment", default="alphaZeroLike-proposal-ray")
+    parser.add_argument("--swanlab-mode", default="cloud")
+    parser.add_argument("--no-swanlab", action="store_true")
+    parser.add_argument("--allow-no-swanlab", action="store_true")
     args = parser.parse_args()
 
     resume = _resolve(args.resume)
@@ -156,6 +183,15 @@ def main() -> None:
         resume = None
     data_path = _resolve(args.data)
     out_path = _resolve(args.out)
+
+    swan = None
+    try:
+        swan = _init_swanlab(args)
+    except Exception as exc:
+        if args.allow_no_swanlab:
+            print(f"[SwanLab] init failed, continuing: {exc}", flush=True)
+        else:
+            raise
 
     if args.ray_address:
         ray.init(address=args.ray_address, ignore_reinit_error=True)
@@ -194,9 +230,13 @@ def main() -> None:
             for key, value in part.items():
                 log[key] = float(log.get(key, 0.0)) + float(value) / max(len(parts), 1)
         print(json.dumps(log, ensure_ascii=False), flush=True)
+        if swan is not None:
+            swan.log(log, step=completed)
 
     ray.get([actors[0].save.remote(out_path, args.steps, vars(args))])
     print(json.dumps({"saved": out_path, "steps": args.steps}, ensure_ascii=False), flush=True)
+    if swan is not None:
+        swan.finish()
 
 
 if __name__ == "__main__":
