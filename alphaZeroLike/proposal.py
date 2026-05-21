@@ -19,10 +19,11 @@ from training.expert.action_labeling import infer_target_planet_id
 @dataclass(frozen=True)
 class ProposalConfig:
     enabled: bool = True
-    num_candidates: int = 16
-    num_full_actions: int = 8
-    num_sampled_actions: int = 8
-    send_threshold: float = 0.45
+    num_candidates: int = 64
+    num_full_actions: int = 16
+    num_sampled_actions: int = 48
+    raw_sampled_actions: int = 128
+    send_threshold: float = 0.30
     min_ship_ratio: float = 0.08
     ship_ratio_choices: tuple[float, ...] = (0.25, 0.4, 0.6, 0.85)
     top_targets_per_source: int = 2
@@ -231,8 +232,6 @@ def proposals_from_model(
     for drop_idx in range(len(base_action)):
         add([move for i, move in enumerate(base_action) if i != drop_idx])
 
-    out.extend(variants)
-
     def sample_from_weights(indices: list[int], weights: list[float], k: int) -> list[int]:
         selected: list[int] = []
         pool = list(indices)
@@ -255,7 +254,8 @@ def proposals_from_model(
 
     source_temp = max(float(cfg.source_temperature), 1e-3)
     target_temp = max(float(cfg.target_temperature), 1e-3)
-    for _ in range(max(0, cfg.num_sampled_actions)):
+    sampled: list[list[list]] = []
+    for _ in range(max(int(cfg.num_sampled_actions), int(cfg.raw_sampled_actions))):
         if not valid_source_indices:
             break
         source_weights = [min(max(float(send_prob[i]), 1e-4), 1.0) ** (1.0 / source_temp) for i in valid_source_indices]
@@ -287,7 +287,14 @@ def proposals_from_model(
             target = planets[target_idx]
             action.append([int(src[0]), float(aim_angle(obs, src, target, ships)), int(ships)])
         if action:
-            add(action)
+            sampled.append(action)
+
+    # Keep stochastic proposals before single-move variants so the retained
+    # candidate set has real exploratory multi-source actions when truncated.
+    for action in sampled:
+        add(action)
+
+    out.extend(variants)
 
     deduped: list[list[list]] = []
     seen.clear()

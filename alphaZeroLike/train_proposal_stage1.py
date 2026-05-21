@@ -121,6 +121,10 @@ def proposal_pretrain_batch(
     rows: list[dict],
     *,
     device: torch.device | str,
+    send_pos_weight: float = 1.0,
+    target_loss_weight: float = 1.0,
+    ship_loss_weight: float = 1.0,
+    send_threshold: float = 0.5,
 ) -> dict[str, float]:
     planets = _pad_planets(rows, device)
     glob = _pad_global(rows, device)
@@ -142,12 +146,13 @@ def proposal_pretrain_batch(
     active = prop_valid * prop_send
     active_denom = active.sum().clamp(min=1.0)
 
+    send_weight = prop_valid * (1.0 + (float(send_pos_weight) - 1.0) * prop_send)
     send_loss = F.binary_cross_entropy_with_logits(
         proposal["send_logits"],
         prop_send,
-        weight=prop_valid,
+        weight=send_weight,
         reduction="sum",
-    ) / valid_denom
+    ) / send_weight.sum().clamp(min=1.0)
     target_loss_flat = F.cross_entropy(
         proposal["target_logits"].reshape(-1, n_entities),
         prop_target.reshape(-1),
@@ -156,7 +161,7 @@ def proposal_pretrain_batch(
     target_loss = (target_loss_flat * active).sum() / active_denom
     ship_pred = torch.sigmoid(proposal["ship_logits"])
     ship_loss = (F.smooth_l1_loss(ship_pred, prop_ship, reduction="none") * active).sum() / active_denom
-    loss = send_loss + target_loss + ship_loss
+    loss = send_loss + float(target_loss_weight) * target_loss + float(ship_loss_weight) * ship_loss
 
     opt.zero_grad()
     loss.backward()
@@ -164,18 +169,32 @@ def proposal_pretrain_batch(
     opt.step()
 
     with torch.no_grad():
-        send_acc = (((proposal["send_logits"].sigmoid() >= 0.5).float() == prop_send).float() * prop_valid).sum() / valid_denom
+        pred_send = ((proposal["send_logits"].sigmoid() >= float(send_threshold)).float() * prop_valid).clamp(max=1.0)
+        send_acc = ((pred_send == prop_send).float() * prop_valid).sum() / valid_denom
+        true_positive = (pred_send * prop_send * prop_valid).sum()
+        pred_positive = (pred_send * prop_valid).sum()
+        true_active = active.sum()
+        source_precision = true_positive / pred_positive.clamp(min=1.0)
+        source_recall = true_positive / true_active.clamp(min=1.0)
+        source_f1 = 2.0 * source_precision * source_recall / (source_precision + source_recall).clamp(min=1e-6)
         target_pred = proposal["target_logits"].argmax(dim=-1)
         target_acc = ((target_pred == prop_target).float() * active).sum() / active_denom
         ship_mae = ((ship_pred - prop_ship).abs() * active).sum() / active_denom
+        pred_actions_per_row = pred_send.sum(dim=1).mean()
+        true_actions_per_row = active.sum(dim=1).mean()
     return {
         "loss": float(loss.item()),
         "send_loss": float(send_loss.item()),
         "target_loss": float(target_loss.item()),
         "ship_loss": float(ship_loss.item()),
         "send_acc": float(send_acc.item()),
+        "source_precision": float(source_precision.item()),
+        "source_recall": float(source_recall.item()),
+        "source_f1": float(source_f1.item()),
         "target_acc": float(target_acc.item()),
         "ship_mae": float(ship_mae.item()),
+        "pred_actions_per_row": float(pred_actions_per_row.item()),
+        "true_actions_per_row": float(true_actions_per_row.item()),
         "active": float(active.sum().item()),
     }
 
@@ -227,6 +246,10 @@ def main() -> None:
     parser.add_argument("--log-every", type=int, default=50)
     parser.add_argument("--save-every", type=int, default=500)
     parser.add_argument("--active-row-frac", type=float, default=0.75)
+    parser.add_argument("--send-pos-weight", type=float, default=1.0)
+    parser.add_argument("--target-loss-weight", type=float, default=1.0)
+    parser.add_argument("--ship-loss-weight", type=float, default=1.0)
+    parser.add_argument("--send-threshold", type=float, default=0.5)
     parser.add_argument("--train-backbone", action="store_true")
     parser.add_argument("--shuffle-files", action="store_true", default=True)
     parser.add_argument("--d-model", type=int, default=192)
@@ -270,7 +293,16 @@ def main() -> None:
     ema: dict[str, float] = {}
     for step in range(1, args.steps + 1):
         rows = _next_balanced_batch(row_iter, args.batch_size, active_row_frac=args.active_row_frac)
-        metrics = proposal_pretrain_batch(model, opt, rows, device=device)
+        metrics = proposal_pretrain_batch(
+            model,
+            opt,
+            rows,
+            device=device,
+            send_pos_weight=args.send_pos_weight,
+            target_loss_weight=args.target_loss_weight,
+            ship_loss_weight=args.ship_loss_weight,
+            send_threshold=args.send_threshold,
+        )
         for key, value in metrics.items():
             ema[key] = value if key not in ema else 0.95 * ema[key] + 0.05 * value
         if step % args.log_every == 0 or step == 1:

@@ -102,6 +102,10 @@ class ProposalTrainerActor:
         weight_decay: float,
         seed: int,
         train_backbone: bool,
+        send_pos_weight: float,
+        target_loss_weight: float,
+        ship_loss_weight: float,
+        send_threshold: float,
         initial_state_dict: dict[str, torch.Tensor] | None = None,
         initial_info: dict[str, Any] | None = None,
     ) -> None:
@@ -131,6 +135,10 @@ class ProposalTrainerActor:
         if not paths:
             raise FileNotFoundError(data_path)
         self.row_iter = _iter_rows(paths, shuffle_files=True, seed=seed + actor_id * 1009)
+        self.send_pos_weight = float(send_pos_weight)
+        self.target_loss_weight = float(target_loss_weight)
+        self.ship_loss_weight = float(ship_loss_weight)
+        self.send_threshold = float(send_threshold)
 
     def train_steps(self, steps: int, batch_size: int, active_row_frac: float) -> dict[str, float]:
         self.model.train()
@@ -138,7 +146,16 @@ class ProposalTrainerActor:
         t0 = time.time()
         for _ in range(int(steps)):
             rows = _next_balanced_batch(self.row_iter, int(batch_size), active_row_frac=active_row_frac)
-            metrics = proposal_pretrain_batch(self.model, self.opt, rows, device=self.device)
+            metrics = proposal_pretrain_batch(
+                self.model,
+                self.opt,
+                rows,
+                device=self.device,
+                send_pos_weight=self.send_pos_weight,
+                target_loss_weight=self.target_loss_weight,
+                ship_loss_weight=self.ship_loss_weight,
+                send_threshold=self.send_threshold,
+            )
             for key, value in metrics.items():
                 accum[f"proposal/{key}"] = accum.get(f"proposal/{key}", 0.0) + float(value)
         out = {key: value / max(int(steps), 1) for key, value in accum.items()}
@@ -197,6 +214,10 @@ def main() -> None:
     parser.add_argument("--sync-interval", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--active-row-frac", type=float, default=0.75)
+    parser.add_argument("--send-pos-weight", type=float, default=1.0)
+    parser.add_argument("--target-loss-weight", type=float, default=1.0)
+    parser.add_argument("--ship-loss-weight", type=float, default=1.0)
+    parser.add_argument("--send-threshold", type=float, default=0.5)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--seed", type=int, default=20260521)
@@ -265,6 +286,10 @@ def main() -> None:
             args.weight_decay,
             args.seed,
             args.train_backbone,
+            args.send_pos_weight,
+            args.target_loss_weight,
+            args.ship_loss_weight,
+            args.send_threshold,
             initial_state_ref,
             initial_info,
         )
@@ -308,7 +333,7 @@ def main() -> None:
             progress.update(chunk)
             progress.set_postfix(
                 loss=f"{float(log.get('proposal/loss', 0.0)):.4f}",
-                send=f"{float(log.get('proposal/send_acc', 0.0)):.3f}",
+                src_f1=f"{float(log.get('proposal/source_f1', 0.0)):.3f}",
                 target=f"{float(log.get('proposal/target_acc', 0.0)):.3f}",
             )
     finally:

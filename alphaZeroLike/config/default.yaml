@@ -52,10 +52,11 @@ candidate:
 
 proposal:
   enabled: true
-  num_candidates: 32
+  num_candidates: 64
   num_full_actions: 16
-  num_sampled_actions: 16
-  send_threshold: 0.45
+  num_sampled_actions: 48
+  raw_sampled_actions: 128
+  send_threshold: 0.30
   min_ship_ratio: 0.08
   ship_ratio_choices: [0.25, 0.40, 0.60, 0.85]
   top_targets_per_source: 2
