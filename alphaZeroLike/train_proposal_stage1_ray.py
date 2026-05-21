@@ -319,11 +319,20 @@ def main() -> None:
     try:
         while completed < args.steps:
             chunk = min(args.sync_interval, args.steps - completed)
+            loop_t0 = time.time()
+            train_t0 = time.time()
             parts = ray.get([actor.train_steps.remote(chunk, args.batch_size, args.active_row_frac) for actor in actors])
+            train_wall = time.time() - train_t0
+            state_t0 = time.time()
             states = ray.get([actor.state_dict_cpu.remote() for actor in actors])
+            state_wall = time.time() - state_t0
+            average_t0 = time.time()
             avg_state = _average_state_dicts(states)
+            average_wall = time.time() - average_t0
             final_state = avg_state
+            broadcast_t0 = time.time()
             ray.get([actor.load_state_dict.remote(avg_state) for actor in actors])
+            broadcast_wall = time.time() - broadcast_t0
             completed += chunk
             global_step = base_steps + completed
             log: dict[str, float | int] = {"step": global_step, "local_step": completed, "workers": workers}
@@ -331,10 +340,30 @@ def main() -> None:
                 for key, value in part.items():
                     log[key] = float(log.get(key, 0.0)) + float(value) / max(len(parts), 1)
             Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+            save_t0 = time.time()
             torch.save({"model_state_dict": final_state, "proposal_steps": global_step, "args": vars(args)}, out_path)
+            save_wall = time.time() - save_t0
+            log.update(
+                {
+                    "timing/train_wall_sec": train_wall,
+                    "timing/state_pull_sec": state_wall,
+                    "timing/average_sec": average_wall,
+                    "timing/broadcast_sec": broadcast_wall,
+                    "timing/save_sec": save_wall,
+                    "timing/loop_wall_sec": time.time() - loop_t0,
+                }
+            )
             print(json.dumps(log, ensure_ascii=False), flush=True)
             if swan is not None:
+                swan_t0 = time.time()
                 swan.log(log, step=completed)
+                print(
+                    json.dumps(
+                        {"step": global_step, "local_step": completed, "timing/swanlab_sec": time.time() - swan_t0},
+                        ensure_ascii=False,
+                    ),
+                    flush=True,
+                )
             progress.update(chunk)
             progress.set_postfix(
                 loss=f"{float(log.get('proposal/loss', 0.0)):.4f}",
