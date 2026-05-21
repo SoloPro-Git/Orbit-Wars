@@ -1,0 +1,87 @@
+run:
+  stage: mixed
+
+model:
+  d_model: 192
+  nhead: 6
+  layers: 4
+  dropout: 0.10
+
+swanlab:
+  project: orbit-wars
+  experiment: alphaZeroLike-local-4gpu-next
+  mode: cloud
+
+ray:
+  address:
+  temp_dir: /tmp/az4ray
+  num_rollout_workers: 64
+  num_trainer_workers: 12
+  cpus_per_rollout: 1.0
+  cpus_per_trainer: 0.5
+  gpus_per_rollout: 0.0
+  gpus_per_trainer: 0.3333333333
+  rollout_resource:
+  runtime_env_vars: {}
+
+env:
+  players: 2
+  episode_steps: 500
+  use_numba: true
+  opponent_oracle: rl_informed_regular
+
+mcts:
+  simulations: 16
+  c_puct: 1.5
+  temperature: 1.0
+  dirichlet_alpha: 0.3
+  dirichlet_frac: 0.25
+  rollout_depth: 4
+  max_candidates: 64
+  max_moves: 16
+
+candidate:
+  max_candidates: 64
+  include_noop: true
+  include_heuristics: true
+  use_rulebase: true
+  oracle: rl_informed_regular
+
+proposal:
+  enabled: true
+  num_candidates: 32
+  num_full_actions: 16
+  send_threshold: 0.45
+  min_ship_ratio: 0.08
+  ship_ratio_choices: [0.25, 0.40, 0.60, 0.85]
+  top_targets_per_source: 2
+  max_sources: 4
+
+training:
+  init_from_training2: training2/checkpoints/stage1_tactical_entities_20260519/latest.pt
+  resume_from: alphaZeroLike/checkpoints/latest.pt
+  output_dir: alphaZeroLike/checkpoints
+  max_iterations: 1
+  games_per_iteration: 64
+  games_per_rollout_task: 1
+  updates_per_iteration: 50
+  batch_size: 128
+  learning_rate: 0.0002
+  weight_decay: 0.0001
+  value_loss_weight: 1.0
+  entropy_weight: 0.01
+  replay_capacity: 200000
+  device: cuda
+  rollout_device: cpu
+  seed: 71000000
+  save_interval: 1
+
+stages:
+  mixed:
+    candidate:
+      use_rulebase: true
+      include_heuristics: true
+    proposal:
+      enabled: true
+    swanlab:
+      experiment: alphaZeroLike-local-4gpu-next
