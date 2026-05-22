@@ -13,7 +13,7 @@ import torch
 
 from training2 import make_fast_orbit_wars
 
-from tinyPPO.agents import ACTION_SLOTS, MAX_ACTIONS_PER_SOURCE_SAFETY, SHIP_FRACTIONS, TinyPPOAgent, actions_from_decisions, nearest_planet_agent, random_policy_agent
+from tinyPPO.agents import ACTION_SLOTS, MAX_ACTIONS_PER_SOURCE_SAFETY, TinyPPOAgent, actions_from_decisions, nearest_planet_agent, random_policy_agent
 from tinyPPO.eval import run_matchups
 from tinyPPO.features import MAX_PLANETS, encode_obs, final_result
 from tinyPPO.model import TinyPolicyValueNet
@@ -145,27 +145,29 @@ def sample_policy_action(
     out = model(**batch)
     source_logits = out["source_logits"][0]
     target_logits = out["target_logits"][0]
-    ship_logits = out["ship_logits"][0]
+    ship_params = out["ship_params"][0]
 
     action_slots = min(int(getattr(model, "action_slots", ACTION_SLOTS)), int(max_actions_per_source))
     launch_actions = torch.zeros((MAX_PLANETS, action_slots), dtype=torch.long, device=device)
     target_actions = torch.zeros((MAX_PLANETS, action_slots), dtype=torch.long, device=device)
-    ship_actions = torch.zeros((MAX_PLANETS, action_slots), dtype=torch.long, device=device)
+    ship_actions = torch.full((MAX_PLANETS, action_slots), 0.5, dtype=torch.float32, device=device)
     launch_mask = torch.zeros((MAX_PLANETS, action_slots), dtype=torch.bool, device=device)
 
     source_slots: list[int] = []
     target_slots: list[int] = []
-    ship_slots: list[int] = []
+    ship_slots: list[float] = []
     for src in torch.where(batch["own_mask"][0])[0].tolist():
         for action_idx in range(action_slots):
             if deterministic:
                 launch = int(torch.argmax(source_logits[src, action_idx]).item())
                 target = int(torch.argmax(target_logits[src, action_idx]).item())
-                ship = int(torch.argmax(ship_logits[src, action_idx, target]).item())
+                alpha_beta = ship_params[src, action_idx, target]
+                ship = float((alpha_beta[0] / alpha_beta.sum()).clamp(1e-4, 1.0 - 1e-4).item())
             else:
                 launch = int(torch.distributions.Categorical(logits=source_logits[src, action_idx]).sample().item())
                 target = int(torch.distributions.Categorical(logits=target_logits[src, action_idx]).sample().item())
-                ship = int(torch.distributions.Categorical(logits=ship_logits[src, action_idx, target]).sample().item())
+                alpha_beta = ship_params[src, action_idx, target]
+                ship = float(torch.distributions.Beta(alpha_beta[0], alpha_beta[1]).sample().clamp(1e-4, 1.0 - 1e-4).item())
             launch_actions[src, action_idx] = launch
             target_actions[src, action_idx] = target
             ship_actions[src, action_idx] = ship
@@ -275,7 +277,7 @@ def save_checkpoint(path: Path, model: TinyPolicyValueNet, args: argparse.Namesp
     torch.save(
         {
             "state_dict": model.state_dict(),
-            "model": {"hidden": args.hidden, "heads": args.heads, "layers": args.layers, "ship_buckets": len(SHIP_FRACTIONS), "action_slots": args.action_slots},
+            "model": {"hidden": args.hidden, "heads": args.heads, "layers": args.layers, "ship_buckets": 0, "action_slots": args.action_slots},
             "update": update,
             "metrics": metrics,
         },
@@ -308,8 +310,8 @@ def main() -> None:
     parser.add_argument("--max-actions-per-source-safety", type=int, default=MAX_ACTIONS_PER_SOURCE_SAFETY)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--entropy-coef", type=float, default=0.02)
-    parser.add_argument("--replay-updates", type=int, default=0, help="Keep this many previous update batches for age-decayed PPO replay. 0 disables replay.")
-    parser.add_argument("--replay-ratio", type=float, default=0.0, help="Replay samples as a fraction of fresh rollout samples.")
+    parser.add_argument("--replay-updates", type=int, default=2, help="Keep this many previous update batches for age-decayed PPO replay. 0 disables replay.")
+    parser.add_argument("--replay-ratio", type=float, default=0.25, help="Replay samples as a fraction of fresh rollout samples.")
     parser.add_argument("--replay-age-decay", type=float, default=0.50, help="Per-update replay loss weight decay.")
     parser.add_argument("--no-numba", action="store_true")
     parser.add_argument("--swanlab-project", default="orbit-wars")
@@ -324,7 +326,7 @@ def main() -> None:
         torch.set_num_threads(args.torch_threads)
     device = torch.device(args.device)
     out_dir = Path(args.out_dir)
-    model = TinyPolicyValueNet(hidden=args.hidden, heads=args.heads, layers=args.layers, ship_buckets=len(SHIP_FRACTIONS), action_slots=args.action_slots).to(device)
+    model = TinyPolicyValueNet(hidden=args.hidden, heads=args.heads, layers=args.layers, ship_buckets=0, action_slots=args.action_slots).to(device)
     ppo_cfg = PPOConfig(learning_rate=args.lr, entropy_coef=args.entropy_coef)
     updater = PPOUpdater(model, ppo_cfg, device=str(device))
     log_path = out_dir / "train_log.jsonl"
@@ -333,7 +335,7 @@ def main() -> None:
 
     best_winrate = -1.0
     phase = "random" if args.curriculum else args.opponent_mode
-    latest_opponent = TinyPolicyValueNet(hidden=args.hidden, heads=args.heads, layers=args.layers, ship_buckets=len(SHIP_FRACTIONS), action_slots=args.action_slots).to(device)
+    latest_opponent = TinyPolicyValueNet(hidden=args.hidden, heads=args.heads, layers=args.layers, ship_buckets=0, action_slots=args.action_slots).to(device)
     latest_opponent.load_state_dict(model.state_dict())
     latest_opponent.eval()
     replay_batches: deque[tuple[int, list[dict]]] = deque(maxlen=max(0, args.replay_updates))

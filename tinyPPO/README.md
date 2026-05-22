@@ -117,17 +117,21 @@ SwanLab is enabled by default for new tinyPPO runs. It reads
 disable it, or `--allow-no-swanlab` for local debugging when credentials are
 unavailable.
 
-Short replay is available but disabled by default. For PPO, keep it recent and
+Short replay is enabled conservatively by default. For PPO, keep it recent and
 age-decayed rather than treating old trajectories as equally valid:
 
 ```bash
   --replay-updates 2 \
-  --replay-ratio 0.5 \
+  --replay-ratio 0.25 \
   --replay-age-decay 0.5
 ```
 
 This lowers the loss weight of older samples; it does not alter or punish their
 rewards.
+
+Ship counts are learned as a continuous source-target-slot fraction via a Beta
+distribution, then clamped by the decoder against the source planet's remaining
+ships. Each source can still launch at most `--action-slots 3` actions.
 
 Evaluate a checkpoint against nearest-planet:
 

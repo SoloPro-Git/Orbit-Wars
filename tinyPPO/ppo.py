@@ -59,17 +59,17 @@ def action_log_prob_entropy(
     action_count = launch_actions.size(-1)
     source_dist = torch.distributions.Categorical(logits=out["source_logits"])
     target_dist = torch.distributions.Categorical(logits=out["target_logits"])
-    ship_logits = out["ship_logits"]
-    gather_idx = target_actions[:, :, :, None, None].expand(-1, -1, -1, 1, ship_logits.size(-1))
-    chosen_ship_logits = ship_logits.gather(dim=3, index=gather_idx).squeeze(3)
-    ship_dist = torch.distributions.Categorical(logits=chosen_ship_logits)
+    ship_params = out["ship_params"]
+    gather_idx = target_actions[:, :, :, None, None].expand(-1, -1, -1, 1, ship_params.size(-1))
+    chosen_ship_params = ship_params.gather(dim=3, index=gather_idx).squeeze(3)
+    ship_dist = torch.distributions.Beta(chosen_ship_params[..., 0], chosen_ship_params[..., 1])
 
     own_slot_mask = own_mask[:, :, None]
     decision_mask = own_slot_mask.expand(-1, -1, action_count)
     source_lp = source_dist.log_prob(launch_actions).masked_fill(~decision_mask, 0.0).sum(dim=(1, 2))
     target_lp = target_dist.log_prob(target_actions).masked_fill(~launch_mask, 0.0).sum(dim=1)
     target_lp = target_lp.sum(dim=1)
-    ship_lp = ship_dist.log_prob(ship_actions).masked_fill(~launch_mask, 0.0).sum(dim=(1, 2))
+    ship_lp = ship_dist.log_prob(ship_actions.clamp(1e-4, 1.0 - 1e-4)).masked_fill(~launch_mask, 0.0).sum(dim=(1, 2))
 
     source_ent = source_dist.entropy().masked_fill(~decision_mask, 0.0).sum(dim=(1, 2))
     target_ent = target_dist.entropy().masked_fill(~launch_mask, 0.0).sum(dim=(1, 2))
@@ -104,7 +104,7 @@ class PPOUpdater:
             "own_mask": torch.tensor(np.stack([r["own_mask"] for r in buffer.rows]), dtype=torch.bool, device=self.device),
             "launch_actions": torch.tensor(np.stack([r["launch_actions"] for r in buffer.rows]), dtype=torch.long, device=self.device),
             "target_actions": torch.tensor(np.stack([r["target_actions"] for r in buffer.rows]), dtype=torch.long, device=self.device),
-            "ship_actions": torch.tensor(np.stack([r["ship_actions"] for r in buffer.rows]), dtype=torch.long, device=self.device),
+            "ship_actions": torch.tensor(np.stack([r["ship_actions"] for r in buffer.rows]), dtype=torch.float32, device=self.device),
             "launch_mask": torch.tensor(np.stack([r["launch_mask"] for r in buffer.rows]), dtype=torch.bool, device=self.device),
             "old_logprob": torch.tensor([r["logprob"] for r in buffer.rows], dtype=torch.float32, device=self.device),
             "advantages": torch.tensor(adv, dtype=torch.float32, device=self.device),

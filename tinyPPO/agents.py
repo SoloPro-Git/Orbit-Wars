@@ -11,7 +11,7 @@ import torch
 from tinyPPO.features import MAX_PLANETS, encode_obs
 from tinyPPO.model import TinyPolicyValueNet
 
-SHIP_FRACTIONS = (0.20, 0.35, 0.50, 0.75)
+MIN_SHIP_FRACTION = 0.02
 ACTION_SLOTS = 3
 MAX_ACTIONS_PER_SOURCE_SAFETY = ACTION_SLOTS
 
@@ -35,7 +35,7 @@ def actions_from_decisions(obs: dict[str, Any], player: int, source_slots: np.nd
         available = remaining.get(src_i, 0)
         if src_ships <= 1 or available <= 0:
             continue
-        frac = SHIP_FRACTIONS[int(ship_i) % len(SHIP_FRACTIONS)]
+        frac = float(np.clip(float(ship_i), MIN_SHIP_FRACTION, 1.0))
         ships = max(1, min(available, int(src_ships * frac)))
         angle = math.atan2(float(tgt[3]) - float(src[3]), float(tgt[2]) - float(src[2]))
         if math.isfinite(angle) and ships > 0:
@@ -96,21 +96,23 @@ class TinyPPOAgent:
         out = self.model(**batch)
         source_logits = out["source_logits"][0]
         target_logits = out["target_logits"][0]
-        ship_logits = out["ship_logits"][0]
+        ship_params = out["ship_params"][0]
         own_slots = torch.where(batch["own_mask"][0])[0]
         source_slots: list[int] = []
         target_slots: list[int] = []
-        ship_slots: list[int] = []
+        ship_slots: list[float] = []
         for src in own_slots.tolist():
             for slot in range(min(source_logits.size(1), MAX_ACTIONS_PER_SOURCE_SAFETY)):
                 if self.deterministic:
                     launch = int(torch.argmax(source_logits[src, slot]).item())
                     tgt = int(torch.argmax(target_logits[src, slot]).item())
-                    ship = int(torch.argmax(ship_logits[src, slot, tgt]).item())
+                    alpha_beta = ship_params[src, slot, tgt]
+                    ship = float((alpha_beta[0] / alpha_beta.sum()).clamp(1e-4, 1.0).item())
                 else:
                     launch = int(torch.distributions.Categorical(logits=source_logits[src, slot]).sample().item())
                     tgt = int(torch.distributions.Categorical(logits=target_logits[src, slot]).sample().item())
-                    ship = int(torch.distributions.Categorical(logits=ship_logits[src, slot, tgt]).sample().item())
+                    alpha_beta = ship_params[src, slot, tgt]
+                    ship = float(torch.distributions.Beta(alpha_beta[0], alpha_beta[1]).sample().clamp(1e-4, 1.0 - 1e-4).item())
                 if launch == 1:
                     source_slots.append(src)
                     target_slots.append(tgt)

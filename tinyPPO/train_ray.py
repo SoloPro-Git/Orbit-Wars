@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from tinyPPO.agents import ACTION_SLOTS, MAX_ACTIONS_PER_SOURCE_SAFETY, SHIP_FRACTIONS, nearest_planet_agent, random_policy_agent
+from tinyPPO.agents import ACTION_SLOTS, MAX_ACTIONS_PER_SOURCE_SAFETY, nearest_planet_agent, random_policy_agent
 from tinyPPO.features import score
 from tinyPPO.model import TinyPolicyValueNet
 from tinyPPO.ppo import PPOConfig, PPOUpdater, RolloutBuffer
@@ -89,6 +89,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--eval-workers", type=int, default=3)
     parser.add_argument("--gpus-per-eval-worker", type=float, default=1.0 / 3.0)
     parser.add_argument("--eval-gpu-ids", default="", help="Comma list forced inside eval actors, e.g. '0'. Use with --gpus-per-eval-worker 0 to keep eval on a GPU excluded from rollout Ray resources.")
+    parser.add_argument("--eval-node-ip", default="", help="Pin async eval actors to this Ray node IP. Defaults to the driver node.")
     parser.add_argument("--cpus-per-eval-worker", type=float, default=1.0)
     parser.add_argument("--stop-eval-confirmations", type=int, default=2)
     parser.add_argument("--stop-winrate", type=float, default=0.55)
@@ -99,8 +100,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-actions-per-source-safety", type=int, default=MAX_ACTIONS_PER_SOURCE_SAFETY)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--entropy-coef", type=float, default=0.02)
-    parser.add_argument("--replay-updates", type=int, default=0, help="Keep this many previous update batches for age-decayed PPO replay. 0 disables replay.")
-    parser.add_argument("--replay-ratio", type=float, default=0.0, help="Replay samples as a fraction of fresh rollout samples.")
+    parser.add_argument("--replay-updates", type=int, default=2, help="Keep this many previous update batches for age-decayed PPO replay. 0 disables replay.")
+    parser.add_argument("--replay-ratio", type=float, default=0.25, help="Replay samples as a fraction of fresh rollout samples.")
     parser.add_argument("--replay-age-decay", type=float, default=0.50, help="Per-update replay loss weight decay.")
     parser.add_argument("--no-numba", action="store_true")
     parser.add_argument("--swanlab-project", default="orbit-wars")
@@ -134,6 +135,9 @@ def main() -> None:
         runtime_env["working_dir"] = str(Path(args.ray_working_dir).resolve())
     ray_address = args.ray_address or os.environ.get("RAY_ADDRESS")
     ray.init(address=ray_address, ignore_reinit_error=True, runtime_env=runtime_env)
+    eval_node_ip = args.eval_node_ip
+    if not eval_node_ip:
+        eval_node_ip = ray.util.get_node_ip_address()
 
     visible_gpu_count = len([x for x in args.gpu_ids.split(",") if x.strip()]) if args.gpu_ids else int(ray.cluster_resources().get("GPU", 0))
     eval_gpu_reserve = 0.0 if args.sync_eval else max(0, args.eval_workers) * max(0.0, args.gpus_per_eval_worker)
@@ -273,15 +277,16 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     log_path = out_dir / "train_log.jsonl"
     swan = init_swanlab_or_none(args, "ray")
-    model_cfg = {"hidden": args.hidden, "heads": args.heads, "layers": args.layers, "ship_buckets": len(SHIP_FRACTIONS), "action_slots": args.action_slots}
+    model_cfg = {"hidden": args.hidden, "heads": args.heads, "layers": args.layers, "ship_buckets": 0, "action_slots": args.action_slots}
     learner_device = torch.device(args.learner_device)
     model = TinyPolicyValueNet(**model_cfg).to(learner_device)
     updater = PPOUpdater(model, PPOConfig(learning_rate=args.lr, entropy_coef=args.entropy_coef), device=str(learner_device))
     workers = [RolloutWorker.remote(model_cfg, args.episode_steps, args.opponent_mode, not args.no_numba) for _ in range(num_workers)]
+    eval_actor_options = {"resources": {f"node:{eval_node_ip}": 0.001}}
     eval_workers = [] if args.sync_eval else [
-        EvalWorker.remote(model_cfg, args.episode_steps, not args.no_numba, args.max_actions_per_source_safety)
+        EvalWorker.options(**eval_actor_options).remote(model_cfg, args.episode_steps, not args.no_numba, args.max_actions_per_source_safety)
         if not args.eval_gpu_ids
-        else EvalWorker.remote(model_cfg, args.episode_steps, not args.no_numba, args.max_actions_per_source_safety, args.eval_gpu_ids)
+        else EvalWorker.options(**eval_actor_options).remote(model_cfg, args.episode_steps, not args.no_numba, args.max_actions_per_source_safety, args.eval_gpu_ids)
         for _ in range(max(1, args.eval_workers))
     ]
     print(
@@ -292,6 +297,7 @@ def main() -> None:
                 "visible_gpus": visible_gpu_count,
                 "gpus_per_worker": args.gpus_per_worker,
                 "gpus_per_eval_worker": args.gpus_per_eval_worker,
+                "eval_node_ip": eval_node_ip,
             },
             ensure_ascii=False,
         )
@@ -441,7 +447,11 @@ def main() -> None:
             eval_state_ref = ray.put(cpu_state_dict(model))
             if args.sync_eval:
                 print(json.dumps({"event": "sync_eval_start", "update": update, "games_each": args.eval_games}, ensure_ascii=False), flush=True)
-                temp_worker = EvalWorker.options(num_gpus=args.gpus_per_eval_worker, num_cpus=args.cpus_per_eval_worker).remote(
+                temp_worker = EvalWorker.options(
+                    num_gpus=args.gpus_per_eval_worker,
+                    num_cpus=args.cpus_per_eval_worker,
+                    resources={f"node:{eval_node_ip}": 0.001},
+                ).remote(
                     model_cfg,
                     args.episode_steps,
                     not args.no_numba,
