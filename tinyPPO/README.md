@@ -73,6 +73,26 @@ default:
 
 Use `--sync-eval` only when you explicitly want training to wait during eval.
 
+To follow the existing `training2` multi-node Ray style, start/connect to the
+cluster with `RAY_ADDRESS`:
+
+```bash
+export RAY_ADDRESS=10.0.104.198:6380
+uv run --active python -m tinyPPO.train_ray --ray-address "$RAY_ADDRESS" ...
+```
+
+Worker nodes must already be joined with `ray start --address='10.0.104.198:6380'`.
+Use `training2/sync_ray_assets.py` when code files need to be copied to remote
+workers before launching.
+
+To keep eval on local physical GPU 0 while rollout uses GPUs 1-7:
+
+```bash
+  --gpu-ids 1,2,3,4,5,6,7 \
+  --eval-gpu-ids 0 \
+  --gpus-per-eval-worker 0
+```
+
 Ray rollout training on a remote node exposing GPUs 0-8:
 
 ```bash

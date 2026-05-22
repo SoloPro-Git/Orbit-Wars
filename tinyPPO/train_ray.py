@@ -63,7 +63,9 @@ def _merge_eval_parts(parts: list[dict]) -> dict[str, dict[str, float]]:
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out-dir", default="tinyPPO/runs/ray_random_2p_v1")
-    parser.add_argument("--ray-address", default=None, help="Use 'auto' for an existing Ray cluster.")
+    parser.add_argument("--ray-address", default=None, help="Ray address. Defaults to RAY_ADDRESS env; use 'auto' for an existing local cluster.")
+    parser.add_argument("--ray-runtime-env-id", default="", help="Optional env marker to force fresh Ray runtime env on workers.")
+    parser.add_argument("--ray-working-dir", default="", help="Optional Ray working_dir, matching training2 style for multi-node clusters.")
     parser.add_argument("--gpu-ids", default="", help="Comma list to expose before ray.init, e.g. local '1,2,3,4,5,6,7' or remote '0,1,2,3,4,5,6,7,8'.")
     parser.add_argument("--workers-per-gpu", type=int, default=3)
     parser.add_argument("--num-workers", type=int, default=0, help="0 means len(gpu_ids) * workers_per_gpu, or Ray's visible GPU count * workers_per_gpu.")
@@ -86,6 +88,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sync-eval", action="store_true", help="Block training during eval instead of running Ray eval actors asynchronously.")
     parser.add_argument("--eval-workers", type=int, default=3)
     parser.add_argument("--gpus-per-eval-worker", type=float, default=1.0 / 3.0)
+    parser.add_argument("--eval-gpu-ids", default="", help="Comma list forced inside eval actors, e.g. '0'. Use with --gpus-per-eval-worker 0 to keep eval on a GPU excluded from rollout Ray resources.")
     parser.add_argument("--cpus-per-eval-worker", type=float, default=1.0)
     parser.add_argument("--stop-eval-confirmations", type=int, default=2)
     parser.add_argument("--stop-winrate", type=float, default=0.55)
@@ -116,7 +119,20 @@ def main() -> None:
 
     import ray
 
-    ray.init(address=args.ray_address, ignore_reinit_error=True, runtime_env={})
+    runtime_env: dict = {}
+    runtime_env_vars = {
+        "PYTHONPATH": ".",
+        "RAY_ENABLE_UV_RUN_RUNTIME_ENV": "0",
+        "TF_CPP_MIN_LOG_LEVEL": "3",
+        "KAGGLE_ENGINES_LOG_LEVEL": "0",
+    }
+    if args.ray_runtime_env_id:
+        runtime_env_vars["TINYPPO_RUNTIME_ENV_ID"] = str(args.ray_runtime_env_id)
+    runtime_env["env_vars"] = runtime_env_vars
+    if args.ray_working_dir:
+        runtime_env["working_dir"] = str(Path(args.ray_working_dir).resolve())
+    ray_address = args.ray_address or os.environ.get("RAY_ADDRESS")
+    ray.init(address=ray_address, ignore_reinit_error=True, runtime_env=runtime_env)
 
     visible_gpu_count = len([x for x in args.gpu_ids.split(",") if x.strip()]) if args.gpu_ids else int(ray.cluster_resources().get("GPU", 0))
     eval_gpu_reserve = 0.0 if args.sync_eval else max(0, args.eval_workers) * max(0.0, args.gpus_per_eval_worker)
@@ -184,8 +200,10 @@ def main() -> None:
 
     @ray.remote(num_cpus=args.cpus_per_eval_worker, num_gpus=args.gpus_per_eval_worker)
     class EvalWorker:
-        def __init__(self, model_cfg: dict, episode_steps: int, use_numba: bool, max_actions_per_source: int):
+        def __init__(self, model_cfg: dict, episode_steps: int, use_numba: bool, max_actions_per_source: int, eval_gpu_ids: str = ""):
             torch.set_num_threads(1)
+            if eval_gpu_ids:
+                os.environ["CUDA_VISIBLE_DEVICES"] = str(eval_gpu_ids)
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             self.model = TinyPolicyValueNet(**model_cfg).to(self.device)
             self.episode_steps = episode_steps
@@ -261,6 +279,8 @@ def main() -> None:
     workers = [RolloutWorker.remote(model_cfg, args.episode_steps, args.opponent_mode, not args.no_numba) for _ in range(num_workers)]
     eval_workers = [] if args.sync_eval else [
         EvalWorker.remote(model_cfg, args.episode_steps, not args.no_numba, args.max_actions_per_source_safety)
+        if not args.eval_gpu_ids
+        else EvalWorker.remote(model_cfg, args.episode_steps, not args.no_numba, args.max_actions_per_source_safety, args.eval_gpu_ids)
         for _ in range(max(1, args.eval_workers))
     ]
     print(
