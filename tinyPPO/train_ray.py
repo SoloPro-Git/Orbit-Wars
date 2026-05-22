@@ -190,6 +190,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-actions-per-source-safety", type=int, default=MAX_ACTIONS_PER_SOURCE_SAFETY)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--entropy-coef", type=float, default=0.02)
+    parser.add_argument("--ppo-epochs", type=int, default=4)
+    parser.add_argument("--ppo-batch-size", type=int, default=256)
+    parser.add_argument("--target-kl", type=float, default=0.01, help="Stop PPO epochs early when mean approx KL exceeds 1.5x this value. 0 disables.")
     parser.add_argument("--replay-updates", type=int, default=2, help="Keep this many previous update batches for age-decayed PPO replay. 0 disables replay.")
     parser.add_argument("--replay-ratio", type=float, default=0.25, help="Replay samples as a fraction of fresh rollout samples.")
     parser.add_argument("--replay-age-decay", type=float, default=0.50, help="Per-update replay loss weight decay.")
@@ -427,7 +430,17 @@ def main() -> None:
     model_cfg = {"hidden": args.hidden, "heads": args.heads, "layers": args.layers, "ship_buckets": 0, "action_slots": args.action_slots}
     learner_device = torch.device(args.learner_device)
     model = TinyPolicyValueNet(**model_cfg).to(learner_device)
-    updater = PPOUpdater(model, PPOConfig(learning_rate=args.lr, entropy_coef=args.entropy_coef), device=str(learner_device))
+    updater = PPOUpdater(
+        model,
+        PPOConfig(
+            learning_rate=args.lr,
+            entropy_coef=args.entropy_coef,
+            epochs=args.ppo_epochs,
+            batch_size=args.ppo_batch_size,
+            target_kl=args.target_kl,
+        ),
+        device=str(learner_device),
+    )
     start_update = 1
     resume_metrics = None
     if args.resume_checkpoint:
@@ -627,7 +640,30 @@ def main() -> None:
                     flush=True,
                 )
                 continue
-            rows, metrics = ray.get(done[0])
+            done_ref = done[0]
+            try:
+                rows, metrics = ray.get(done_ref)
+            except Exception as exc:
+                stale_wid = future_to_worker.get(done_ref)
+                if stale_wid is not None:
+                    workers[stale_wid] = RolloutWorker.remote(model_cfg, args.episode_steps, args.opponent_mode, not args.no_numba)
+                    straggler_restarts += 1
+                print(
+                    json.dumps(
+                        {
+                            "event": "worker_failed",
+                            "update": update,
+                            "worker": stale_wid,
+                            "error": str(exc).splitlines()[0] if str(exc) else type(exc).__name__,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    flush=True,
+                )
+                if pbar is not None:
+                    pbar.update(1)
+                    pbar.set_postfix(episodes=collected_episodes, samples=sum(len(r) for r, _m in results), refresh=False)
+                continue
             results.append((rows, metrics))
             collected_episodes += int(metrics.get("episodes", 0.0))
             if pbar is not None:

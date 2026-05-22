@@ -345,6 +345,9 @@ def main() -> None:
     parser.add_argument("--max-actions-per-source-safety", type=int, default=MAX_ACTIONS_PER_SOURCE_SAFETY)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--entropy-coef", type=float, default=0.02)
+    parser.add_argument("--ppo-epochs", type=int, default=4)
+    parser.add_argument("--ppo-batch-size", type=int, default=256)
+    parser.add_argument("--target-kl", type=float, default=0.01, help="Stop PPO epochs early when mean approx KL exceeds 1.5x this value. 0 disables.")
     parser.add_argument("--replay-updates", type=int, default=2, help="Keep this many previous update batches for age-decayed PPO replay. 0 disables replay.")
     parser.add_argument("--replay-ratio", type=float, default=0.25, help="Replay samples as a fraction of fresh rollout samples.")
     parser.add_argument("--replay-age-decay", type=float, default=0.50, help="Per-update replay loss weight decay.")
@@ -365,7 +368,13 @@ def main() -> None:
     device = torch.device(args.device)
     out_dir = Path(args.out_dir)
     model = TinyPolicyValueNet(hidden=args.hidden, heads=args.heads, layers=args.layers, ship_buckets=0, action_slots=args.action_slots).to(device)
-    ppo_cfg = PPOConfig(learning_rate=args.lr, entropy_coef=args.entropy_coef)
+    ppo_cfg = PPOConfig(
+        learning_rate=args.lr,
+        entropy_coef=args.entropy_coef,
+        epochs=args.ppo_epochs,
+        batch_size=args.ppo_batch_size,
+        target_kl=args.target_kl,
+    )
     updater = PPOUpdater(model, ppo_cfg, device=str(device))
     log_path = out_dir / "train_log.jsonl"
     out_dir.mkdir(parents=True, exist_ok=True)
