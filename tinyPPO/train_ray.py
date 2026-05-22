@@ -188,6 +188,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--replay-updates", type=int, default=2, help="Keep this many previous update batches for age-decayed PPO replay. 0 disables replay.")
     parser.add_argument("--replay-ratio", type=float, default=0.25, help="Replay samples as a fraction of fresh rollout samples.")
     parser.add_argument("--replay-age-decay", type=float, default=0.50, help="Per-update replay loss weight decay.")
+    parser.add_argument("--win-replay-weight", type=float, default=1.0, help="Multiplier for replay rows from winning self-generated episodes.")
+    parser.add_argument("--loss-replay-weight", type=float, default=1.0, help="Multiplier for replay rows from losing self-generated episodes.")
+    parser.add_argument("--draw-replay-weight", type=float, default=1.0, help="Multiplier for replay rows from drawn self-generated episodes.")
     parser.add_argument("--no-numba", action="store_true")
     parser.add_argument("--swanlab-project", default="orbit-wars")
     parser.add_argument("--swanlab-experiment", default="tinyPPO-ray")
@@ -676,6 +679,9 @@ def main() -> None:
             len(buffer),
             args.replay_ratio,
             args.replay_age_decay,
+            args.win_replay_weight,
+            args.loss_replay_weight,
+            args.draw_replay_weight,
         )
         for row in replay_rows:
             buffer.add(**row)

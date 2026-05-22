@@ -98,12 +98,17 @@ def replay_rows_for_update(
     current_count: int,
     replay_ratio: float,
     replay_age_decay: float,
+    win_replay_weight: float = 1.0,
+    loss_replay_weight: float = 1.0,
+    draw_replay_weight: float = 1.0,
 ) -> tuple[list[dict], dict[str, float]]:
     if current_count <= 0 or replay_ratio <= 0.0 or not replay_batches:
-        return [], {"replay_samples": 0.0, "replay_weight_mean": 0.0}
+        return [], {"replay_samples": 0.0, "replay_weight_mean": 0.0, "replay_win_frac": 0.0, "replay_loss_frac": 0.0}
     target = int(current_count * replay_ratio)
     rows: list[dict] = []
     weights: list[float] = []
+    wins = 0
+    losses = 0
     batches = list(replay_batches)
     random.shuffle(batches)
     for batch_update, batch_rows in batches:
@@ -113,12 +118,33 @@ def replay_rows_for_update(
             continue
         for row in batch_rows:
             item = dict(row)
-            item["replay_weight"] = weight
+            outcome = float(item.get("episode_result", 0.0))
+            if outcome > 0.0:
+                outcome_weight = win_replay_weight
+                wins += 1
+            elif outcome < 0.0:
+                outcome_weight = loss_replay_weight
+                losses += 1
+            else:
+                outcome_weight = draw_replay_weight
+            item["replay_weight"] = weight * float(outcome_weight)
             rows.append(item)
-            weights.append(weight)
+            weights.append(float(item["replay_weight"]))
             if len(rows) >= target:
-                return rows, {"replay_samples": float(len(rows)), "replay_weight_mean": float(np.mean(weights))}
-    return rows, {"replay_samples": float(len(rows)), "replay_weight_mean": float(np.mean(weights)) if weights else 0.0}
+                total = max(1, len(rows))
+                return rows, {
+                    "replay_samples": float(len(rows)),
+                    "replay_weight_mean": float(np.mean(weights)),
+                    "replay_win_frac": float(wins / total),
+                    "replay_loss_frac": float(losses / total),
+                }
+    total = max(1, len(rows))
+    return rows, {
+        "replay_samples": float(len(rows)),
+        "replay_weight_mean": float(np.mean(weights)) if weights else 0.0,
+        "replay_win_frac": float(wins / total),
+        "replay_loss_frac": float(losses / total),
+    }
 
 
 def make_batch(enc, device: torch.device) -> dict[str, torch.Tensor]:
@@ -266,6 +292,8 @@ def collect_episode(
         if not rows:
             continue
         result = final_result(env.steps[-1][pid]["observation"], pid, players=2)
+        for row in rows:
+            row["episode_result"] = result
         rows[-1]["reward"] = result
         rows[-1]["done"] = True
         final_rows.extend(rows)
@@ -319,6 +347,9 @@ def main() -> None:
     parser.add_argument("--replay-updates", type=int, default=2, help="Keep this many previous update batches for age-decayed PPO replay. 0 disables replay.")
     parser.add_argument("--replay-ratio", type=float, default=0.25, help="Replay samples as a fraction of fresh rollout samples.")
     parser.add_argument("--replay-age-decay", type=float, default=0.50, help="Per-update replay loss weight decay.")
+    parser.add_argument("--win-replay-weight", type=float, default=1.0, help="Multiplier for replay rows from winning self-generated episodes.")
+    parser.add_argument("--loss-replay-weight", type=float, default=1.0, help="Multiplier for replay rows from losing self-generated episodes.")
+    parser.add_argument("--draw-replay-weight", type=float, default=1.0, help="Multiplier for replay rows from drawn self-generated episodes.")
     parser.add_argument("--no-numba", action="store_true")
     parser.add_argument("--swanlab-project", default="orbit-wars")
     parser.add_argument("--swanlab-experiment", default="tinyPPO")
@@ -374,6 +405,9 @@ def main() -> None:
             len(buffer),
             args.replay_ratio,
             args.replay_age_decay,
+            args.win_replay_weight,
+            args.loss_replay_weight,
+            args.draw_replay_weight,
         )
         for row in replay_rows:
             buffer.add(**row)
