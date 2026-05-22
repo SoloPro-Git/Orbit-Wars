@@ -556,9 +556,22 @@ class PublicRuleAgent:
     activation_target_min_production: float = PUBLIC_EXACT.activation_target_min_production
     activation_include_neutral_targets: bool = PUBLIC_EXACT.activation_include_neutral_targets
     activation_include_enemy_targets: bool = PUBLIC_EXACT.activation_include_enemy_targets
+    activation_allow_moving_sources: bool = PUBLIC_EXACT.activation_allow_moving_sources
+    activation_allow_static_sources: bool = PUBLIC_EXACT.activation_allow_static_sources
+    activation_allow_moving_targets: bool = PUBLIC_EXACT.activation_allow_moving_targets
+    activation_allow_static_targets: bool = PUBLIC_EXACT.activation_allow_static_targets
+    activation_source_front_enemy_radius: float = PUBLIC_EXACT.activation_source_front_enemy_radius
+    activation_source_support_radius: float = PUBLIC_EXACT.activation_source_support_radius
+    activation_source_min_support_prod: float = PUBLIC_EXACT.activation_source_min_support_prod
+    activation_target_front_own_radius: float = PUBLIC_EXACT.activation_target_front_own_radius
+    activation_target_front_enemy_radius: float = PUBLIC_EXACT.activation_target_front_enemy_radius
+    activation_target_connector_bonus: float = PUBLIC_EXACT.activation_target_connector_bonus
+    activation_static_target_bonus: float = PUBLIC_EXACT.activation_static_target_bonus
+    activation_moving_target_bonus: float = PUBLIC_EXACT.activation_moving_target_bonus
     activation_max_eta: int = PUBLIC_EXACT.activation_max_eta
     activation_candidate_limit: int = PUBLIC_EXACT.activation_candidate_limit
     activation_max_attacks_per_turn: int = PUBLIC_EXACT.activation_max_attacks_per_turn
+    activation_base_target_score_weight: float = PUBLIC_EXACT.activation_base_target_score_weight
     activation_enemy_bonus: float = PUBLIC_EXACT.activation_enemy_bonus
     activation_neutral_bonus: float = PUBLIC_EXACT.activation_neutral_bonus
     activation_prod_weight: float = PUBLIC_EXACT.activation_prod_weight
@@ -2657,6 +2670,8 @@ class PublicRuleAgent:
             age = activation_step - captured_step
             if age < 1 or age > self.activation_source_window:
                 continue
+            if not self._activation_source_topology_allowed(source, local):
+                continue
             is_front_base = self._activation_front_base_source(source, local)
             if source.production < self.activation_source_min_production and not is_front_base:
                 continue
@@ -2708,6 +2723,8 @@ class PublicRuleAgent:
                 continue
             if target.owner not in (-1, local.player) and not self.activation_include_enemy_targets:
                 continue
+            if not self._activation_target_topology_allowed(target, local):
+                continue
             if self.skip_comet_targets and target.id in local.comet_planet_ids:
                 continue
             if target.production < self.activation_target_min_production:
@@ -2722,13 +2739,14 @@ class PublicRuleAgent:
             eta = self._estimate_arrival_for_requirement(source, target, needed, local)
             if eta > self.activation_max_eta:
                 continue
-            score = self._target_score(source, target, local) * 0.25
+            score = self._target_score(source, target, local) * self.activation_base_target_score_weight
             score += target.production * self.activation_prod_weight
             score -= target.ships * self.activation_ship_weight
             score -= eta * self.activation_eta_weight
             score += self.activation_neutral_bonus if target.owner == -1 else self.activation_enemy_bonus
             score += self._activation_direction_score(source, target)
             score += self._activation_front_base_target_score(target, local)
+            score += self._activation_topology_target_score(target, local)
             rows.append((score, target))
         rows.sort(key=lambda row: row[0], reverse=True)
         return rows
@@ -2762,6 +2780,8 @@ class PublicRuleAgent:
                 continue
             age = activation_step - captured_step
             if age < 1 or age > self.activation_source_window:
+                continue
+            if not self._activation_source_topology_allowed(source, local):
                 continue
             is_front_base = self._activation_front_base_source(source, local)
             if source.production < self.activation_source_min_production and not is_front_base:
@@ -2801,6 +2821,8 @@ class PublicRuleAgent:
                 continue
             if target.owner not in (-1, local.player) and not self.activation_include_enemy_targets:
                 continue
+            if not self._activation_target_topology_allowed(target, local):
+                continue
             if self.skip_comet_targets and target.id in local.comet_planet_ids:
                 continue
             if target.production < self.activation_target_min_production:
@@ -2813,13 +2835,14 @@ class PublicRuleAgent:
                 for row in self.fleet_trajectories
                 if int(row["target"].id) == target.id and int(row["arrive_tick"]) >= 0
             )
-            score = self._target_score(source, target, local) * 0.15
+            score = self._target_score(source, target, local) * self.activation_base_target_score_weight
             score += target.production * self.activation_prod_weight
             score -= max(0.0, target.ships - incoming) * self.activation_ship_weight
             score -= eta * self.activation_eta_weight
             score += self.activation_neutral_bonus if target.owner == -1 else self.activation_enemy_bonus
             score += self._activation_direction_score(source, target)
             score += self._activation_front_base_target_score(target, local)
+            score += self._activation_topology_target_score(target, local)
             rows.append((score, target))
         rows.sort(key=lambda row: row[0], reverse=True)
         return rows
@@ -2864,6 +2887,55 @@ class PublicRuleAgent:
             return False
         return self._nearest_enemy_distance(source, local) <= self.activation_front_base_enemy_radius
 
+    def _activation_source_topology_allowed(self, source: Planet, local: LocalObs) -> bool:
+        source_is_moving = source.id in self.moving_planets
+        if source_is_moving and not self.activation_allow_moving_sources:
+            return False
+        if not source_is_moving and not self.activation_allow_static_sources:
+            return False
+        if self.activation_source_front_enemy_radius > 0:
+            if self._nearest_enemy_distance(source, local) > self.activation_source_front_enemy_radius:
+                return False
+        if self.activation_source_support_radius > 0 and self.activation_source_min_support_prod > 0:
+            support_prod = sum(
+                planet.production
+                for planet in local.mine
+                if planet.id != source.id and distance(source, planet) <= self.activation_source_support_radius
+            )
+            if support_prod < self.activation_source_min_support_prod:
+                return False
+        return True
+
+    def _activation_target_topology_allowed(self, target: Planet, local: LocalObs) -> bool:
+        target_is_moving = target.id in self.moving_planets
+        if target_is_moving and not self.activation_allow_moving_targets:
+            return False
+        if not target_is_moving and not self.activation_allow_static_targets:
+            return False
+        if self.activation_target_front_own_radius > 0:
+            nearest_own = min((distance(target, own) for own in local.mine if own.id != target.id), default=10**9)
+            if nearest_own > self.activation_target_front_own_radius:
+                return False
+        if self.activation_target_front_enemy_radius > 0:
+            nearest_enemy = self._nearest_enemy_distance(target, local)
+            if nearest_enemy > self.activation_target_front_enemy_radius:
+                return False
+        return True
+
+    def _activation_topology_target_score(self, target: Planet, local: LocalObs) -> float:
+        score = self.activation_moving_target_bonus if target.id in self.moving_planets else self.activation_static_target_bonus
+        if self.activation_target_connector_bonus <= 0:
+            return score
+        nearest_own = min((distance(target, own) for own in local.mine if own.id != target.id), default=10**9)
+        nearest_enemy = self._nearest_enemy_distance(target, local)
+        own_radius = self.activation_target_front_own_radius or 55.0
+        enemy_radius = self.activation_target_front_enemy_radius or 55.0
+        if nearest_own <= own_radius and nearest_enemy <= enemy_radius:
+            own_pressure = 1.0 - nearest_own / max(own_radius, 1.0)
+            enemy_pressure = 1.0 - nearest_enemy / max(enemy_radius, 1.0)
+            score += self.activation_target_connector_bonus * max(0.0, min(own_pressure, enemy_pressure))
+        return score
+
     def _activation_attack_source_priority(self, source: Planet, local: LocalObs) -> float:
         if not self.activation_enable_attack_priority:
             return 0.0
@@ -2884,6 +2956,8 @@ class PublicRuleAgent:
         if age < 1 or age > self.activation_source_window:
             return 0.0
         if source.production < self.activation_source_min_production and not self._activation_front_base_source(source, local):
+            return 0.0
+        if not self._activation_source_topology_allowed(source, local):
             return 0.0
         urgency = max(0.0, 1.0 - age / max(1.0, float(self.activation_source_window)))
         return self.activation_attack_source_bonus * (0.50 + 0.50 * urgency)
@@ -2933,6 +3007,8 @@ class PublicRuleAgent:
             return 0.0
         if target.owner not in (-1, local.player) and not self.activation_include_enemy_targets:
             return 0.0
+        if not self._activation_target_topology_allowed(target, local):
+            return 0.0
         eta = self._estimate_arrival_for_requirement(source, target, max(1, self.activation_min_send), local)
         if eta > self.activation_max_eta:
             return 0.0
@@ -2944,6 +3020,7 @@ class PublicRuleAgent:
         score -= eta * (self.activation_eta_weight * 0.50)
         score += self._activation_direction_score(source, target) * 0.50
         score += self._activation_front_base_target_score(target, local) * 0.50
+        score += self._activation_topology_target_score(target, local) * 0.50
         return score
 
     def _activation_front_base_target_score(self, target: Planet, local: LocalObs) -> float:
