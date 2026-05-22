@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import random
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -82,6 +83,42 @@ def log_swanlab(swan: Any | None, summary: dict[str, Any], step: int) -> None:
         log["phase/is_latest"] = float(phase == "latest")
         log["phase/is_self"] = float(phase == "self")
     swan.log(log, step=step)
+
+
+def add_weighted_rows(buffer: RolloutBuffer, rows: list[dict], weight: float) -> None:
+    for row in rows:
+        item = dict(row)
+        item["replay_weight"] = float(weight)
+        buffer.add(**item)
+
+
+def replay_rows_for_update(
+    replay_batches: deque[tuple[int, list[dict]]],
+    update: int,
+    current_count: int,
+    replay_ratio: float,
+    replay_age_decay: float,
+) -> tuple[list[dict], dict[str, float]]:
+    if current_count <= 0 or replay_ratio <= 0.0 or not replay_batches:
+        return [], {"replay_samples": 0.0, "replay_weight_mean": 0.0}
+    target = int(current_count * replay_ratio)
+    rows: list[dict] = []
+    weights: list[float] = []
+    batches = list(replay_batches)
+    random.shuffle(batches)
+    for batch_update, batch_rows in batches:
+        age = max(1, update - batch_update)
+        weight = float(replay_age_decay ** age)
+        if weight <= 0.0:
+            continue
+        for row in batch_rows:
+            item = dict(row)
+            item["replay_weight"] = weight
+            rows.append(item)
+            weights.append(weight)
+            if len(rows) >= target:
+                return rows, {"replay_samples": float(len(rows)), "replay_weight_mean": float(np.mean(weights))}
+    return rows, {"replay_samples": float(len(rows)), "replay_weight_mean": float(np.mean(weights)) if weights else 0.0}
 
 
 def make_batch(enc, device: torch.device) -> dict[str, torch.Tensor]:
@@ -270,6 +307,9 @@ def main() -> None:
     parser.add_argument("--max-actions-per-source-safety", type=int, default=MAX_ACTIONS_PER_SOURCE_SAFETY)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--entropy-coef", type=float, default=0.02)
+    parser.add_argument("--replay-updates", type=int, default=0, help="Keep this many previous update batches for age-decayed PPO replay. 0 disables replay.")
+    parser.add_argument("--replay-ratio", type=float, default=0.0, help="Replay samples as a fraction of fresh rollout samples.")
+    parser.add_argument("--replay-age-decay", type=float, default=0.50, help="Per-update replay loss weight decay.")
     parser.add_argument("--no-numba", action="store_true")
     parser.add_argument("--swanlab-project", default="orbit-wars")
     parser.add_argument("--swanlab-experiment", default="tinyPPO")
@@ -295,10 +335,12 @@ def main() -> None:
     latest_opponent = TinyPolicyValueNet(hidden=args.hidden, heads=args.heads, layers=args.layers, ship_buckets=len(SHIP_FRACTIONS)).to(device)
     latest_opponent.load_state_dict(model.state_dict())
     latest_opponent.eval()
+    replay_batches: deque[tuple[int, list[dict]]] = deque(maxlen=max(0, args.replay_updates))
     for update in range(1, args.updates + 1):
         print(json.dumps({"event": "collect_start", "update": update, "phase": phase}, ensure_ascii=False), flush=True)
         buffer = RolloutBuffer()
         episode_metrics = []
+        fresh_rows_for_replay: list[dict] = []
         rollout_mode = phase
         for ep in range(args.episodes_per_update):
             seed = args.seed + update * 10000 + ep
@@ -313,9 +355,21 @@ def main() -> None:
                 opponent_deterministic=not args.latest_opponent_stochastic,
                 max_actions_per_source=args.max_actions_per_source_safety,
             )
-            for row in rows:
-                buffer.add(**row)
+            add_weighted_rows(buffer, rows, 1.0)
+            fresh_rows_for_replay.extend(dict(row) for row in rows)
             episode_metrics.append(ep_metrics)
+
+        replay_rows, replay_metrics = replay_rows_for_update(
+            replay_batches,
+            update,
+            len(buffer),
+            args.replay_ratio,
+            args.replay_age_decay,
+        )
+        for row in replay_rows:
+            buffer.add(**row)
+        if args.replay_updates > 0:
+            replay_batches.append((update, fresh_rows_for_replay))
 
         print(json.dumps({"event": "collect_done", "update": update, "samples": len(buffer)}, ensure_ascii=False), flush=True)
         train_metrics = updater.update(buffer)
@@ -329,6 +383,7 @@ def main() -> None:
             "self_opponent_frac": float(np.mean([m["opponent_self"] for m in episode_metrics])),
             "latest_opponent_frac": float(np.mean([m["opponent_latest"] for m in episode_metrics])),
             "phase": phase,
+            "replay": replay_metrics,
         }
 
         should_eval = update % args.eval_interval == 0 or (args.eval_first and update == 1)

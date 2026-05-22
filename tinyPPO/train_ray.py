@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from collections import deque
 from pathlib import Path
 
 import numpy as np
@@ -12,7 +13,15 @@ from tinyPPO.agents import MAX_ACTIONS_PER_SOURCE_SAFETY, SHIP_FRACTIONS, TinyPP
 from tinyPPO.eval import run_matchups
 from tinyPPO.model import TinyPolicyValueNet
 from tinyPPO.ppo import PPOConfig, PPOUpdater, RolloutBuffer
-from tinyPPO.train import collect_episode, init_swanlab_or_none, log_swanlab, save_checkpoint, set_seed
+from tinyPPO.train import (
+    add_weighted_rows,
+    collect_episode,
+    init_swanlab_or_none,
+    log_swanlab,
+    replay_rows_for_update,
+    save_checkpoint,
+    set_seed,
+)
 
 
 try:
@@ -55,6 +64,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-actions-per-source-safety", type=int, default=MAX_ACTIONS_PER_SOURCE_SAFETY)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--entropy-coef", type=float, default=0.02)
+    parser.add_argument("--replay-updates", type=int, default=0, help="Keep this many previous update batches for age-decayed PPO replay. 0 disables replay.")
+    parser.add_argument("--replay-ratio", type=float, default=0.0, help="Replay samples as a fraction of fresh rollout samples.")
+    parser.add_argument("--replay-age-decay", type=float, default=0.50, help="Per-update replay loss weight decay.")
     parser.add_argument("--no-numba", action="store_true")
     parser.add_argument("--swanlab-project", default="orbit-wars")
     parser.add_argument("--swanlab-experiment", default="tinyPPO-ray")
@@ -152,6 +164,7 @@ def main() -> None:
     best_winrate = -1.0
     phase = "random" if args.curriculum else args.opponent_mode
     latest_opponent_state = cpu_state_dict(model)
+    replay_batches: deque[tuple[int, list[dict]]] = deque(maxlen=max(0, args.replay_updates))
     for update in range(1, args.updates + 1):
         print(json.dumps({"event": "collect_start", "update": update, "phase": phase, "workers": num_workers}, ensure_ascii=False), flush=True)
         weights_ref = ray.put(cpu_state_dict(model))
@@ -201,10 +214,23 @@ def main() -> None:
 
         buffer = RolloutBuffer()
         worker_metrics = []
+        fresh_rows_for_replay: list[dict] = []
         for rows, metrics in results:
             worker_metrics.append(metrics)
-            for row in rows:
-                buffer.add(**row)
+            add_weighted_rows(buffer, rows, 1.0)
+            fresh_rows_for_replay.extend(dict(row) for row in rows)
+
+        replay_rows, replay_metrics = replay_rows_for_update(
+            replay_batches,
+            update,
+            len(buffer),
+            args.replay_ratio,
+            args.replay_age_decay,
+        )
+        for row in replay_rows:
+            buffer.add(**row)
+        if args.replay_updates > 0:
+            replay_batches.append((update, fresh_rows_for_replay))
 
         train_metrics = updater.update(buffer)
         print(json.dumps({"event": "update_done", "update": update, "samples": len(buffer), "train": train_metrics}, ensure_ascii=False), flush=True)
@@ -219,6 +245,7 @@ def main() -> None:
             "self_opponent_frac": float(np.mean([m["self_opponent_frac"] for m in worker_metrics])) if worker_metrics else 0.0,
             "latest_opponent_frac": float(np.mean([m["opponent_latest"] for m in worker_metrics])) if worker_metrics else 0.0,
             "phase": phase,
+            "replay": replay_metrics,
         }
 
         should_eval = update % args.eval_interval == 0 or (args.eval_first and update == 1)

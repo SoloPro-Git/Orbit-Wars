@@ -80,6 +80,18 @@ SwanLab is enabled by default for new tinyPPO runs. It reads
 disable it, or `--allow-no-swanlab` for local debugging when credentials are
 unavailable.
 
+Short replay is available but disabled by default. For PPO, keep it recent and
+age-decayed rather than treating old trajectories as equally valid:
+
+```bash
+  --replay-updates 2 \
+  --replay-ratio 0.5 \
+  --replay-age-decay 0.5
+```
+
+This lowers the loss weight of older samples; it does not alter or punish their
+rewards.
+
 Evaluate a checkpoint against nearest-planet:
 
 ```bash

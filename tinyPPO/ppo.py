@@ -114,6 +114,7 @@ class PPOUpdater:
             "old_logprob": torch.tensor([r["logprob"] for r in buffer.rows], dtype=torch.float32, device=self.device),
             "advantages": torch.tensor(adv, dtype=torch.float32, device=self.device),
             "returns": torch.tensor(returns, dtype=torch.float32, device=self.device),
+            "weights": torch.tensor([r.get("replay_weight", 1.0) for r in buffer.rows], dtype=torch.float32, device=self.device),
         }
 
         n = len(buffer)
@@ -141,11 +142,13 @@ class PPOUpdater:
                 logratio = new_logprob - tensors["old_logprob"][idx]
                 ratio = logratio.exp()
                 adv_b = tensors["advantages"][idx]
+                weight_b = tensors["weights"][idx].clamp_min(0.0)
+                weight_norm = weight_b.sum().clamp_min(1e-6)
                 pg1 = -adv_b * ratio
                 pg2 = -adv_b * torch.clamp(ratio, 1.0 - self.cfg.clip_coef, 1.0 + self.cfg.clip_coef)
-                policy_loss = torch.max(pg1, pg2).mean()
-                value_loss = F.mse_loss(out["value"], tensors["returns"][idx])
-                entropy_loss = entropy.mean()
+                policy_loss = (torch.max(pg1, pg2) * weight_b).sum() / weight_norm
+                value_loss = (((out["value"] - tensors["returns"][idx]) ** 2) * weight_b).sum() / weight_norm
+                entropy_loss = (entropy * weight_b).sum() / weight_norm
                 loss = policy_loss + self.cfg.value_coef * value_loss - self.cfg.entropy_coef * entropy_loss
 
                 self.optimizer.zero_grad(set_to_none=True)
