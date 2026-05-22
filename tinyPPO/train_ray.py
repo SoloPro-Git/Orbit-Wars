@@ -12,7 +12,7 @@ from tinyPPO.agents import MAX_ACTIONS_PER_SOURCE_SAFETY, SHIP_FRACTIONS, TinyPP
 from tinyPPO.eval import run_matchups
 from tinyPPO.model import TinyPolicyValueNet
 from tinyPPO.ppo import PPOConfig, PPOUpdater, RolloutBuffer
-from tinyPPO.train import collect_episode, save_checkpoint, set_seed
+from tinyPPO.train import collect_episode, init_swanlab_or_none, log_swanlab, save_checkpoint, set_seed
 
 
 try:
@@ -56,6 +56,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--entropy-coef", type=float, default=0.02)
     parser.add_argument("--no-numba", action="store_true")
+    parser.add_argument("--swanlab-project", default="orbit-wars")
+    parser.add_argument("--swanlab-experiment", default="tinyPPO-ray")
+    parser.add_argument("--swanlab-mode", default="cloud")
+    parser.add_argument("--no-swanlab", action="store_true")
+    parser.add_argument("--allow-no-swanlab", action="store_true")
     return parser
 
 
@@ -136,6 +141,7 @@ def main() -> None:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     log_path = out_dir / "train_log.jsonl"
+    swan = init_swanlab_or_none(args, "ray")
     model_cfg = {"hidden": args.hidden, "heads": args.heads, "layers": args.layers, "ship_buckets": len(SHIP_FRACTIONS)}
     learner_device = torch.device(args.learner_device)
     model = TinyPolicyValueNet(**model_cfg).to(learner_device)
@@ -260,6 +266,7 @@ def main() -> None:
                 summary["stop_reason"] = f"eval winrate {eval_result['winrate']:.3f} >= {args.stop_winrate:.3f}"
                 with log_path.open("a", encoding="utf-8") as f:
                     f.write(json.dumps(summary, ensure_ascii=False) + "\n")
+                log_swanlab(swan, summary, update)
                 print(json.dumps(summary, ensure_ascii=False))
                 break
 
@@ -268,7 +275,11 @@ def main() -> None:
             latest_opponent_state = cpu_state_dict(model)
         with log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(summary, ensure_ascii=False) + "\n")
+        log_swanlab(swan, summary, update)
         print(json.dumps(summary, ensure_ascii=False))
+
+    if swan is not None:
+        swan.finish()
 
 
 if __name__ == "__main__":

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -16,11 +18,70 @@ from tinyPPO.features import MAX_PLANETS, encode_obs, final_result
 from tinyPPO.model import TinyPolicyValueNet
 from tinyPPO.ppo import PPOConfig, PPOUpdater, RolloutBuffer, action_log_prob_entropy
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 
 def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+
+
+def _init_swanlab(args: argparse.Namespace, run_kind: str) -> Any | None:
+    if getattr(args, "no_swanlab", False):
+        return None
+    key = os.environ.get("SWANLAB_API_KEY")
+    key_path = PROJECT_ROOT / "training/config/swanlab_key.txt"
+    if not key and key_path.exists():
+        key = key_path.read_text().strip()
+    if key:
+        os.environ["SWANLAB_API_KEY"] = key
+
+    import swanlab
+
+    return swanlab.init(
+        project=str(args.swanlab_project),
+        experiment_name=str(args.swanlab_experiment),
+        mode=str(args.swanlab_mode),
+        config={f"tinyPPO_{run_kind}": vars(args)},
+    )
+
+
+def init_swanlab_or_none(args: argparse.Namespace, run_kind: str) -> Any | None:
+    try:
+        return _init_swanlab(args, run_kind)
+    except Exception as exc:
+        if getattr(args, "allow_no_swanlab", False):
+            print(f"[SwanLab] init failed, continuing without SwanLab: {exc}", flush=True)
+            return None
+        raise RuntimeError(
+            "SwanLab init failed. Set SWANLAB_API_KEY or training/config/swanlab_key.txt; "
+            "for debugging use --allow-no-swanlab or --no-swanlab."
+        ) from exc
+
+
+def _flatten_metrics(prefix: str, obj: Any, out: dict[str, float]) -> None:
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            _flatten_metrics(f"{prefix}/{key}" if prefix else str(key), value, out)
+        return
+    if isinstance(obj, bool):
+        out[prefix] = float(obj)
+    elif isinstance(obj, (int, float)):
+        out[prefix] = float(obj)
+
+
+def log_swanlab(swan: Any | None, summary: dict[str, Any], step: int) -> None:
+    if swan is None:
+        return
+    log: dict[str, float] = {}
+    _flatten_metrics("", summary, log)
+    phase = str(summary.get("phase", ""))
+    if phase:
+        log["phase/is_random"] = float(phase == "random")
+        log["phase/is_latest"] = float(phase == "latest")
+        log["phase/is_self"] = float(phase == "self")
+    swan.log(log, step=step)
 
 
 def make_batch(enc, device: torch.device) -> dict[str, torch.Tensor]:
@@ -210,6 +271,11 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--entropy-coef", type=float, default=0.02)
     parser.add_argument("--no-numba", action="store_true")
+    parser.add_argument("--swanlab-project", default="orbit-wars")
+    parser.add_argument("--swanlab-experiment", default="tinyPPO")
+    parser.add_argument("--swanlab-mode", default="cloud")
+    parser.add_argument("--no-swanlab", action="store_true")
+    parser.add_argument("--allow-no-swanlab", action="store_true")
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -222,6 +288,7 @@ def main() -> None:
     updater = PPOUpdater(model, ppo_cfg, device=str(device))
     log_path = out_dir / "train_log.jsonl"
     out_dir.mkdir(parents=True, exist_ok=True)
+    swan = init_swanlab_or_none(args, "single")
 
     best_winrate = -1.0
     phase = "random" if args.curriculum else args.opponent_mode
@@ -310,6 +377,7 @@ def main() -> None:
                 summary["stop_reason"] = f"eval winrate {eval_result['winrate']:.3f} >= {args.stop_winrate:.3f}"
                 with log_path.open("a", encoding="utf-8") as f:
                     f.write(json.dumps(summary, ensure_ascii=False) + "\n")
+                log_swanlab(swan, summary, update)
                 print(json.dumps(summary, ensure_ascii=False))
                 break
 
@@ -319,7 +387,11 @@ def main() -> None:
             latest_opponent.eval()
         with log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(summary, ensure_ascii=False) + "\n")
+        log_swanlab(swan, summary, update)
         print(json.dumps(summary, ensure_ascii=False))
+
+    if swan is not None:
+        swan.finish()
 
 
 if __name__ == "__main__":

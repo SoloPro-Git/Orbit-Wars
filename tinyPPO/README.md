@@ -56,6 +56,7 @@ uv run --active python -m tinyPPO.train_ray \
   --episodes-per-worker 2 \
   --curriculum \
   --random-winrate-threshold 0.90 \
+  --swanlab-experiment tinyPPO-autoreg-fastenv-ray-2p \
   --out-dir tinyPPO/runs/ray_local_2p_v1
 ```
 
@@ -73,6 +74,11 @@ uv run --active python -m tinyPPO.train_ray \
 Use `uv run --active` for Ray jobs in this repo; plain `uv run` can make Ray
 package the project and build a fresh runtime environment instead of reusing the
 current `.venv`.
+
+SwanLab is enabled by default for new tinyPPO runs. It reads
+`SWANLAB_API_KEY` or `training/config/swanlab_key.txt`. Use `--no-swanlab` to
+disable it, or `--allow-no-swanlab` for local debugging when credentials are
+unavailable.
 
 Evaluate a checkpoint against nearest-planet:
 
