@@ -75,7 +75,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--torch-threads", type=int, default=1)
     parser.add_argument("--seed", type=int, default=20260522)
     parser.add_argument("--updates", type=int, default=200)
-    parser.add_argument("--episodes-per-worker", type=int, default=2)
+    parser.add_argument("--episodes-per-worker", type=int, default=2, help="Maximum episodes assigned to one rollout worker in one update.")
+    parser.add_argument("--episodes-per-update", type=int, default=42, help="Fixed fresh rollout episodes per PPO update. 0 restores num_workers * episodes_per_worker.")
     parser.add_argument("--episode-steps", type=int, default=500)
     parser.add_argument("--opponent-mode", choices=["random", "self", "mix"], default="random")
     parser.add_argument("--curriculum", action="store_true", help="Train vs random first, then switch training opponent to latest checkpoint.")
@@ -110,6 +111,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-swanlab", action="store_true")
     parser.add_argument("--allow-no-swanlab", action="store_true")
     return parser
+
+
+def rollout_assignments(num_workers: int, episodes_per_worker: int, episodes_per_update: int, update: int) -> list[tuple[int, int]]:
+    max_episodes = max(1, num_workers) * max(1, episodes_per_worker)
+    target = max_episodes if episodes_per_update <= 0 else int(episodes_per_update)
+    if target <= 0:
+        return []
+    if target > max_episodes:
+        raise ValueError(
+            f"--episodes-per-update={target} exceeds worker capacity {max_episodes}; "
+            f"increase --episodes-per-worker or --num-workers"
+        )
+    base, remainder = divmod(target, max(1, num_workers))
+    counts = [base for _ in range(num_workers)]
+    offset = (max(1, update) - 1) % max(1, num_workers)
+    for i in range(remainder):
+        counts[(offset + i) % num_workers] += 1
+    return [(idx, count) for idx, count in enumerate(counts) if count > 0]
 
 
 def main() -> None:
@@ -298,6 +317,8 @@ def main() -> None:
                 "gpus_per_worker": args.gpus_per_worker,
                 "gpus_per_eval_worker": args.gpus_per_eval_worker,
                 "eval_node_ip": eval_node_ip,
+                "episodes_per_update": args.episodes_per_update,
+                "episodes_per_worker_cap": args.episodes_per_worker,
             },
             ensure_ascii=False,
         )
@@ -358,7 +379,15 @@ def main() -> None:
             print(json.dumps({"event": "stop_confirmed", "update": update, "confirmations": nearest_stop_streak}, ensure_ascii=False), flush=True)
             break
 
-        print(json.dumps({"event": "collect_start", "update": update, "phase": phase, "workers": num_workers}, ensure_ascii=False), flush=True)
+        assignments = rollout_assignments(num_workers, args.episodes_per_worker, args.episodes_per_update, update)
+        fresh_episodes = int(sum(episodes for _wid, episodes in assignments))
+        print(
+            json.dumps(
+                {"event": "collect_start", "update": update, "phase": phase, "workers": len(assignments), "fresh_episodes": fresh_episodes},
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
         weights_ref = ray.put(cpu_state_dict(model))
         opponent_ref = ray.put(latest_opponent_state) if phase == "latest" else ray.put(None)
         futures = [
@@ -369,9 +398,10 @@ def main() -> None:
                 not args.latest_opponent_stochastic,
                 args.max_actions_per_source_safety,
                 args.seed + update * 1_000_000 + wid * 10_000,
-                args.episodes_per_worker,
+                episodes,
             )
-            for wid, worker in enumerate(workers)
+            for wid, episodes in assignments
+            for worker in [workers[wid]]
         ]
         results = []
         pending = list(futures)
@@ -428,8 +458,9 @@ def main() -> None:
         print(json.dumps({"event": "update_done", "update": update, "samples": len(buffer), "train": train_metrics}, ensure_ascii=False), flush=True)
         summary = {
             "update": update,
-            "workers": num_workers,
-            "episodes": num_workers * args.episodes_per_worker,
+            "workers": len(assignments),
+            "ray_workers": num_workers,
+            "episodes": fresh_episodes,
             "samples": len(buffer),
             "train": train_metrics,
             "rollout_result_p0": float(np.mean([m["rollout_result_p0"] for m in worker_metrics])) if worker_metrics else 0.0,

@@ -104,13 +104,18 @@ uv run --active python -m tinyPPO.train_ray \
   --ray-address auto \
   --gpu-ids 0,1,2,3,4,5,6,7,8 \
   --workers-per-gpu 3 \
+  --episodes-per-update 42 \
   --episodes-per-worker 2 \
   --out-dir tinyPPO/runs/ray_remote_2p_v1
 ```
 
-Use `uv run --active` for Ray jobs in this repo; plain `uv run` can make Ray
-package the project and build a fresh runtime environment instead of reusing the
-current `.venv`.
+`--episodes-per-update` keeps the fresh on-policy batch at a fixed waterline as
+more GPUs/workers are added. `--episodes-per-worker` is only the per-worker cap.
+
+Use the repo `.venv/bin/python` directly for multi-node Ray jobs if remote
+workers hang while launching through `uv run --active`; plain `uv run` can make
+Ray package the project and build a fresh runtime environment instead of reusing
+the current `.venv`.
 
 SwanLab is enabled by default for new tinyPPO runs. It reads
 `SWANLAB_API_KEY` or `training/config/swanlab_key.txt`. Use `--no-swanlab` to
