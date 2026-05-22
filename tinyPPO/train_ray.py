@@ -9,8 +9,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from tinyPPO.agents import MAX_ACTIONS_PER_SOURCE_SAFETY, SHIP_FRACTIONS, TinyPPOAgent, nearest_planet_agent, random_policy_agent
-from tinyPPO.eval import run_matchups
+from tinyPPO.agents import MAX_ACTIONS_PER_SOURCE_SAFETY, SHIP_FRACTIONS, nearest_planet_agent, random_policy_agent
+from tinyPPO.features import score
 from tinyPPO.model import TinyPolicyValueNet
 from tinyPPO.ppo import PPOConfig, PPOUpdater, RolloutBuffer
 from tinyPPO.train import (
@@ -20,8 +20,10 @@ from tinyPPO.train import (
     log_swanlab,
     replay_rows_for_update,
     save_checkpoint,
+    sample_policy_action,
     set_seed,
 )
+from training2 import make_fast_orbit_wars
 
 
 try:
@@ -32,6 +34,30 @@ except Exception:  # pragma: no cover - tqdm is optional for headless runs.
 
 def cpu_state_dict(model: torch.nn.Module) -> dict[str, torch.Tensor]:
     return {key: value.detach().cpu() for key, value in model.state_dict().items()}
+
+
+def _merge_eval_parts(parts: list[dict]) -> dict[str, dict[str, float]]:
+    merged: dict[str, dict[str, float]] = {}
+    for key in ("eval_vs_random", "eval_vs_nearest"):
+        games = wins = losses = draws = reward_sum = 0.0
+        for part in parts:
+            data = part[key]
+            g = float(data.get("games", 0.0))
+            games += g
+            wins += float(data.get("wins", 0.0))
+            losses += float(data.get("losses", 0.0))
+            draws += float(data.get("draws", 0.0))
+            reward_sum += float(data.get("mean_reward", 0.0)) * g
+        merged[key] = {
+            "games": games,
+            "wins": wins,
+            "losses": losses,
+            "draws": draws,
+            "winrate": wins / max(1.0, games),
+            "nonloss": (wins + draws) / max(1.0, games),
+            "mean_reward": reward_sum / max(1.0, games),
+        }
+    return merged
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -57,6 +83,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--eval-interval", type=int, default=10)
     parser.add_argument("--eval-games", type=int, default=40)
     parser.add_argument("--eval-first", action="store_true")
+    parser.add_argument("--sync-eval", action="store_true", help="Block training during eval instead of running Ray eval actors asynchronously.")
+    parser.add_argument("--eval-workers", type=int, default=3)
+    parser.add_argument("--gpus-per-eval-worker", type=float, default=1.0 / 3.0)
+    parser.add_argument("--cpus-per-eval-worker", type=float, default=1.0)
+    parser.add_argument("--stop-eval-confirmations", type=int, default=2)
     parser.add_argument("--stop-winrate", type=float, default=0.55)
     parser.add_argument("--hidden", type=int, default=64)
     parser.add_argument("--heads", type=int, default=4)
@@ -88,7 +119,9 @@ def main() -> None:
     ray.init(address=args.ray_address, ignore_reinit_error=True, runtime_env={})
 
     visible_gpu_count = len([x for x in args.gpu_ids.split(",") if x.strip()]) if args.gpu_ids else int(ray.cluster_resources().get("GPU", 0))
-    num_workers = args.num_workers or max(1, visible_gpu_count * args.workers_per_gpu)
+    eval_gpu_reserve = 0.0 if args.sync_eval else max(0, args.eval_workers) * max(0.0, args.gpus_per_eval_worker)
+    rollout_gpu_budget = max(args.gpus_per_worker, float(visible_gpu_count) - eval_gpu_reserve)
+    num_workers = args.num_workers or max(1, int(rollout_gpu_budget / max(args.gpus_per_worker, 1e-6)))
 
     @ray.remote(num_cpus=args.cpus_per_worker, num_gpus=args.gpus_per_worker)
     class RolloutWorker:
@@ -149,6 +182,73 @@ def main() -> None:
                 "opponent_latest": float(np.mean([m["opponent_latest"] for m in metrics])) if metrics else 0.0,
             }
 
+    @ray.remote(num_cpus=args.cpus_per_eval_worker, num_gpus=args.gpus_per_eval_worker)
+    class EvalWorker:
+        def __init__(self, model_cfg: dict, episode_steps: int, use_numba: bool, max_actions_per_source: int):
+            torch.set_num_threads(1)
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            self.model = TinyPolicyValueNet(**model_cfg).to(self.device)
+            self.episode_steps = episode_steps
+            self.use_numba = use_numba
+            self.max_actions_per_source = max_actions_per_source
+
+        def set_weights(self, state_dict: dict[str, torch.Tensor]) -> None:
+            self.model.load_state_dict(state_dict)
+            self.model.eval()
+
+        def model_agent(self, obs: dict, configuration=None) -> list[list]:
+            actions, _row = sample_policy_action(
+                self.model,
+                obs,
+                self.device,
+                deterministic=True,
+                max_actions_per_source=self.max_actions_per_source,
+            )
+            return actions
+
+        def _run_matchups(self, opponent_name: str, games: int, seed: int) -> dict[str, float]:
+            opponent = random_policy_agent if opponent_name == "random" else nearest_planet_agent
+            wins = losses = draws = 0
+            reward_sum = 0.0
+            for i in range(games):
+                model_seat = i % 2
+                agents = [opponent, opponent]
+                agents[model_seat] = self.model_agent
+                env = make_fast_orbit_wars(
+                    {"episodeSteps": self.episode_steps, "seed": seed + i},
+                    keep_history=False,
+                    use_numba=self.use_numba,
+                )
+                env.run(agents)
+                obs = env.steps[-1][model_seat]["observation"]
+                model_score = score(obs, model_seat)
+                other_score = score(obs, 1 - model_seat)
+                if model_score > other_score:
+                    wins += 1
+                    reward_sum += 1.0
+                elif model_score < other_score:
+                    losses += 1
+                    reward_sum -= 1.0
+                else:
+                    draws += 1
+            return {
+                "games": float(games),
+                "wins": float(wins),
+                "losses": float(losses),
+                "draws": float(draws),
+                "winrate": wins / max(1, games),
+                "nonloss": (wins + draws) / max(1, games),
+                "mean_reward": reward_sum / max(1, games),
+            }
+
+        def evaluate(self, state_dict: dict[str, torch.Tensor], update: int, games: int, seed: int) -> dict:
+            self.set_weights(state_dict)
+            return {
+                "update": update,
+                "eval_vs_random": self._run_matchups("random", games, seed),
+                "eval_vs_nearest": self._run_matchups("nearest", games, seed + 100_000),
+            }
+
     set_seed(args.seed)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -159,13 +259,78 @@ def main() -> None:
     model = TinyPolicyValueNet(**model_cfg).to(learner_device)
     updater = PPOUpdater(model, PPOConfig(learning_rate=args.lr, entropy_coef=args.entropy_coef), device=str(learner_device))
     workers = [RolloutWorker.remote(model_cfg, args.episode_steps, args.opponent_mode, not args.no_numba) for _ in range(num_workers)]
-    print(json.dumps({"ray_workers": num_workers, "visible_gpus": visible_gpu_count, "gpus_per_worker": args.gpus_per_worker}, ensure_ascii=False))
+    eval_workers = [] if args.sync_eval else [
+        EvalWorker.remote(model_cfg, args.episode_steps, not args.no_numba, args.max_actions_per_source_safety)
+        for _ in range(max(1, args.eval_workers))
+    ]
+    print(
+        json.dumps(
+            {
+                "ray_workers": num_workers,
+                "eval_workers": len(eval_workers),
+                "visible_gpus": visible_gpu_count,
+                "gpus_per_worker": args.gpus_per_worker,
+                "gpus_per_eval_worker": args.gpus_per_eval_worker,
+            },
+            ensure_ascii=False,
+        )
+    )
 
     best_winrate = -1.0
     phase = "random" if args.curriculum else args.opponent_mode
     latest_opponent_state = cpu_state_dict(model)
     replay_batches: deque[tuple[int, list[dict]]] = deque(maxlen=max(0, args.replay_updates))
+    pending_eval_refs: dict[object, int] = {}
+    eval_parts: dict[int, list[dict]] = {}
+    eval_expected_parts: dict[int, int] = {}
+    nearest_stop_streak = 0
+    stop_after_update: int | None = None
     for update in range(1, args.updates + 1):
+        ready_refs = []
+        if pending_eval_refs:
+            ready_refs, _not_ready = ray.wait(list(pending_eval_refs), num_returns=len(pending_eval_refs), timeout=0.0)
+        for ref in ready_refs:
+            eval_update = pending_eval_refs.pop(ref)
+            part = ray.get(ref)
+            eval_parts.setdefault(eval_update, []).append(part)
+            if len(eval_parts[eval_update]) >= eval_expected_parts.get(eval_update, 1):
+                merged_eval = _merge_eval_parts(eval_parts.pop(eval_update))
+                eval_expected_parts.pop(eval_update, None)
+                eval_summary = {"update": eval_update, **merged_eval, "phase": phase, "event": "async_eval_done"}
+                print(json.dumps(eval_summary, ensure_ascii=False), flush=True)
+                log_swanlab(swan, eval_summary, eval_update)
+                if merged_eval["eval_vs_nearest"]["winrate"] > best_winrate:
+                    best_winrate = merged_eval["eval_vs_nearest"]["winrate"]
+                    save_checkpoint(out_dir / "best.pt", model, args, update, {"async_eval_update": eval_update, **merged_eval})
+                if args.curriculum and phase == "random" and merged_eval["eval_vs_random"]["winrate"] >= args.random_winrate_threshold:
+                    phase = "latest"
+                    updater.cfg.entropy_coef = max(updater.cfg.entropy_coef, args.selfplay_entropy_coef)
+                    latest_opponent_state = cpu_state_dict(model)
+                    print(
+                        json.dumps(
+                            {
+                                "event": "phase_transition",
+                                "update": update,
+                                "eval_update": eval_update,
+                                "to": phase,
+                                "reason": f"eval_vs_random winrate {merged_eval['eval_vs_random']['winrate']:.3f} >= {args.random_winrate_threshold:.3f}",
+                                "entropy_coef": updater.cfg.entropy_coef,
+                            },
+                            ensure_ascii=False,
+                        ),
+                        flush=True,
+                    )
+                if merged_eval["eval_vs_nearest"]["winrate"] >= args.stop_winrate:
+                    nearest_stop_streak += 1
+                else:
+                    nearest_stop_streak = 0
+                if nearest_stop_streak >= args.stop_eval_confirmations:
+                    stop_after_update = update
+
+        if stop_after_update is not None:
+            print(json.dumps({"event": "stop_confirmed", "update": update, "confirmations": nearest_stop_streak}, ensure_ascii=False), flush=True)
+            break
+
         print(json.dumps({"event": "collect_start", "update": update, "phase": phase, "workers": num_workers}, ensure_ascii=False), flush=True)
         weights_ref = ray.put(cpu_state_dict(model))
         opponent_ref = ray.put(latest_opponent_state) if phase == "latest" else ray.put(None)
@@ -252,50 +417,44 @@ def main() -> None:
         if should_eval:
             ckpt_path = out_dir / "latest.pt"
             save_checkpoint(ckpt_path, model, args, update, summary)
-            print(json.dumps({"event": "eval_start", "update": update, "games_each": args.eval_games}, ensure_ascii=False), flush=True)
-            eval_random = run_matchups(
-                lambda: TinyPPOAgent(ckpt_path, device=str(learner_device), deterministic=True),
-                lambda: random_policy_agent,
-                games=args.eval_games,
-                seed=args.seed + 300_000 + update * 1_000,
-                episode_steps=args.episode_steps,
-                use_numba=not args.no_numba,
-                progress=True,
-                desc=f"eval-random u{update}",
-            )
-            print(json.dumps({"event": "eval_random_done", "update": update, "eval_vs_random": eval_random}, ensure_ascii=False), flush=True)
-            eval_result = run_matchups(
-                lambda: TinyPPOAgent(ckpt_path, device=str(learner_device), deterministic=True),
-                lambda: nearest_planet_agent,
-                games=args.eval_games,
-                seed=args.seed + 500_000 + update * 1_000,
-                episode_steps=args.episode_steps,
-                use_numba=not args.no_numba,
-                progress=True,
-                desc=f"eval-nearest u{update}",
-            )
-            print(json.dumps({"event": "eval_nearest_done", "update": update, "eval_vs_nearest": eval_result}, ensure_ascii=False), flush=True)
-            summary["eval_vs_random"] = eval_random
-            summary["eval_vs_nearest"] = eval_result
-            if eval_result["winrate"] > best_winrate:
-                best_winrate = eval_result["winrate"]
-                save_checkpoint(out_dir / "best.pt", model, args, update, summary)
-            if args.curriculum and phase == "random" and eval_random["winrate"] >= args.random_winrate_threshold:
-                phase = "latest"
-                updater.cfg.entropy_coef = max(updater.cfg.entropy_coef, args.selfplay_entropy_coef)
-                latest_opponent_state = cpu_state_dict(model)
-                summary["phase_transition"] = {
-                    "to": phase,
-                    "reason": f"eval_vs_random winrate {eval_random['winrate']:.3f} >= {args.random_winrate_threshold:.3f}",
-                    "entropy_coef": updater.cfg.entropy_coef,
-                }
-            if eval_result["winrate"] >= args.stop_winrate:
-                summary["stop_reason"] = f"eval winrate {eval_result['winrate']:.3f} >= {args.stop_winrate:.3f}"
-                with log_path.open("a", encoding="utf-8") as f:
-                    f.write(json.dumps(summary, ensure_ascii=False) + "\n")
-                log_swanlab(swan, summary, update)
-                print(json.dumps(summary, ensure_ascii=False))
-                break
+            eval_state_ref = ray.put(cpu_state_dict(model))
+            if args.sync_eval:
+                print(json.dumps({"event": "sync_eval_start", "update": update, "games_each": args.eval_games}, ensure_ascii=False), flush=True)
+                temp_worker = EvalWorker.options(num_gpus=args.gpus_per_eval_worker, num_cpus=args.cpus_per_eval_worker).remote(
+                    model_cfg,
+                    args.episode_steps,
+                    not args.no_numba,
+                    args.max_actions_per_source_safety,
+                )
+                part = ray.get(temp_worker.evaluate.remote(eval_state_ref, update, args.eval_games, args.seed + 300_000 + update * 1_000))
+                merged_eval = _merge_eval_parts([part])
+                summary.update(merged_eval)
+            else:
+                games_left = args.eval_games
+                parts = []
+                for i, worker in enumerate(eval_workers):
+                    shard_games = games_left // (len(eval_workers) - i)
+                    games_left -= shard_games
+                    if shard_games <= 0:
+                        continue
+                    parts.append(
+                        worker.evaluate.remote(
+                            eval_state_ref,
+                            update,
+                            shard_games,
+                            args.seed + 300_000 + update * 10_000 + i * 1_000,
+                        )
+                    )
+                for ref in parts:
+                    pending_eval_refs[ref] = update
+                eval_expected_parts[update] = len(parts)
+                print(
+                    json.dumps(
+                        {"event": "async_eval_submitted", "update": update, "parts": len(parts), "games_each_total": args.eval_games},
+                        ensure_ascii=False,
+                    ),
+                    flush=True,
+                )
 
         save_checkpoint(out_dir / "latest.pt", model, args, update, summary)
         if phase == "latest":

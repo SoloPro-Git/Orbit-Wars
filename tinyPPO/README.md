@@ -60,6 +60,19 @@ uv run --active python -m tinyPPO.train_ray \
   --out-dir tinyPPO/runs/ray_local_2p_v1
 ```
 
+Ray evaluation is asynchronous by default in `train_ray`: a few eval actors
+reserve fractional GPUs, eval jobs are submitted every `--eval-interval`, and
+training continues while eval runs. Stopping requires two passing evals by
+default:
+
+```bash
+  --eval-workers 3 \
+  --gpus-per-eval-worker 0.3333333333333333 \
+  --stop-eval-confirmations 2
+```
+
+Use `--sync-eval` only when you explicitly want training to wait during eval.
+
 Ray rollout training on a remote node exposing GPUs 0-8:
 
 ```bash
