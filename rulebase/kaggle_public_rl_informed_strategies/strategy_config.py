@@ -280,6 +280,23 @@ class StrategyConfig:
     low_prod_connector_enemy_bonus: float = 0.0
     low_prod_connector_max_eta: int = 999
     low_prod_connector_eta_penalty: float = 0.0
+    enable_frontline_enemy_prod_target_score: bool = False
+    frontline_enemy_prod_min_active_players: int = 0
+    frontline_enemy_prod_max_active_players: int = 99
+    frontline_enemy_prod_min_step: int = 0
+    frontline_enemy_prod_max_step: int = 500
+    frontline_enemy_prod_min_production: float = 3.0
+    frontline_enemy_prod_max_ships: int = 50
+    frontline_enemy_prod_max_eta: int = 18
+    frontline_enemy_prod_own_radius: float = 42.0
+    frontline_enemy_prod_recent_source_window: int = 0
+    frontline_enemy_prod_recent_source_min_production: float = 3.0
+    frontline_enemy_prod_bonus: float = 0.0
+    frontline_enemy_prod_prod_weight: float = 0.0
+    frontline_enemy_prod_ship_weight: float = 0.0
+    frontline_enemy_prod_eta_weight: float = 0.0
+    frontline_enemy_prod_own_link_bonus: float = 0.0
+    frontline_enemy_prod_recent_source_bonus: float = 0.0
     enable_early_neutral_bias: bool = False
     early_neutral_min_active_players: int = 0
     early_neutral_max_active_players: int = 99
@@ -1144,6 +1161,23 @@ TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2
         "low_prod_connector_enemy_bonus": 10.0,
         "low_prod_connector_max_eta": 18,
         "low_prod_connector_eta_penalty": 1.0,
+    }
+)
+TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_P4LOWCONN10ETA18_P2ENEMYHPETA24_REGULAR_CONFIG = StrategyConfig(
+    **{
+        **TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_P4LOWCONN10ETA18_REGULAR_CONFIG.to_agent_kwargs(),
+        "enable_enemy_high_prod_pressure": True,
+        "enemy_high_prod_pressure_min_active_players": 2,
+        "enemy_high_prod_pressure_max_active_players": 2,
+        "enemy_high_prod_pressure_min_step": 45,
+        "enemy_high_prod_pressure_max_step": 130,
+        "enemy_high_prod_pressure_min_production": 3.0,
+        "enemy_high_prod_pressure_max_ships": 70,
+        "enemy_high_prod_pressure_max_eta": 24,
+        "enemy_high_prod_pressure_bonus": 10.0,
+        "enemy_high_prod_pressure_prod_weight": 6.0,
+        "enemy_high_prod_pressure_ship_weight": 0.12,
+        "enemy_high_prod_pressure_eta_weight": 0.35,
     }
 )
 # 2026-05-21 historical regular league:
@@ -11490,5 +11524,236 @@ ABLATION_SUITES["myreplay_plan044_connector_target_score_4p_confirm"] = {
     ],
     "p2move_lowconn_4p_b10_enemy10_eta18": ABLATION_SUITES["myreplay_plan044_connector_target_score"][
         "p2move_lowconn_4p_b10_enemy10_eta18"
+    ],
+}
+
+ABLATION_SUITES["myreplay_plan045_frontline_enemy_prod_target_score"] = {
+    "p2move_lowconn_regular": TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_P4LOWCONN10ETA18_REGULAR_CONFIG.to_agent_kwargs(),
+    "p4_enemyfront_b12_prod5_eta14_ship45": from_base(
+        TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_P4LOWCONN10ETA18_REGULAR_CONFIG,
+        enable_frontline_enemy_prod_target_score=True,
+        frontline_enemy_prod_min_active_players=4,
+        frontline_enemy_prod_max_active_players=4,
+        frontline_enemy_prod_min_step=30,
+        frontline_enemy_prod_max_step=140,
+        frontline_enemy_prod_min_production=3.0,
+        frontline_enemy_prod_max_ships=45,
+        frontline_enemy_prod_max_eta=14,
+        frontline_enemy_prod_own_radius=42.0,
+        frontline_enemy_prod_bonus=12.0,
+        frontline_enemy_prod_prod_weight=5.0,
+        frontline_enemy_prod_ship_weight=0.18,
+        frontline_enemy_prod_eta_weight=0.6,
+        frontline_enemy_prod_own_link_bonus=6.0,
+    ),
+    "p4_enemyfront_b18_prod6_eta12_ship40": from_base(
+        TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_P4LOWCONN10ETA18_REGULAR_CONFIG,
+        enable_frontline_enemy_prod_target_score=True,
+        frontline_enemy_prod_min_active_players=4,
+        frontline_enemy_prod_max_active_players=4,
+        frontline_enemy_prod_min_step=35,
+        frontline_enemy_prod_max_step=130,
+        frontline_enemy_prod_min_production=3.0,
+        frontline_enemy_prod_max_ships=40,
+        frontline_enemy_prod_max_eta=12,
+        frontline_enemy_prod_own_radius=38.0,
+        frontline_enemy_prod_bonus=18.0,
+        frontline_enemy_prod_prod_weight=6.0,
+        frontline_enemy_prod_ship_weight=0.20,
+        frontline_enemy_prod_eta_weight=0.8,
+        frontline_enemy_prod_own_link_bonus=8.0,
+    ),
+    "p4_enemyfront_chain_b10_recent12_eta16": from_base(
+        TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_P4LOWCONN10ETA18_REGULAR_CONFIG,
+        enable_frontline_enemy_prod_target_score=True,
+        frontline_enemy_prod_min_active_players=4,
+        frontline_enemy_prod_max_active_players=4,
+        frontline_enemy_prod_min_step=30,
+        frontline_enemy_prod_max_step=150,
+        frontline_enemy_prod_min_production=3.0,
+        frontline_enemy_prod_max_ships=48,
+        frontline_enemy_prod_max_eta=16,
+        frontline_enemy_prod_own_radius=44.0,
+        frontline_enemy_prod_recent_source_window=24,
+        frontline_enemy_prod_recent_source_min_production=3.0,
+        frontline_enemy_prod_bonus=10.0,
+        frontline_enemy_prod_prod_weight=4.0,
+        frontline_enemy_prod_ship_weight=0.16,
+        frontline_enemy_prod_eta_weight=0.5,
+        frontline_enemy_prod_own_link_bonus=4.0,
+        frontline_enemy_prod_recent_source_bonus=12.0,
+    ),
+    "p4_enemyfront_chain_b16_recent18_eta14": from_base(
+        TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_P4LOWCONN10ETA18_REGULAR_CONFIG,
+        enable_frontline_enemy_prod_target_score=True,
+        frontline_enemy_prod_min_active_players=4,
+        frontline_enemy_prod_max_active_players=4,
+        frontline_enemy_prod_min_step=35,
+        frontline_enemy_prod_max_step=145,
+        frontline_enemy_prod_min_production=3.0,
+        frontline_enemy_prod_max_ships=44,
+        frontline_enemy_prod_max_eta=14,
+        frontline_enemy_prod_own_radius=42.0,
+        frontline_enemy_prod_recent_source_window=24,
+        frontline_enemy_prod_recent_source_min_production=3.0,
+        frontline_enemy_prod_bonus=16.0,
+        frontline_enemy_prod_prod_weight=5.0,
+        frontline_enemy_prod_ship_weight=0.18,
+        frontline_enemy_prod_eta_weight=0.7,
+        frontline_enemy_prod_own_link_bonus=6.0,
+        frontline_enemy_prod_recent_source_bonus=18.0,
+    ),
+}
+
+ABLATION_SUITES["myreplay_plan046_4p_attack_throughput"] = {
+    "p2move_lowconn_regular": TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_P4LOWCONN10ETA18_REGULAR_CONFIG.to_agent_kwargs(),
+    "p4_candidate3": from_base(
+        TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_P4LOWCONN10ETA18_REGULAR_CONFIG,
+        target_candidate_limit=3,
+    ),
+    "p4_candidate4": from_base(
+        TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_P4LOWCONN10ETA18_REGULAR_CONFIG,
+        target_candidate_limit=4,
+    ),
+    "p4_noattack_fallback_c4_delta_m2": from_base(
+        TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_P4LOWCONN10ETA18_REGULAR_CONFIG,
+        enable_no_attack_fallback=True,
+        no_attack_fallback_min_active_players=4,
+        no_attack_fallback_max_active_players=4,
+        no_attack_fallback_min_step=45,
+        no_attack_fallback_max_step=160,
+        no_attack_fallback_candidate_limit=4,
+        no_attack_fallback_min_attack_delta=-2,
+    ),
+    "p4_noattack_fallback_c5_delta_m4": from_base(
+        TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_P4LOWCONN10ETA18_REGULAR_CONFIG,
+        enable_no_attack_fallback=True,
+        no_attack_fallback_min_active_players=4,
+        no_attack_fallback_max_active_players=4,
+        no_attack_fallback_min_step=35,
+        no_attack_fallback_max_step=140,
+        no_attack_fallback_candidate_limit=5,
+        no_attack_fallback_min_attack_delta=-4,
+    ),
+    "p4_candidate3_noattack_c4_delta_m2": from_base(
+        TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_P4LOWCONN10ETA18_REGULAR_CONFIG,
+        target_candidate_limit=3,
+        enable_no_attack_fallback=True,
+        no_attack_fallback_min_active_players=4,
+        no_attack_fallback_max_active_players=4,
+        no_attack_fallback_min_step=45,
+        no_attack_fallback_max_step=160,
+        no_attack_fallback_candidate_limit=4,
+        no_attack_fallback_min_attack_delta=-2,
+    ),
+}
+
+ABLATION_SUITES["myreplay_plan047_lowconn_refine_confirm"] = {
+    "p2move_lowconn_regular": TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_P4LOWCONN10ETA18_REGULAR_CONFIG.to_agent_kwargs(),
+    "p4_lowconn_b12_enemy8_eta20": from_base(
+        TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_P4LOWCONN10ETA18_REGULAR_CONFIG,
+        low_prod_connector_bonus=12.0,
+        low_prod_connector_enemy_bonus=8.0,
+        low_prod_connector_max_eta=20,
+        low_prod_connector_eta_penalty=0.8,
+    ),
+    "p4_lowconn_early110_enemy14_eta18": from_base(
+        TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_P4LOWCONN10ETA18_REGULAR_CONFIG,
+        low_prod_connector_min_step=15,
+        low_prod_connector_max_step=110,
+        low_prod_connector_enemy_bonus=14.0,
+        low_prod_connector_max_eta=18,
+    ),
+    "p4_lowconn_anchor2_b6_enemy12_eta16": from_base(
+        TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_P4LOWCONN10ETA18_REGULAR_CONFIG,
+        low_prod_connector_anchor_min_production=2.0,
+        low_prod_connector_bonus=6.0,
+        low_prod_connector_enemy_bonus=12.0,
+        low_prod_connector_max_eta=16,
+        low_prod_connector_eta_penalty=1.5,
+    ),
+    "p4_lowconn_b16_enemy4_eta22": from_base(
+        TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_P4LOWCONN10ETA18_REGULAR_CONFIG,
+        low_prod_connector_bonus=16.0,
+        low_prod_connector_enemy_bonus=4.0,
+        low_prod_connector_max_eta=22,
+        low_prod_connector_eta_penalty=0.6,
+    ),
+}
+
+ABLATION_SUITES["myreplay_plan048_2p_replay_throughput_pressure"] = {
+    "p2move_lowconn_regular": TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_P4LOWCONN10ETA18_REGULAR_CONFIG.to_agent_kwargs(),
+    "p2_candidate3": from_base(
+        TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_P4LOWCONN10ETA18_REGULAR_CONFIG,
+        target_candidate_limit=3,
+    ),
+    "p2_minattack10": from_base(
+        TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_P4LOWCONN10ETA18_REGULAR_CONFIG,
+        min_ships_mine_attack=10,
+    ),
+    "p2_noattack_c4_delta_m2": from_base(
+        TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_P4LOWCONN10ETA18_REGULAR_CONFIG,
+        enable_no_attack_fallback=True,
+        no_attack_fallback_min_active_players=2,
+        no_attack_fallback_max_active_players=2,
+        no_attack_fallback_min_step=45,
+        no_attack_fallback_max_step=140,
+        no_attack_fallback_candidate_limit=4,
+        no_attack_fallback_min_attack_delta=-2,
+    ),
+    "p2_enemyhp_eta24_b10": from_base(
+        TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_P4LOWCONN10ETA18_REGULAR_CONFIG,
+        enable_enemy_high_prod_pressure=True,
+        enemy_high_prod_pressure_min_active_players=2,
+        enemy_high_prod_pressure_max_active_players=2,
+        enemy_high_prod_pressure_min_step=45,
+        enemy_high_prod_pressure_max_step=130,
+        enemy_high_prod_pressure_min_production=3.0,
+        enemy_high_prod_pressure_max_ships=70,
+        enemy_high_prod_pressure_max_eta=24,
+        enemy_high_prod_pressure_bonus=10.0,
+        enemy_high_prod_pressure_prod_weight=6.0,
+        enemy_high_prod_pressure_ship_weight=0.12,
+        enemy_high_prod_pressure_eta_weight=0.35,
+    ),
+    "p2_enemyhp_eta18_b18": from_base(
+        TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_P4LOWCONN10ETA18_REGULAR_CONFIG,
+        enable_enemy_high_prod_pressure=True,
+        enemy_high_prod_pressure_min_active_players=2,
+        enemy_high_prod_pressure_max_active_players=2,
+        enemy_high_prod_pressure_min_step=45,
+        enemy_high_prod_pressure_max_step=130,
+        enemy_high_prod_pressure_min_production=3.0,
+        enemy_high_prod_pressure_max_ships=60,
+        enemy_high_prod_pressure_max_eta=18,
+        enemy_high_prod_pressure_bonus=18.0,
+        enemy_high_prod_pressure_prod_weight=7.0,
+        enemy_high_prod_pressure_ship_weight=0.14,
+        enemy_high_prod_pressure_eta_weight=0.45,
+    ),
+    "p2_candidate3_enemyhp_eta24": from_base(
+        TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_P4LOWCONN10ETA18_REGULAR_CONFIG,
+        target_candidate_limit=3,
+        enable_enemy_high_prod_pressure=True,
+        enemy_high_prod_pressure_min_active_players=2,
+        enemy_high_prod_pressure_max_active_players=2,
+        enemy_high_prod_pressure_min_step=45,
+        enemy_high_prod_pressure_max_step=130,
+        enemy_high_prod_pressure_min_production=3.0,
+        enemy_high_prod_pressure_max_ships=70,
+        enemy_high_prod_pressure_max_eta=24,
+        enemy_high_prod_pressure_bonus=10.0,
+        enemy_high_prod_pressure_prod_weight=6.0,
+        enemy_high_prod_pressure_ship_weight=0.12,
+        enemy_high_prod_pressure_eta_weight=0.35,
+    ),
+}
+
+ABLATION_SUITES["myreplay_plan049_2p_enemyhp_pressure_confirm"] = {
+    "p2move_lowconn_regular": ABLATION_SUITES["myreplay_plan048_2p_replay_throughput_pressure"][
+        "p2move_lowconn_regular"
+    ],
+    "p2_enemyhp_eta24_b10": ABLATION_SUITES["myreplay_plan048_2p_replay_throughput_pressure"][
+        "p2_enemyhp_eta24_b10"
     ],
 }

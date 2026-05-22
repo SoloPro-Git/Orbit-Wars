@@ -304,6 +304,23 @@ class PublicRuleAgent:
     low_prod_connector_enemy_bonus: float = PUBLIC_EXACT.low_prod_connector_enemy_bonus
     low_prod_connector_max_eta: int = PUBLIC_EXACT.low_prod_connector_max_eta
     low_prod_connector_eta_penalty: float = PUBLIC_EXACT.low_prod_connector_eta_penalty
+    enable_frontline_enemy_prod_target_score: bool = PUBLIC_EXACT.enable_frontline_enemy_prod_target_score
+    frontline_enemy_prod_min_active_players: int = PUBLIC_EXACT.frontline_enemy_prod_min_active_players
+    frontline_enemy_prod_max_active_players: int = PUBLIC_EXACT.frontline_enemy_prod_max_active_players
+    frontline_enemy_prod_min_step: int = PUBLIC_EXACT.frontline_enemy_prod_min_step
+    frontline_enemy_prod_max_step: int = PUBLIC_EXACT.frontline_enemy_prod_max_step
+    frontline_enemy_prod_min_production: float = PUBLIC_EXACT.frontline_enemy_prod_min_production
+    frontline_enemy_prod_max_ships: int = PUBLIC_EXACT.frontline_enemy_prod_max_ships
+    frontline_enemy_prod_max_eta: int = PUBLIC_EXACT.frontline_enemy_prod_max_eta
+    frontline_enemy_prod_own_radius: float = PUBLIC_EXACT.frontline_enemy_prod_own_radius
+    frontline_enemy_prod_recent_source_window: int = PUBLIC_EXACT.frontline_enemy_prod_recent_source_window
+    frontline_enemy_prod_recent_source_min_production: float = PUBLIC_EXACT.frontline_enemy_prod_recent_source_min_production
+    frontline_enemy_prod_bonus: float = PUBLIC_EXACT.frontline_enemy_prod_bonus
+    frontline_enemy_prod_prod_weight: float = PUBLIC_EXACT.frontline_enemy_prod_prod_weight
+    frontline_enemy_prod_ship_weight: float = PUBLIC_EXACT.frontline_enemy_prod_ship_weight
+    frontline_enemy_prod_eta_weight: float = PUBLIC_EXACT.frontline_enemy_prod_eta_weight
+    frontline_enemy_prod_own_link_bonus: float = PUBLIC_EXACT.frontline_enemy_prod_own_link_bonus
+    frontline_enemy_prod_recent_source_bonus: float = PUBLIC_EXACT.frontline_enemy_prod_recent_source_bonus
     enable_early_neutral_bias: bool = PUBLIC_EXACT.enable_early_neutral_bias
     early_neutral_min_active_players: int = PUBLIC_EXACT.early_neutral_min_active_players
     early_neutral_max_active_players: int = PUBLIC_EXACT.early_neutral_max_active_players
@@ -4543,6 +4560,7 @@ class PublicRuleAgent:
         score += self._multiplayer_diplomacy_score(source, target, local)
         score += self._static_moving_target_score(source, target, local)
         score += self._low_prod_connector_target_score(source, target, local)
+        score += self._frontline_enemy_prod_target_score(source, target, local)
         if not self.enable_holdability_target_score:
             return score
 
@@ -4633,6 +4651,59 @@ class PublicRuleAgent:
             score += self.low_prod_connector_enemy_bonus
         if eta > self.low_prod_connector_max_eta:
             score -= self.low_prod_connector_eta_penalty * (eta - self.low_prod_connector_max_eta)
+        return score
+
+    def _frontline_enemy_prod_target_score(self, source: Planet, target: Planet, local: LocalObs) -> float:
+        if not self.enable_frontline_enemy_prod_target_score:
+            return 0.0
+        if target.owner in (-1, local.player):
+            return 0.0
+        if local.step < self.frontline_enemy_prod_min_step or local.step > self.frontline_enemy_prod_max_step:
+            return 0.0
+        active_players = self._active_player_count(local)
+        if active_players < self.frontline_enemy_prod_min_active_players:
+            return 0.0
+        if self.frontline_enemy_prod_max_active_players > 0 and active_players > self.frontline_enemy_prod_max_active_players:
+            return 0.0
+        if target.production < self.frontline_enemy_prod_min_production:
+            return 0.0
+        if target.ships > self.frontline_enemy_prod_max_ships:
+            return 0.0
+
+        needed = self._base_ships_needed(target, local, source=source)
+        if needed is None:
+            return 0.0
+        eta = self._estimate_arrival_for_requirement(source, target, needed, local)
+        if eta > self.frontline_enemy_prod_max_eta:
+            return 0.0
+
+        own_link = distance(source, target) <= self.frontline_enemy_prod_own_radius
+        if not own_link:
+            own_link = any(
+                planet.owner == local.player
+                and planet.id != source.id
+                and planet.id != target.id
+                and distance(planet, target) <= self.frontline_enemy_prod_own_radius
+                for planet in local.planets
+            )
+        if not own_link:
+            return 0.0
+
+        score = (
+            self.frontline_enemy_prod_bonus
+            + target.production * self.frontline_enemy_prod_prod_weight
+            - target.ships * self.frontline_enemy_prod_ship_weight
+            - eta * self.frontline_enemy_prod_eta_weight
+            + self.frontline_enemy_prod_own_link_bonus
+        )
+        if self.frontline_enemy_prod_recent_source_window > 0:
+            captured_step = self.recently_captured_steps.get(source.id)
+            if (
+                captured_step is not None
+                and local.step - captured_step <= self.frontline_enemy_prod_recent_source_window
+                and source.production >= self.frontline_enemy_prod_recent_source_min_production
+            ):
+                score += self.frontline_enemy_prod_recent_source_bonus
         return score
 
     def _enemy_high_prod_pressure_score(self, source: Planet, target: Planet, local: LocalObs) -> float:
