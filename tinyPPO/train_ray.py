@@ -36,6 +36,19 @@ def cpu_state_dict(model: torch.nn.Module) -> dict[str, torch.Tensor]:
     return {key: value.detach().cpu() for key, value in model.state_dict().items()}
 
 
+def save_checkpoint_state(path: Path, state_dict: dict[str, torch.Tensor], model_cfg: dict, update: int, metrics: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {
+            "state_dict": state_dict,
+            "model": model_cfg,
+            "update": update,
+            "metrics": metrics,
+        },
+        path,
+    )
+
+
 def _merge_eval_parts(parts: list[dict]) -> dict[str, dict[str, float]]:
     merged: dict[str, dict[str, float]] = {}
     for key in ("eval_vs_random", "eval_vs_nearest"):
@@ -378,6 +391,7 @@ def main() -> None:
     latest_opponent_state = cpu_state_dict(model)
     replay_batches: deque[tuple[int, list[dict]]] = deque(maxlen=max(0, args.replay_updates))
     pending_eval_refs: dict[object, int] = {}
+    pending_eval_states: dict[int, dict[str, torch.Tensor]] = {}
     eval_parts: dict[int, list[dict]] = {}
     eval_expected_parts: dict[int, int] = {}
     nearest_stop_streak = 0
@@ -398,7 +412,11 @@ def main() -> None:
                 log_swanlab(swan, eval_summary, eval_update)
                 if merged_eval["eval_vs_nearest"]["winrate"] > best_winrate:
                     best_winrate = merged_eval["eval_vs_nearest"]["winrate"]
-                    save_checkpoint(out_dir / "best.pt", model, args, update, {"async_eval_update": eval_update, **merged_eval})
+                    best_state = pending_eval_states.get(eval_update)
+                    if best_state is not None:
+                        save_checkpoint_state(out_dir / "best.pt", best_state, model_cfg, eval_update, {"async_eval_update": eval_update, **merged_eval})
+                    else:
+                        save_checkpoint(out_dir / "best.pt", model, args, update, {"async_eval_update": eval_update, **merged_eval})
                 if args.curriculum and phase == "random" and merged_eval["eval_vs_random"]["winrate"] >= args.random_winrate_threshold:
                     phase = "latest"
                     updater.cfg.entropy_coef = max(updater.cfg.entropy_coef, args.selfplay_entropy_coef)
@@ -423,6 +441,7 @@ def main() -> None:
                     nearest_stop_streak = 0
                 if nearest_stop_streak >= args.stop_eval_confirmations:
                     stop_after_update = update
+                pending_eval_states.pop(eval_update, None)
 
         if stop_after_update is not None:
             print(json.dumps({"event": "stop_confirmed", "update": update, "confirmations": nearest_stop_streak}, ensure_ascii=False), flush=True)
@@ -524,7 +543,8 @@ def main() -> None:
         if should_eval:
             ckpt_path = out_dir / "latest.pt"
             save_checkpoint(ckpt_path, model, args, update, summary)
-            eval_state_ref = ray.put(cpu_state_dict(model))
+            eval_state = cpu_state_dict(model)
+            eval_state_ref = ray.put(eval_state)
             if args.sync_eval:
                 print(json.dumps({"event": "sync_eval_start", "update": update, "games_each": args.eval_games}, ensure_ascii=False), flush=True)
                 temp_worker = EvalWorker.options(
@@ -546,6 +566,7 @@ def main() -> None:
                 merged_eval = _merge_eval_parts([part])
                 summary.update(merged_eval)
             else:
+                pending_eval_states[update] = eval_state
                 games_left = args.eval_games
                 parts = []
                 for i, worker in enumerate(eval_workers):
