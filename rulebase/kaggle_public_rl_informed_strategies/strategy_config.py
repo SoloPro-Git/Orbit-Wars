@@ -1108,6 +1108,16 @@ UNREAD260520_P4RELAY_SAVINGS5_WINDOW45_BONUS70_REGULAR_CONFIG = StrategyConfig(
         "mobile_relay_source_target_bonus": 70.0,
     }
 )
+TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_REGULAR_CONFIG = StrategyConfig(
+    **{
+        **TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_REGULAR_CONFIG.to_agent_kwargs(),
+        "enable_static_moving_target_score": True,
+        "target_score_static_bonus": 2.0,
+        "target_score_moving_bonus": 10.0,
+        "target_score_moving_max_eta": 16,
+        "target_score_moving_eta_penalty": 1.5,
+    }
+)
 # 2026-05-21 historical regular league:
 # full champion pool, top-11 pool, and final top-5 mutual leagues found this
 # tail + 4P low-home version to be the most reliable mixed-melee finalist.
