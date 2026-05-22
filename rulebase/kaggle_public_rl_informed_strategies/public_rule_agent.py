@@ -290,6 +290,20 @@ class PublicRuleAgent:
     target_score_moving_bonus: float = PUBLIC_EXACT.target_score_moving_bonus
     target_score_moving_max_eta: int = PUBLIC_EXACT.target_score_moving_max_eta
     target_score_moving_eta_penalty: float = PUBLIC_EXACT.target_score_moving_eta_penalty
+    enable_low_prod_connector_target_score: bool = PUBLIC_EXACT.enable_low_prod_connector_target_score
+    low_prod_connector_min_active_players: int = PUBLIC_EXACT.low_prod_connector_min_active_players
+    low_prod_connector_max_active_players: int = PUBLIC_EXACT.low_prod_connector_max_active_players
+    low_prod_connector_min_step: int = PUBLIC_EXACT.low_prod_connector_min_step
+    low_prod_connector_max_step: int = PUBLIC_EXACT.low_prod_connector_max_step
+    low_prod_connector_max_production: float = PUBLIC_EXACT.low_prod_connector_max_production
+    low_prod_connector_own_radius: float = PUBLIC_EXACT.low_prod_connector_own_radius
+    low_prod_connector_enemy_radius: float = PUBLIC_EXACT.low_prod_connector_enemy_radius
+    low_prod_connector_anchor_radius: float = PUBLIC_EXACT.low_prod_connector_anchor_radius
+    low_prod_connector_anchor_min_production: float = PUBLIC_EXACT.low_prod_connector_anchor_min_production
+    low_prod_connector_bonus: float = PUBLIC_EXACT.low_prod_connector_bonus
+    low_prod_connector_enemy_bonus: float = PUBLIC_EXACT.low_prod_connector_enemy_bonus
+    low_prod_connector_max_eta: int = PUBLIC_EXACT.low_prod_connector_max_eta
+    low_prod_connector_eta_penalty: float = PUBLIC_EXACT.low_prod_connector_eta_penalty
     enable_early_neutral_bias: bool = PUBLIC_EXACT.enable_early_neutral_bias
     early_neutral_min_active_players: int = PUBLIC_EXACT.early_neutral_min_active_players
     early_neutral_max_active_players: int = PUBLIC_EXACT.early_neutral_max_active_players
@@ -4528,6 +4542,7 @@ class PublicRuleAgent:
         score += self._third_party_tail_capture_score(source, target, local)
         score += self._multiplayer_diplomacy_score(source, target, local)
         score += self._static_moving_target_score(source, target, local)
+        score += self._low_prod_connector_target_score(source, target, local)
         if not self.enable_holdability_target_score:
             return score
 
@@ -4571,6 +4586,53 @@ class PublicRuleAgent:
             eta = self._estimate_arrival_for_requirement(source, target, max(1, self.min_ships_mine_attack), local)
             if eta > self.target_score_moving_max_eta:
                 score -= self.target_score_moving_eta_penalty * (eta - self.target_score_moving_max_eta)
+        return score
+
+    def _low_prod_connector_target_score(self, source: Planet, target: Planet, local: LocalObs) -> float:
+        if not self.enable_low_prod_connector_target_score:
+            return 0.0
+        if target.owner == local.player:
+            return 0.0
+        if local.step < self.low_prod_connector_min_step or local.step > self.low_prod_connector_max_step:
+            return 0.0
+        active_players = self._active_player_count(local)
+        if active_players < self.low_prod_connector_min_active_players:
+            return 0.0
+        if self.low_prod_connector_max_active_players > 0 and active_players > self.low_prod_connector_max_active_players:
+            return 0.0
+        if target.production > self.low_prod_connector_max_production:
+            return 0.0
+
+        has_own_link = False
+        has_enemy_link = False
+        has_anchor_link = False
+        for planet in local.planets:
+            if planet.id == target.id:
+                continue
+            dist_to_target = distance(planet, target)
+            if planet.owner == local.player and dist_to_target <= self.low_prod_connector_own_radius:
+                has_own_link = True
+            elif planet.owner != -1 and planet.owner != local.player and dist_to_target <= self.low_prod_connector_enemy_radius:
+                has_enemy_link = True
+            if (
+                planet.owner != -1
+                and planet.production >= self.low_prod_connector_anchor_min_production
+                and dist_to_target <= self.low_prod_connector_anchor_radius
+            ):
+                has_anchor_link = True
+
+        if not has_own_link or not (has_enemy_link or has_anchor_link):
+            return 0.0
+
+        needed = self._base_ships_needed(target, local, source=source)
+        if needed is None:
+            return 0.0
+        eta = self._estimate_arrival_for_requirement(source, target, needed, local)
+        score = self.low_prod_connector_bonus
+        if target.owner not in (-1, local.player):
+            score += self.low_prod_connector_enemy_bonus
+        if eta > self.low_prod_connector_max_eta:
+            score -= self.low_prod_connector_eta_penalty * (eta - self.low_prod_connector_max_eta)
         return score
 
     def _enemy_high_prod_pressure_score(self, source: Planet, target: Planet, local: LocalObs) -> float:

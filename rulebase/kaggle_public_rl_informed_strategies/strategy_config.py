@@ -266,6 +266,20 @@ class StrategyConfig:
     target_score_moving_bonus: float = 0.0
     target_score_moving_max_eta: int = 999
     target_score_moving_eta_penalty: float = 0.0
+    enable_low_prod_connector_target_score: bool = False
+    low_prod_connector_min_active_players: int = 0
+    low_prod_connector_max_active_players: int = 99
+    low_prod_connector_min_step: int = 0
+    low_prod_connector_max_step: int = 500
+    low_prod_connector_max_production: float = 2.0
+    low_prod_connector_own_radius: float = 42.0
+    low_prod_connector_enemy_radius: float = 42.0
+    low_prod_connector_anchor_radius: float = 55.0
+    low_prod_connector_anchor_min_production: float = 3.0
+    low_prod_connector_bonus: float = 0.0
+    low_prod_connector_enemy_bonus: float = 0.0
+    low_prod_connector_max_eta: int = 999
+    low_prod_connector_eta_penalty: float = 0.0
     enable_early_neutral_bias: bool = False
     early_neutral_min_active_players: int = 0
     early_neutral_max_active_players: int = 99
@@ -1116,6 +1130,20 @@ TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2
         "target_score_moving_bonus": 10.0,
         "target_score_moving_max_eta": 16,
         "target_score_moving_eta_penalty": 1.5,
+    }
+)
+TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_P4LOWCONN10ETA18_REGULAR_CONFIG = StrategyConfig(
+    **{
+        **TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_REGULAR_CONFIG.to_agent_kwargs(),
+        "enable_low_prod_connector_target_score": True,
+        "low_prod_connector_min_active_players": 4,
+        "low_prod_connector_max_active_players": 4,
+        "low_prod_connector_min_step": 25,
+        "low_prod_connector_max_step": 150,
+        "low_prod_connector_bonus": 10.0,
+        "low_prod_connector_enemy_bonus": 10.0,
+        "low_prod_connector_max_eta": 18,
+        "low_prod_connector_eta_penalty": 1.0,
     }
 )
 # 2026-05-21 historical regular league:
@@ -11389,4 +11417,78 @@ ABLATION_SUITES["myreplay_plan043_p2_static_moving_target_score"] = {
         target_score_moving_max_eta=16,
         target_score_moving_eta_penalty=1.5,
     ),
+}
+
+ABLATION_SUITES["myreplay_plan044_connector_target_score"] = {
+    "p2move_regular": TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_REGULAR_CONFIG.to_agent_kwargs(),
+    "p2move_lowconn_2p_b6_enemy4_eta24": from_base(
+        TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_REGULAR_CONFIG,
+        enable_low_prod_connector_target_score=True,
+        low_prod_connector_min_active_players=2,
+        low_prod_connector_max_active_players=2,
+        low_prod_connector_min_step=20,
+        low_prod_connector_max_step=150,
+        low_prod_connector_bonus=6.0,
+        low_prod_connector_enemy_bonus=4.0,
+        low_prod_connector_max_eta=24,
+        low_prod_connector_eta_penalty=0.8,
+    ),
+    "p2move_lowconn_2p_b10_enemy6_eta20": from_base(
+        TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_REGULAR_CONFIG,
+        enable_low_prod_connector_target_score=True,
+        low_prod_connector_min_active_players=2,
+        low_prod_connector_max_active_players=2,
+        low_prod_connector_min_step=20,
+        low_prod_connector_max_step=150,
+        low_prod_connector_bonus=10.0,
+        low_prod_connector_enemy_bonus=6.0,
+        low_prod_connector_max_eta=20,
+        low_prod_connector_eta_penalty=1.0,
+    ),
+    "p2move_lowconn_4p_b6_enemy8_eta22": from_base(
+        TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_REGULAR_CONFIG,
+        enable_low_prod_connector_target_score=True,
+        low_prod_connector_min_active_players=4,
+        low_prod_connector_max_active_players=4,
+        low_prod_connector_min_step=25,
+        low_prod_connector_max_step=150,
+        low_prod_connector_bonus=6.0,
+        low_prod_connector_enemy_bonus=8.0,
+        low_prod_connector_max_eta=22,
+        low_prod_connector_eta_penalty=0.8,
+    ),
+    "p2move_lowconn_4p_b10_enemy10_eta18": from_base(
+        TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_REGULAR_CONFIG,
+        enable_low_prod_connector_target_score=True,
+        low_prod_connector_min_active_players=4,
+        low_prod_connector_max_active_players=4,
+        low_prod_connector_min_step=25,
+        low_prod_connector_max_step=150,
+        low_prod_connector_bonus=10.0,
+        low_prod_connector_enemy_bonus=10.0,
+        low_prod_connector_max_eta=18,
+        low_prod_connector_eta_penalty=1.0,
+    ),
+    "p2move_lowconn_all_b5_enemy5_eta22": from_base(
+        TAIL_M2_MAX12_NET7_OVERPAY4_P4LOWHOME_ACTIVE4_P4SEED_PROD4_P2MOVE10ETA16_STATIC2_REGULAR_CONFIG,
+        enable_low_prod_connector_target_score=True,
+        low_prod_connector_min_active_players=2,
+        low_prod_connector_max_active_players=4,
+        low_prod_connector_min_step=25,
+        low_prod_connector_max_step=150,
+        low_prod_connector_bonus=5.0,
+        low_prod_connector_enemy_bonus=5.0,
+        low_prod_connector_max_eta=22,
+        low_prod_connector_eta_penalty=0.8,
+    ),
+}
+
+ABLATION_SUITES["myreplay_plan044_connector_target_score_4p_confirm"] = {
+    "p2move_regular": ABLATION_SUITES["myreplay_plan044_connector_target_score"]["p2move_regular"],
+    "p2move_lowconn_4p_b6_enemy8_eta22": ABLATION_SUITES["myreplay_plan044_connector_target_score"][
+        "p2move_lowconn_4p_b6_enemy8_eta22"
+    ],
+    "p2move_lowconn_4p_b10_enemy10_eta18": ABLATION_SUITES["myreplay_plan044_connector_target_score"][
+        "p2move_lowconn_4p_b10_enemy10_eta18"
+    ],
 }
