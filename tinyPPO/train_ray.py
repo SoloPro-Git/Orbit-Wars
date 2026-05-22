@@ -114,10 +114,13 @@ def update_top_checkpoints(
 
 def _merge_eval_parts(parts: list[dict]) -> dict[str, dict[str, float]]:
     merged: dict[str, dict[str, float]] = {}
-    for key in ("eval_vs_random", "eval_vs_nearest"):
+    keys = sorted({key for part in parts for key in part if key.startswith("eval_")})
+    for key in keys:
         games = wins = losses = draws = reward_sum = 0.0
         for part in parts:
-            data = part[key]
+            data = part.get(key)
+            if not isinstance(data, dict):
+                continue
             g = float(data.get("games", 0.0))
             games += g
             wins += float(data.get("wins", 0.0))
@@ -169,6 +172,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--eval-ship-bias", type=float, default=0.0, help="Eval-only logit-space bias for ship fraction mean.")
     parser.add_argument("--eval-launch-temperature", type=float, default=1.0)
     parser.add_argument("--eval-stochastic", action="store_true")
+    parser.add_argument("--eval-stochastic-compare", action="store_true", help="Also log stochastic eval beside the main deterministic eval.")
     parser.add_argument("--sync-eval", action="store_true", help="Block training during eval instead of running Ray eval actors asynchronously.")
     parser.add_argument("--eval-workers", type=int, default=3)
     parser.add_argument("--gpus-per-eval-worker", type=float, default=1.0 / 3.0)
@@ -397,13 +401,22 @@ def main() -> None:
                 "mean_reward": reward_sum / max(1, games),
             }
 
-        def evaluate(self, state_dict: dict[str, torch.Tensor], update: int, games: int, seed: int) -> dict:
+        def evaluate(self, state_dict: dict[str, torch.Tensor], update: int, games: int, seed: int, stochastic_compare: bool = False) -> dict:
             self.set_weights(state_dict)
-            return {
+            summary = {
                 "update": update,
                 "eval_vs_random": self._run_matchups("random", games, seed),
                 "eval_vs_nearest": self._run_matchups("nearest", games, seed + 100_000),
             }
+            if stochastic_compare:
+                previous = self.deterministic
+                self.deterministic = False
+                try:
+                    summary["eval_stochastic_vs_random"] = self._run_matchups("random", games, seed + 200_000)
+                    summary["eval_stochastic_vs_nearest"] = self._run_matchups("nearest", games, seed + 300_000)
+                finally:
+                    self.deterministic = previous
+            return summary
 
     set_seed(args.seed)
     out_dir = Path(args.out_dir)
@@ -477,6 +490,7 @@ def main() -> None:
                 "eval_ship_bias": eval_ship_bias,
                 "eval_launch_temperature": args.eval_launch_temperature,
                 "eval_stochastic": args.eval_stochastic,
+                "eval_stochastic_compare": args.eval_stochastic_compare,
                 "collect_overassign_factor": args.collect_overassign_factor,
             },
             ensure_ascii=False,
@@ -730,7 +744,7 @@ def main() -> None:
                     args.eval_launch_temperature,
                     not args.eval_stochastic,
                 )
-                part = ray.get(temp_worker.evaluate.remote(eval_state_ref, update, args.eval_games, args.seed + 300_000 + update * 1_000))
+                part = ray.get(temp_worker.evaluate.remote(eval_state_ref, update, args.eval_games, args.seed + 300_000 + update * 1_000, args.eval_stochastic_compare))
                 merged_eval = _merge_eval_parts([part])
                 summary.update(merged_eval)
                 top_manifest = update_top_checkpoints(out_dir, eval_state, model_cfg, update, {"async_eval_update": update, **merged_eval}, args.top_k_checkpoints)
@@ -759,6 +773,7 @@ def main() -> None:
                             update,
                             shard_games,
                             args.seed + 300_000 + update * 10_000 + i * 1_000,
+                            args.eval_stochastic_compare,
                         )
                     )
                 for ref in parts:
