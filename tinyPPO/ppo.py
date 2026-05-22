@@ -17,6 +17,7 @@ class PPOConfig:
     entropy_coef: float = 0.02
     learning_rate: float = 3e-4
     max_grad_norm: float = 0.5
+    min_epochs: int = 1
     epochs: int = 4
     batch_size: int = 256
     target_kl: float = 0.0
@@ -119,7 +120,9 @@ class PPOUpdater:
         epochs_used = 0
         update_steps = 0
         early_stop = 0.0
-        for _epoch in range(self.cfg.epochs):
+        min_epochs = max(1, min(int(self.cfg.min_epochs), int(self.cfg.epochs)))
+        max_epochs = max(min_epochs, int(self.cfg.epochs))
+        for _epoch in range(max_epochs):
             order = torch.randperm(n, device=self.device)
             epoch_kl: list[float] = []
             for start in range(0, n, batch_size):
@@ -169,12 +172,14 @@ class PPOUpdater:
                 epoch_kl.append(kl_value)
                 update_steps += 1
             epochs_used += 1
-            if self.cfg.target_kl > 0.0 and epoch_kl and float(np.mean(epoch_kl)) > 1.5 * self.cfg.target_kl:
+            if epochs_used >= min_epochs and self.cfg.target_kl > 0.0 and epoch_kl and float(np.mean(epoch_kl)) > 1.5 * self.cfg.target_kl:
                 early_stop = 1.0
                 break
         summary = {key: float(np.mean(vals)) for key, vals in metrics.items() if vals}
         summary["epochs_used"] = float(epochs_used)
         summary["update_steps"] = float(update_steps)
         summary["kl_early_stop"] = early_stop
+        summary["min_epochs"] = float(min_epochs)
+        summary["max_epochs"] = float(max_epochs)
         summary["target_kl"] = float(self.cfg.target_kl)
         return summary

@@ -190,7 +190,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-actions-per-source-safety", type=int, default=MAX_ACTIONS_PER_SOURCE_SAFETY)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--entropy-coef", type=float, default=0.02)
-    parser.add_argument("--ppo-epochs", type=int, default=4)
+    parser.add_argument("--min-ppo-epochs", type=int, default=4, help="Minimum PPO epochs per rollout before KL early stopping can trigger.")
+    parser.add_argument("--ppo-epochs", type=int, default=8, help="Maximum PPO epochs per rollout; KL early stopping may stop earlier after min-ppo-epochs.")
     parser.add_argument("--ppo-batch-size", type=int, default=256)
     parser.add_argument("--target-kl", type=float, default=0.01, help="Stop PPO epochs early when mean approx KL exceeds 1.5x this value. 0 disables.")
     parser.add_argument("--replay-updates", type=int, default=2, help="Keep this many previous update batches for age-decayed PPO replay. 0 disables replay.")
@@ -435,6 +436,7 @@ def main() -> None:
         PPOConfig(
             learning_rate=args.lr,
             entropy_coef=args.entropy_coef,
+            min_epochs=args.min_ppo_epochs,
             epochs=args.ppo_epochs,
             batch_size=args.ppo_batch_size,
             target_kl=args.target_kl,
