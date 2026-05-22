@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 from collections import deque
 from pathlib import Path
 
@@ -49,6 +50,68 @@ def save_checkpoint_state(path: Path, state_dict: dict[str, torch.Tensor], model
     )
 
 
+def _eval_score(metrics: dict) -> tuple[float, float, float]:
+    nearest = metrics.get("eval_vs_nearest", {})
+    random_eval = metrics.get("eval_vs_random", {})
+    return (
+        float(nearest.get("winrate", -1.0)),
+        float(random_eval.get("winrate", -1.0)),
+        float(nearest.get("mean_reward", -999.0)),
+    )
+
+
+def update_top_checkpoints(
+    out_dir: Path,
+    state_dict: dict[str, torch.Tensor],
+    model_cfg: dict,
+    eval_update: int,
+    metrics: dict,
+    top_k: int,
+) -> list[dict]:
+    if top_k <= 0:
+        return []
+    top_dir = out_dir / "best_top"
+    top_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = top_dir / "manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    else:
+        manifest = []
+
+    nearest_wr, random_wr, nearest_reward = _eval_score(metrics)
+    ckpt_name = f"eval_u{eval_update:06d}_nearest_{nearest_wr:.3f}_random_{random_wr:.3f}.pt"
+    ckpt_path = top_dir / ckpt_name
+    save_checkpoint_state(ckpt_path, state_dict, model_cfg, eval_update, metrics)
+    manifest = [entry for entry in manifest if entry.get("path") != ckpt_name]
+    manifest.append(
+        {
+            "path": ckpt_name,
+            "update": int(eval_update),
+            "nearest_winrate": nearest_wr,
+            "random_winrate": random_wr,
+            "nearest_mean_reward": nearest_reward,
+        }
+    )
+    manifest.sort(key=lambda item: (item["nearest_winrate"], item["random_winrate"], item["nearest_mean_reward"], item["update"]), reverse=True)
+    keep = manifest[:top_k]
+    keep_names = {entry["path"] for entry in keep}
+    for entry in manifest[top_k:]:
+        stale = top_dir / entry["path"]
+        if stale.exists():
+            stale.unlink()
+    for rank, entry in enumerate(keep, start=1):
+        src = top_dir / entry["path"]
+        if src.exists():
+            shutil.copyfile(src, top_dir / f"rank{rank}.pt")
+    manifest_path.write_text(json.dumps(keep, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    for rank_file in top_dir.glob("rank*.pt"):
+        if rank_file.name.startswith("rank") and rank_file.name[4:-3].isdigit():
+            rank = int(rank_file.name[4:-3])
+            if rank > len(keep):
+                rank_file.unlink()
+    return keep
+
+
 def _merge_eval_parts(parts: list[dict]) -> dict[str, dict[str, float]]:
     merged: dict[str, dict[str, float]] = {}
     for key in ("eval_vs_random", "eval_vs_nearest"):
@@ -79,6 +142,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ray-address", default=None, help="Ray address. Defaults to RAY_ADDRESS env; use 'auto' for an existing local cluster.")
     parser.add_argument("--ray-runtime-env-id", default="", help="Optional env marker to force fresh Ray runtime env on workers.")
     parser.add_argument("--ray-working-dir", default="", help="Optional Ray working_dir, matching training2 style for multi-node clusters.")
+    parser.add_argument("--resume-checkpoint", default="", help="Load model weights and continue from checkpoint update + 1.")
     parser.add_argument("--gpu-ids", default="", help="Comma list to expose before ray.init, e.g. local '1,2,3,4,5,6,7' or remote '0,1,2,3,4,5,6,7,8'.")
     parser.add_argument("--workers-per-gpu", type=int, default=3)
     parser.add_argument("--num-workers", type=int, default=0, help="0 means len(gpu_ids) * workers_per_gpu, or Ray's visible GPU count * workers_per_gpu.")
@@ -112,6 +176,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cpus-per-eval-worker", type=float, default=1.0)
     parser.add_argument("--stop-eval-confirmations", type=int, default=2)
     parser.add_argument("--stop-winrate", type=float, default=0.55)
+    parser.add_argument("--top-k-checkpoints", type=int, default=5, help="Keep this many eval-ranked checkpoints under best_top/.")
     parser.add_argument("--hidden", type=int, default=64)
     parser.add_argument("--heads", type=int, default=4)
     parser.add_argument("--layers", type=int, default=1)
@@ -336,6 +401,24 @@ def main() -> None:
     learner_device = torch.device(args.learner_device)
     model = TinyPolicyValueNet(**model_cfg).to(learner_device)
     updater = PPOUpdater(model, PPOConfig(learning_rate=args.lr, entropy_coef=args.entropy_coef), device=str(learner_device))
+    start_update = 1
+    resume_metrics = None
+    if args.resume_checkpoint:
+        resume_path = Path(args.resume_checkpoint)
+        payload = torch.load(resume_path, map_location=learner_device, weights_only=True)
+        ckpt_cfg = payload.get("model", {})
+        if ckpt_cfg and ckpt_cfg != model_cfg:
+            raise ValueError(f"Resume checkpoint model config {ckpt_cfg} does not match requested config {model_cfg}")
+        model.load_state_dict(payload["state_dict"])
+        start_update = int(payload.get("update", 0)) + 1
+        resume_metrics = payload.get("metrics")
+        print(
+            json.dumps(
+                {"event": "resume_loaded", "path": str(resume_path), "checkpoint_update": start_update - 1, "start_update": start_update},
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
     workers = [RolloutWorker.remote(model_cfg, args.episode_steps, args.opponent_mode, not args.no_numba) for _ in range(num_workers)]
     eval_actor_options = {"resources": {f"node:{eval_node_ip}": 0.001}}
     eval_launch_bias = args.eval_launch_bias + args.eval_aggression
@@ -388,6 +471,9 @@ def main() -> None:
 
     best_winrate = -1.0
     phase = "random" if args.curriculum else args.opponent_mode
+    if isinstance(resume_metrics, dict):
+        best_winrate = max(best_winrate, float(resume_metrics.get("eval_vs_nearest", {}).get("winrate", -1.0)))
+        phase = str(resume_metrics.get("phase", phase))
     latest_opponent_state = cpu_state_dict(model)
     replay_batches: deque[tuple[int, list[dict]]] = deque(maxlen=max(0, args.replay_updates))
     pending_eval_refs: dict[object, int] = {}
@@ -396,7 +482,7 @@ def main() -> None:
     eval_expected_parts: dict[int, int] = {}
     nearest_stop_streak = 0
     stop_after_update: int | None = None
-    for update in range(1, args.updates + 1):
+    for update in range(start_update, args.updates + 1):
         ready_refs = []
         if pending_eval_refs:
             ready_refs, _not_ready = ray.wait(list(pending_eval_refs), num_returns=len(pending_eval_refs), timeout=0.0)
@@ -410,11 +496,21 @@ def main() -> None:
                 eval_summary = {"update": eval_update, **merged_eval, "phase": phase, "event": "async_eval_done"}
                 print(json.dumps(eval_summary, ensure_ascii=False), flush=True)
                 log_swanlab(swan, eval_summary, eval_update)
+                best_state = pending_eval_states.get(eval_update)
+                best_metrics = {"async_eval_update": eval_update, **merged_eval}
+                if best_state is not None:
+                    top_manifest = update_top_checkpoints(out_dir, best_state, model_cfg, eval_update, best_metrics, args.top_k_checkpoints)
+                    print(
+                        json.dumps(
+                            {"event": "top_checkpoints_updated", "update": eval_update, "top_k": len(top_manifest), "best": top_manifest[0] if top_manifest else None},
+                            ensure_ascii=False,
+                        ),
+                        flush=True,
+                    )
                 if merged_eval["eval_vs_nearest"]["winrate"] > best_winrate:
                     best_winrate = merged_eval["eval_vs_nearest"]["winrate"]
-                    best_state = pending_eval_states.get(eval_update)
                     if best_state is not None:
-                        save_checkpoint_state(out_dir / "best.pt", best_state, model_cfg, eval_update, {"async_eval_update": eval_update, **merged_eval})
+                        save_checkpoint_state(out_dir / "best.pt", best_state, model_cfg, eval_update, best_metrics)
                     else:
                         save_checkpoint(out_dir / "best.pt", model, args, update, {"async_eval_update": eval_update, **merged_eval})
                 if args.curriculum and phase == "random" and merged_eval["eval_vs_random"]["winrate"] >= args.random_winrate_threshold:
@@ -565,6 +661,17 @@ def main() -> None:
                 part = ray.get(temp_worker.evaluate.remote(eval_state_ref, update, args.eval_games, args.seed + 300_000 + update * 1_000))
                 merged_eval = _merge_eval_parts([part])
                 summary.update(merged_eval)
+                top_manifest = update_top_checkpoints(out_dir, eval_state, model_cfg, update, {"async_eval_update": update, **merged_eval}, args.top_k_checkpoints)
+                if merged_eval["eval_vs_nearest"]["winrate"] > best_winrate:
+                    best_winrate = merged_eval["eval_vs_nearest"]["winrate"]
+                    save_checkpoint_state(out_dir / "best.pt", eval_state, model_cfg, update, {"async_eval_update": update, **merged_eval})
+                print(
+                    json.dumps(
+                        {"event": "top_checkpoints_updated", "update": update, "top_k": len(top_manifest), "best": top_manifest[0] if top_manifest else None},
+                        ensure_ascii=False,
+                    ),
+                    flush=True,
+                )
             else:
                 pending_eval_states[update] = eval_state
                 games_left = args.eval_games
