@@ -154,6 +154,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--updates", type=int, default=200)
     parser.add_argument("--episodes-per-worker", type=int, default=2, help="Maximum episodes assigned to one rollout worker in one update.")
     parser.add_argument("--episodes-per-update", type=int, default=42, help="Fixed fresh rollout episodes per PPO update. 0 restores num_workers * episodes_per_worker.")
+    parser.add_argument("--collect-overassign-factor", type=float, default=1.0, help="Assign extra rollout capacity and stop after episodes-per-update to avoid stragglers.")
     parser.add_argument("--episode-steps", type=int, default=500)
     parser.add_argument("--opponent-mode", choices=["random", "self", "mix"], default="random")
     parser.add_argument("--curriculum", action="store_true", help="Train vs random first, then switch training opponent to latest checkpoint.")
@@ -196,7 +197,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def rollout_assignments(num_workers: int, episodes_per_worker: int, episodes_per_update: int, update: int) -> list[tuple[int, int]]:
+def rollout_assignments(
+    num_workers: int,
+    episodes_per_worker: int,
+    episodes_per_update: int,
+    update: int,
+    overassign_factor: float = 1.0,
+) -> list[tuple[int, int]]:
     max_episodes = max(1, num_workers) * max(1, episodes_per_worker)
     target = max_episodes if episodes_per_update <= 0 else int(episodes_per_update)
     if target <= 0:
@@ -206,7 +213,10 @@ def rollout_assignments(num_workers: int, episodes_per_worker: int, episodes_per
             f"--episodes-per-update={target} exceeds worker capacity {max_episodes}; "
             f"increase --episodes-per-worker or --num-workers"
         )
-    base, remainder = divmod(target, max(1, num_workers))
+    assigned_target = target
+    if episodes_per_update > 0:
+        assigned_target = min(max_episodes, max(target, int(np.ceil(target * max(1.0, overassign_factor)))))
+    base, remainder = divmod(assigned_target, max(1, num_workers))
     counts = [base for _ in range(num_workers)]
     offset = (max(1, update) - 1) % max(1, num_workers)
     for i in range(remainder):
@@ -464,6 +474,7 @@ def main() -> None:
                 "eval_ship_bias": eval_ship_bias,
                 "eval_launch_temperature": args.eval_launch_temperature,
                 "eval_stochastic": args.eval_stochastic,
+                "collect_overassign_factor": args.collect_overassign_factor,
             },
             ensure_ascii=False,
         )
@@ -543,19 +554,35 @@ def main() -> None:
             print(json.dumps({"event": "stop_confirmed", "update": update, "confirmations": nearest_stop_streak}, ensure_ascii=False), flush=True)
             break
 
-        assignments = rollout_assignments(num_workers, args.episodes_per_worker, args.episodes_per_update, update)
-        fresh_episodes = int(sum(episodes for _wid, episodes in assignments))
+        target_fresh_episodes = int(sum(episodes for _wid, episodes in rollout_assignments(num_workers, args.episodes_per_worker, args.episodes_per_update, update, 1.0)))
+        assignments = rollout_assignments(
+            num_workers,
+            args.episodes_per_worker,
+            args.episodes_per_update,
+            update,
+            args.collect_overassign_factor,
+        )
+        assigned_episodes = int(sum(episodes for _wid, episodes in assignments))
         print(
             json.dumps(
-                {"event": "collect_start", "update": update, "phase": phase, "workers": len(assignments), "fresh_episodes": fresh_episodes},
+                {
+                    "event": "collect_start",
+                    "update": update,
+                    "phase": phase,
+                    "workers": len(assignments),
+                    "fresh_episodes_target": target_fresh_episodes,
+                    "assigned_episodes": assigned_episodes,
+                },
                 ensure_ascii=False,
             ),
             flush=True,
         )
         weights_ref = ray.put(cpu_state_dict(model))
         opponent_ref = ray.put(latest_opponent_state) if phase == "latest" else ray.put(None)
-        futures = [
-            worker.collect.remote(
+        futures = []
+        future_to_worker: dict[object, int] = {}
+        for wid, episodes in assignments:
+            ref = workers[wid].collect.remote(
                 weights_ref,
                 opponent_ref,
                 phase,
@@ -564,11 +591,12 @@ def main() -> None:
                 args.seed + update * 1_000_000 + wid * 10_000,
                 episodes,
             )
-            for wid, episodes in assignments
-            for worker in [workers[wid]]
-        ]
+            futures.append(ref)
+            future_to_worker[ref] = wid
         results = []
         pending = list(futures)
+        collected_episodes = 0
+        straggler_restarts = 0
         pbar = tqdm(total=len(pending), desc=f"collect u{update} {phase}", dynamic_ncols=True) if tqdm is not None else None
         while pending:
             done, pending = ray.wait(pending, num_returns=1, timeout=10.0)
@@ -583,20 +611,43 @@ def main() -> None:
                 continue
             rows, metrics = ray.get(done[0])
             results.append((rows, metrics))
+            collected_episodes += int(metrics.get("episodes", 0.0))
             if pbar is not None:
                 pbar.update(1)
-                pbar.set_postfix(samples=sum(len(r) for r, _m in results), refresh=False)
+                pbar.set_postfix(episodes=collected_episodes, samples=sum(len(r) for r, _m in results), refresh=False)
             else:
                 print(
                     json.dumps(
-                        {"event": "worker_done", "update": update, "done": len(results), "total": len(futures), "samples": len(rows)},
+                        {"event": "worker_done", "update": update, "done": len(results), "total": len(futures), "episodes": collected_episodes, "samples": len(rows)},
                         ensure_ascii=False,
                     ),
                     flush=True,
                 )
+            if target_fresh_episodes > 0 and collected_episodes >= target_fresh_episodes:
+                break
+        if pending:
+            stale_workers = sorted({future_to_worker[ref] for ref in pending if ref in future_to_worker})
+            for ref in pending:
+                ray.cancel(ref, force=True)
+            for wid in stale_workers:
+                workers[wid] = RolloutWorker.remote(model_cfg, args.episode_steps, args.opponent_mode, not args.no_numba)
+            straggler_restarts = len(stale_workers)
         if pbar is not None:
             pbar.close()
-        print(json.dumps({"event": "collect_done", "update": update, "worker_results": len(results)}, ensure_ascii=False), flush=True)
+        print(
+            json.dumps(
+                {
+                    "event": "collect_done",
+                    "update": update,
+                    "worker_results": len(results),
+                    "episodes": collected_episodes,
+                    "cancelled": len(pending),
+                    "straggler_restarts": straggler_restarts,
+                },
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
 
         buffer = RolloutBuffer()
         worker_metrics = []
@@ -624,7 +675,9 @@ def main() -> None:
             "update": update,
             "workers": len(assignments),
             "ray_workers": num_workers,
-            "episodes": fresh_episodes,
+            "episodes": collected_episodes,
+            "assigned_episodes": assigned_episodes,
+            "straggler_restarts": straggler_restarts,
             "samples": len(buffer),
             "train": train_metrics,
             "rollout_result_p0": float(np.mean([m["rollout_result_p0"] for m in worker_metrics])) if worker_metrics else 0.0,
