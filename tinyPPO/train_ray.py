@@ -628,7 +628,20 @@ def main() -> None:
         if pending:
             stale_workers = sorted({future_to_worker[ref] for ref in pending if ref in future_to_worker})
             for ref in pending:
-                ray.cancel(ref, force=True)
+                try:
+                    ray.cancel(ref, force=False)
+                except Exception as exc:
+                    print(
+                        json.dumps(
+                            {
+                                "event": "collect_cancel_failed",
+                                "update": update,
+                                "error": str(exc),
+                            },
+                            ensure_ascii=False,
+                        ),
+                        flush=True,
+                    )
             for wid in stale_workers:
                 workers[wid] = RolloutWorker.remote(model_cfg, args.episode_steps, args.opponent_mode, not args.no_numba)
             straggler_restarts = len(stale_workers)
