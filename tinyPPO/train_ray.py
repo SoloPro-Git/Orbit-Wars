@@ -168,6 +168,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--eval-games", type=int, default=40)
     parser.add_argument("--eval-first", action="store_true")
     parser.add_argument("--eval-aggression", type=float, default=0.0, help="Eval-only bias applied to both launch and ship amount. Positive is more aggressive.")
+    parser.add_argument("--checkpoint-interval", type=int, default=10, help="Save latest.pt every N updates. 0 disables periodic latest checkpoints.")
     parser.add_argument("--eval-launch-bias", type=float, default=0.0, help="Eval-only logit bias for launch vs no-launch.")
     parser.add_argument("--eval-ship-bias", type=float, default=0.0, help="Eval-only logit-space bias for ship fraction mean.")
     parser.add_argument("--eval-launch-temperature", type=float, default=1.0)
@@ -723,8 +724,8 @@ def main() -> None:
 
         should_eval = update % args.eval_interval == 0 or (args.eval_first and update == 1)
         if should_eval:
-            ckpt_path = out_dir / "latest.pt"
-            save_checkpoint(ckpt_path, model, args, update, summary)
+            if args.checkpoint_interval > 0 and update % args.checkpoint_interval == 0:
+                save_checkpoint(out_dir / "latest.pt", model, args, update, summary)
             eval_state = cpu_state_dict(model)
             eval_state_ref = ray.put(eval_state)
             if args.sync_eval:
@@ -787,7 +788,8 @@ def main() -> None:
                     flush=True,
                 )
 
-        save_checkpoint(out_dir / "latest.pt", model, args, update, summary)
+        if args.checkpoint_interval > 0 and update % args.checkpoint_interval == 0 and not should_eval:
+            save_checkpoint(out_dir / "latest.pt", model, args, update, summary)
         if phase == "latest":
             latest_opponent_state = cpu_state_dict(model)
         with log_path.open("a", encoding="utf-8") as f:

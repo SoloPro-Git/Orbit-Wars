@@ -337,6 +337,7 @@ def main() -> None:
     parser.add_argument("--eval-games", type=int, default=20)
     parser.add_argument("--eval-first", action="store_true")
     parser.add_argument("--stop-winrate", type=float, default=0.55)
+    parser.add_argument("--checkpoint-interval", type=int, default=10, help="Save latest.pt every N updates. 0 disables periodic latest checkpoints.")
     parser.add_argument("--hidden", type=int, default=64)
     parser.add_argument("--heads", type=int, default=4)
     parser.add_argument("--layers", type=int, default=1)
@@ -431,7 +432,10 @@ def main() -> None:
 
         should_eval = update % args.eval_interval == 0 or (args.eval_first and update == 1)
         if should_eval:
-            ckpt_path = out_dir / "latest.pt"
+            if args.checkpoint_interval <= 0 or update % args.checkpoint_interval != 0:
+                ckpt_path = out_dir / f"eval_u{update:06d}.pt"
+            else:
+                ckpt_path = out_dir / "latest.pt"
             save_checkpoint(ckpt_path, model, args, update, summary)
             print(json.dumps({"event": "eval_start", "update": update, "games_each": args.eval_games}, ensure_ascii=False), flush=True)
             eval_random = run_matchups(
@@ -479,7 +483,8 @@ def main() -> None:
                 print(json.dumps(summary, ensure_ascii=False))
                 break
 
-        save_checkpoint(out_dir / "latest.pt", model, args, update, summary)
+        if args.checkpoint_interval > 0 and update % args.checkpoint_interval == 0:
+            save_checkpoint(out_dir / "latest.pt", model, args, update, summary)
         if phase == "latest":
             latest_opponent.load_state_dict(model.state_dict())
             latest_opponent.eval()
