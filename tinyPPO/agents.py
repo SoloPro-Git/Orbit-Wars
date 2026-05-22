@@ -16,6 +16,15 @@ ACTION_SLOTS = 3
 MAX_ACTIONS_PER_SOURCE_SAFETY = ACTION_SLOTS
 
 
+def apply_ship_fraction_bias(alpha_beta: torch.Tensor, bias: float) -> torch.Tensor:
+    if abs(bias) <= 1e-9:
+        return alpha_beta
+    concentration = alpha_beta.sum(dim=-1, keepdim=True).clamp_min(2.0)
+    mean = (alpha_beta[..., :1] / concentration).clamp(1e-4, 1.0 - 1e-4)
+    shifted = torch.sigmoid(torch.logit(mean) + float(bias)).clamp(1e-4, 1.0 - 1e-4)
+    return torch.cat([shifted * concentration, (1.0 - shifted) * concentration], dim=-1).clamp_min(1e-4)
+
+
 def _planet_dict(obs: dict[str, Any]) -> dict[int, list]:
     return {int(p[0]): p for p in obs.get("planets", [])}
 
@@ -73,7 +82,15 @@ def random_policy_agent(obs: dict[str, Any], configuration=None) -> list[list]:
 
 
 class TinyPPOAgent:
-    def __init__(self, checkpoint: str | Path, device: str = "cpu", deterministic: bool = True):
+    def __init__(
+        self,
+        checkpoint: str | Path,
+        device: str = "cpu",
+        deterministic: bool = True,
+        launch_bias: float = 0.0,
+        ship_bias: float = 0.0,
+        launch_temperature: float = 1.0,
+    ):
         payload = torch.load(checkpoint, map_location=device, weights_only=True)
         cfg = payload.get("model", {})
         self.model = TinyPolicyValueNet(**cfg).to(device)
@@ -81,6 +98,9 @@ class TinyPPOAgent:
         self.model.eval()
         self.device = torch.device(device)
         self.deterministic = deterministic
+        self.launch_bias = float(launch_bias)
+        self.ship_bias = float(ship_bias)
+        self.launch_temperature = max(1e-4, float(launch_temperature))
 
     @torch.no_grad()
     def __call__(self, obs: dict[str, Any], configuration=None) -> list[list]:
@@ -94,9 +114,12 @@ class TinyPPOAgent:
             "own_mask": torch.tensor(enc.own_mask[None], dtype=torch.bool, device=self.device),
         }
         out = self.model(**batch)
-        source_logits = out["source_logits"][0]
+        source_logits = out["source_logits"][0] / self.launch_temperature
+        if self.launch_bias:
+            source_logits = source_logits.clone()
+            source_logits[..., 1] += self.launch_bias
         target_logits = out["target_logits"][0]
-        ship_params = out["ship_params"][0]
+        ship_params = apply_ship_fraction_bias(out["ship_params"][0], self.ship_bias)
         own_slots = torch.where(batch["own_mask"][0])[0]
         source_slots: list[int] = []
         target_slots: list[int] = []

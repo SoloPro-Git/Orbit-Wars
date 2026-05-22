@@ -72,13 +72,27 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=1000)
     parser.add_argument("--episode-steps", type=int, default=500)
     parser.add_argument("--device", default="cpu")
+    parser.add_argument("--aggression", type=float, default=0.0, help="Convenience bias applied to both launch and ship fraction. Positive is more aggressive.")
+    parser.add_argument("--launch-bias", type=float, default=0.0, help="Logit bias for launch vs no-launch. Positive launches more often.")
+    parser.add_argument("--ship-bias", type=float, default=0.0, help="Logit-space bias for ship fraction mean. Positive sends more ships.")
+    parser.add_argument("--launch-temperature", type=float, default=1.0, help="Temperature for launch/no-launch logits before bias.")
+    parser.add_argument("--stochastic", action="store_true", help="Sample actions instead of deterministic argmax/mean.")
     parser.add_argument("--no-numba", action="store_true")
     args = parser.parse_args()
 
     ckpt = Path(args.checkpoint)
     opponent = nearest_planet_agent if args.opponent == "nearest" else random_policy_agent
+    launch_bias = args.launch_bias + args.aggression
+    ship_bias = args.ship_bias + args.aggression
     result = run_matchups(
-        lambda: TinyPPOAgent(ckpt, device=args.device, deterministic=True),
+        lambda: TinyPPOAgent(
+            ckpt,
+            device=args.device,
+            deterministic=not args.stochastic,
+            launch_bias=launch_bias,
+            ship_bias=ship_bias,
+            launch_temperature=args.launch_temperature,
+        ),
         lambda: opponent,
         games=args.games,
         seed=args.seed,

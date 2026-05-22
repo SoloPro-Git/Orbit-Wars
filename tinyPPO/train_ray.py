@@ -86,6 +86,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--eval-interval", type=int, default=10)
     parser.add_argument("--eval-games", type=int, default=40)
     parser.add_argument("--eval-first", action="store_true")
+    parser.add_argument("--eval-aggression", type=float, default=0.0, help="Eval-only bias applied to both launch and ship amount. Positive is more aggressive.")
+    parser.add_argument("--eval-launch-bias", type=float, default=0.0, help="Eval-only logit bias for launch vs no-launch.")
+    parser.add_argument("--eval-ship-bias", type=float, default=0.0, help="Eval-only logit-space bias for ship fraction mean.")
+    parser.add_argument("--eval-launch-temperature", type=float, default=1.0)
+    parser.add_argument("--eval-stochastic", action="store_true")
     parser.add_argument("--sync-eval", action="store_true", help="Block training during eval instead of running Ray eval actors asynchronously.")
     parser.add_argument("--eval-workers", type=int, default=3)
     parser.add_argument("--gpus-per-eval-worker", type=float, default=1.0 / 3.0)
@@ -224,7 +229,18 @@ def main() -> None:
 
     @ray.remote(num_cpus=args.cpus_per_eval_worker, num_gpus=args.gpus_per_eval_worker)
     class EvalWorker:
-        def __init__(self, model_cfg: dict, episode_steps: int, use_numba: bool, max_actions_per_source: int, eval_gpu_ids: str = ""):
+        def __init__(
+            self,
+            model_cfg: dict,
+            episode_steps: int,
+            use_numba: bool,
+            max_actions_per_source: int,
+            eval_gpu_ids: str = "",
+            launch_bias: float = 0.0,
+            ship_bias: float = 0.0,
+            launch_temperature: float = 1.0,
+            deterministic: bool = True,
+        ):
             torch.set_num_threads(1)
             if eval_gpu_ids:
                 os.environ["CUDA_VISIBLE_DEVICES"] = str(eval_gpu_ids)
@@ -233,6 +249,10 @@ def main() -> None:
             self.episode_steps = episode_steps
             self.use_numba = use_numba
             self.max_actions_per_source = max_actions_per_source
+            self.launch_bias = float(launch_bias)
+            self.ship_bias = float(ship_bias)
+            self.launch_temperature = float(launch_temperature)
+            self.deterministic = bool(deterministic)
 
         def set_weights(self, state_dict: dict[str, torch.Tensor]) -> None:
             self.model.load_state_dict(state_dict)
@@ -243,8 +263,11 @@ def main() -> None:
                 self.model,
                 obs,
                 self.device,
-                deterministic=True,
+                deterministic=self.deterministic,
                 max_actions_per_source=self.max_actions_per_source,
+                launch_bias=self.launch_bias,
+                ship_bias=self.ship_bias,
+                launch_temperature=self.launch_temperature,
             )
             return actions
 
@@ -302,10 +325,32 @@ def main() -> None:
     updater = PPOUpdater(model, PPOConfig(learning_rate=args.lr, entropy_coef=args.entropy_coef), device=str(learner_device))
     workers = [RolloutWorker.remote(model_cfg, args.episode_steps, args.opponent_mode, not args.no_numba) for _ in range(num_workers)]
     eval_actor_options = {"resources": {f"node:{eval_node_ip}": 0.001}}
+    eval_launch_bias = args.eval_launch_bias + args.eval_aggression
+    eval_ship_bias = args.eval_ship_bias + args.eval_aggression
     eval_workers = [] if args.sync_eval else [
-        EvalWorker.options(**eval_actor_options).remote(model_cfg, args.episode_steps, not args.no_numba, args.max_actions_per_source_safety)
+        EvalWorker.options(**eval_actor_options).remote(
+            model_cfg,
+            args.episode_steps,
+            not args.no_numba,
+            args.max_actions_per_source_safety,
+            "",
+            eval_launch_bias,
+            eval_ship_bias,
+            args.eval_launch_temperature,
+            not args.eval_stochastic,
+        )
         if not args.eval_gpu_ids
-        else EvalWorker.options(**eval_actor_options).remote(model_cfg, args.episode_steps, not args.no_numba, args.max_actions_per_source_safety, args.eval_gpu_ids)
+        else EvalWorker.options(**eval_actor_options).remote(
+            model_cfg,
+            args.episode_steps,
+            not args.no_numba,
+            args.max_actions_per_source_safety,
+            args.eval_gpu_ids,
+            eval_launch_bias,
+            eval_ship_bias,
+            args.eval_launch_temperature,
+            not args.eval_stochastic,
+        )
         for _ in range(max(1, args.eval_workers))
     ]
     print(
@@ -319,6 +364,10 @@ def main() -> None:
                 "eval_node_ip": eval_node_ip,
                 "episodes_per_update": args.episodes_per_update,
                 "episodes_per_worker_cap": args.episodes_per_worker,
+                "eval_launch_bias": eval_launch_bias,
+                "eval_ship_bias": eval_ship_bias,
+                "eval_launch_temperature": args.eval_launch_temperature,
+                "eval_stochastic": args.eval_stochastic,
             },
             ensure_ascii=False,
         )
@@ -487,6 +536,11 @@ def main() -> None:
                     args.episode_steps,
                     not args.no_numba,
                     args.max_actions_per_source_safety,
+                    args.eval_gpu_ids,
+                    eval_launch_bias,
+                    eval_ship_bias,
+                    args.eval_launch_temperature,
+                    not args.eval_stochastic,
                 )
                 part = ray.get(temp_worker.evaluate.remote(eval_state_ref, update, args.eval_games, args.seed + 300_000 + update * 1_000))
                 merged_eval = _merge_eval_parts([part])

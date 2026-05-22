@@ -13,7 +13,7 @@ import torch
 
 from training2 import make_fast_orbit_wars
 
-from tinyPPO.agents import ACTION_SLOTS, MAX_ACTIONS_PER_SOURCE_SAFETY, TinyPPOAgent, actions_from_decisions, nearest_planet_agent, random_policy_agent
+from tinyPPO.agents import ACTION_SLOTS, MAX_ACTIONS_PER_SOURCE_SAFETY, TinyPPOAgent, actions_from_decisions, apply_ship_fraction_bias, nearest_planet_agent, random_policy_agent
 from tinyPPO.eval import run_matchups
 from tinyPPO.features import MAX_PLANETS, encode_obs, final_result
 from tinyPPO.model import TinyPolicyValueNet
@@ -138,14 +138,20 @@ def sample_policy_action(
     device: torch.device,
     deterministic: bool = False,
     max_actions_per_source: int = MAX_ACTIONS_PER_SOURCE_SAFETY,
+    launch_bias: float = 0.0,
+    ship_bias: float = 0.0,
+    launch_temperature: float = 1.0,
 ) -> tuple[list[list], dict]:
     player = int(obs.get("player", 0))
     enc = encode_obs(obs, player, players=2)
     batch = make_batch(enc, device)
     out = model(**batch)
-    source_logits = out["source_logits"][0]
+    source_logits = out["source_logits"][0] / max(1e-4, float(launch_temperature))
+    if launch_bias:
+        source_logits = source_logits.clone()
+        source_logits[..., 1] += float(launch_bias)
     target_logits = out["target_logits"][0]
-    ship_params = out["ship_params"][0]
+    ship_params = apply_ship_fraction_bias(out["ship_params"][0], ship_bias)
 
     action_slots = min(int(getattr(model, "action_slots", ACTION_SLOTS)), int(max_actions_per_source))
     launch_actions = torch.zeros((MAX_PLANETS, action_slots), dtype=torch.long, device=device)
