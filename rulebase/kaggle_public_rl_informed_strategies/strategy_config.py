@@ -261,6 +261,11 @@ class StrategyConfig:
     holdability_enemy_ship_weight: float = 0.08
     holdability_own_prod_weight: float = 2.0
     holdability_own_ship_weight: float = 0.04
+    enable_static_moving_target_score: bool = False
+    target_score_static_bonus: float = 0.0
+    target_score_moving_bonus: float = 0.0
+    target_score_moving_max_eta: int = 999
+    target_score_moving_eta_penalty: float = 0.0
     enable_early_neutral_bias: bool = False
     early_neutral_min_active_players: int = 0
     early_neutral_max_active_players: int = 99
@@ -544,6 +549,18 @@ class StrategyConfig:
     activation_target_connector_bonus: float = 0.0
     activation_static_target_bonus: float = 0.0
     activation_moving_target_bonus: float = 0.0
+    activation_map_min_low_adv_min: float = -999.0
+    activation_map_close_home_dist: float = 0.0
+    activation_map_block_close_low_radius: float = 0.0
+    activation_map_min_all_nearest_enemy: float = 0.0
+    activation_map_max_p5_enemy_front_prod: float = 999.0
+    activation_map_p4_close_radius: float = 0.0
+    activation_map_p4_far_min_low_adv: float = -999.0
+    activation_map_min_high_count: int = 0
+    activation_map_max_p5_front_count: int = 999
+    activation_map_min_all_nearest_own: float = 0.0
+    activation_map_high_far_radius: float = 0.0
+    activation_map_high_far_min_p4_enemy_dist: float = 0.0
     activation_max_eta: int = 28
     activation_candidate_limit: int = 4
     activation_max_attacks_per_turn: int = 1
@@ -11219,5 +11236,147 @@ ABLATION_SUITES["myreplay_plan042_p2_recent_capture_activation"] = {
         activation_eta_weight=0.75,
         activation_ship_weight=0.18,
         activation_direction_bonus=12.0,
+    ),
+    "p2_activation_late50_mixed_mapgate_prod3": from_base(
+        REGULAR_CONFIG,
+        enable_recent_capture_activation=True,
+        activation_min_active_players=2,
+        activation_max_active_players=2,
+        activation_min_step=50,
+        activation_max_step=140,
+        activation_source_window=24,
+        activation_source_min_production=3.0,
+        activation_source_min_after=5,
+        activation_source_prod_turns_after=1,
+        activation_min_send=8,
+        activation_max_send=48,
+        activation_target_min_production=3.0,
+        activation_include_neutral_targets=True,
+        activation_include_enemy_targets=True,
+        activation_max_eta=28,
+        activation_candidate_limit=4,
+        activation_max_attacks_per_turn=1,
+        activation_enemy_bonus=42.0,
+        activation_neutral_bonus=8.0,
+        activation_prod_weight=13.0,
+        activation_eta_weight=0.75,
+        activation_ship_weight=0.18,
+        activation_direction_bonus=12.0,
+        activation_map_min_low_adv_min=-100.0,
+        activation_map_close_home_dist=96.5,
+        activation_map_block_close_low_radius=10.5,
+    ),
+    "p2_activation_late50_mixed_mapgate2_prod3": from_base(
+        REGULAR_CONFIG,
+        enable_recent_capture_activation=True,
+        activation_min_active_players=2,
+        activation_max_active_players=2,
+        activation_min_step=50,
+        activation_max_step=140,
+        activation_source_window=24,
+        activation_source_min_production=3.0,
+        activation_source_min_after=5,
+        activation_source_prod_turns_after=1,
+        activation_min_send=8,
+        activation_max_send=48,
+        activation_target_min_production=3.0,
+        activation_include_neutral_targets=True,
+        activation_include_enemy_targets=True,
+        activation_max_eta=28,
+        activation_candidate_limit=4,
+        activation_max_attacks_per_turn=1,
+        activation_enemy_bonus=42.0,
+        activation_neutral_bonus=8.0,
+        activation_prod_weight=13.0,
+        activation_eta_weight=0.75,
+        activation_ship_weight=0.18,
+        activation_direction_bonus=12.0,
+        activation_map_min_all_nearest_enemy=10.4,
+        activation_map_max_p5_enemy_front_prod=2.5,
+        activation_map_p4_close_radius=24.1,
+        activation_map_p4_far_min_low_adv=-73.0,
+    ),
+    "p2_activation_late50_mixed_highmap_prod3": from_base(
+        REGULAR_CONFIG,
+        enable_recent_capture_activation=True,
+        activation_min_active_players=2,
+        activation_max_active_players=2,
+        activation_min_step=50,
+        activation_max_step=140,
+        activation_source_window=24,
+        activation_source_min_production=3.0,
+        activation_source_min_after=5,
+        activation_source_prod_turns_after=1,
+        activation_min_send=8,
+        activation_max_send=48,
+        activation_target_min_production=3.0,
+        activation_include_neutral_targets=True,
+        activation_include_enemy_targets=True,
+        activation_max_eta=28,
+        activation_candidate_limit=4,
+        activation_max_attacks_per_turn=1,
+        activation_enemy_bonus=42.0,
+        activation_neutral_bonus=8.0,
+        activation_prod_weight=13.0,
+        activation_eta_weight=0.75,
+        activation_ship_weight=0.18,
+        activation_direction_bonus=12.0,
+        activation_map_min_high_count=10,
+        activation_map_max_p5_front_count=3,
+        activation_map_min_all_nearest_own=10.4,
+        activation_map_high_far_radius=24.7,
+        activation_map_high_far_min_p4_enemy_dist=29.6,
+    ),
+}
+
+ABLATION_SUITES["myreplay_plan043_p2_static_moving_target_score"] = {
+    "regular": REGULAR_CONFIG.to_agent_kwargs(),
+    "p2_static_bonus4_moving_penalty6_eta28": from_base(
+        REGULAR_CONFIG,
+        enable_static_moving_target_score=True,
+        target_score_static_bonus=4.0,
+        target_score_moving_bonus=-6.0,
+        target_score_moving_max_eta=28,
+        target_score_moving_eta_penalty=0.6,
+    ),
+    "p2_static_bonus8_moving_penalty10_eta24": from_base(
+        REGULAR_CONFIG,
+        enable_static_moving_target_score=True,
+        target_score_static_bonus=8.0,
+        target_score_moving_bonus=-10.0,
+        target_score_moving_max_eta=24,
+        target_score_moving_eta_penalty=0.8,
+    ),
+    "p2_moving_short_bonus_static0_eta18": from_base(
+        REGULAR_CONFIG,
+        enable_static_moving_target_score=True,
+        target_score_static_bonus=0.0,
+        target_score_moving_bonus=8.0,
+        target_score_moving_max_eta=18,
+        target_score_moving_eta_penalty=1.2,
+    ),
+    "p2_moving_short_bonus4_eta16": from_base(
+        REGULAR_CONFIG,
+        enable_static_moving_target_score=True,
+        target_score_static_bonus=0.0,
+        target_score_moving_bonus=4.0,
+        target_score_moving_max_eta=16,
+        target_score_moving_eta_penalty=1.4,
+    ),
+    "p2_moving_short_bonus6_eta20": from_base(
+        REGULAR_CONFIG,
+        enable_static_moving_target_score=True,
+        target_score_static_bonus=0.0,
+        target_score_moving_bonus=6.0,
+        target_score_moving_max_eta=20,
+        target_score_moving_eta_penalty=1.0,
+    ),
+    "p2_moving_short_bonus10_eta16_static2": from_base(
+        REGULAR_CONFIG,
+        enable_static_moving_target_score=True,
+        target_score_static_bonus=2.0,
+        target_score_moving_bonus=10.0,
+        target_score_moving_max_eta=16,
+        target_score_moving_eta_penalty=1.5,
     ),
 }

@@ -285,6 +285,11 @@ class PublicRuleAgent:
     holdability_enemy_ship_weight: float = PUBLIC_EXACT.holdability_enemy_ship_weight
     holdability_own_prod_weight: float = PUBLIC_EXACT.holdability_own_prod_weight
     holdability_own_ship_weight: float = PUBLIC_EXACT.holdability_own_ship_weight
+    enable_static_moving_target_score: bool = PUBLIC_EXACT.enable_static_moving_target_score
+    target_score_static_bonus: float = PUBLIC_EXACT.target_score_static_bonus
+    target_score_moving_bonus: float = PUBLIC_EXACT.target_score_moving_bonus
+    target_score_moving_max_eta: int = PUBLIC_EXACT.target_score_moving_max_eta
+    target_score_moving_eta_penalty: float = PUBLIC_EXACT.target_score_moving_eta_penalty
     enable_early_neutral_bias: bool = PUBLIC_EXACT.enable_early_neutral_bias
     early_neutral_min_active_players: int = PUBLIC_EXACT.early_neutral_min_active_players
     early_neutral_max_active_players: int = PUBLIC_EXACT.early_neutral_max_active_players
@@ -568,6 +573,18 @@ class PublicRuleAgent:
     activation_target_connector_bonus: float = PUBLIC_EXACT.activation_target_connector_bonus
     activation_static_target_bonus: float = PUBLIC_EXACT.activation_static_target_bonus
     activation_moving_target_bonus: float = PUBLIC_EXACT.activation_moving_target_bonus
+    activation_map_min_low_adv_min: float = PUBLIC_EXACT.activation_map_min_low_adv_min
+    activation_map_close_home_dist: float = PUBLIC_EXACT.activation_map_close_home_dist
+    activation_map_block_close_low_radius: float = PUBLIC_EXACT.activation_map_block_close_low_radius
+    activation_map_min_all_nearest_enemy: float = PUBLIC_EXACT.activation_map_min_all_nearest_enemy
+    activation_map_max_p5_enemy_front_prod: float = PUBLIC_EXACT.activation_map_max_p5_enemy_front_prod
+    activation_map_p4_close_radius: float = PUBLIC_EXACT.activation_map_p4_close_radius
+    activation_map_p4_far_min_low_adv: float = PUBLIC_EXACT.activation_map_p4_far_min_low_adv
+    activation_map_min_high_count: int = PUBLIC_EXACT.activation_map_min_high_count
+    activation_map_max_p5_front_count: int = PUBLIC_EXACT.activation_map_max_p5_front_count
+    activation_map_min_all_nearest_own: float = PUBLIC_EXACT.activation_map_min_all_nearest_own
+    activation_map_high_far_radius: float = PUBLIC_EXACT.activation_map_high_far_radius
+    activation_map_high_far_min_p4_enemy_dist: float = PUBLIC_EXACT.activation_map_high_far_min_p4_enemy_dist
     activation_max_eta: int = PUBLIC_EXACT.activation_max_eta
     activation_candidate_limit: int = PUBLIC_EXACT.activation_candidate_limit
     activation_max_attacks_per_turn: int = PUBLIC_EXACT.activation_max_attacks_per_turn
@@ -2994,6 +3011,97 @@ class PublicRuleAgent:
                         recent_losses += 1
             if recent_losses > self.activation_max_recent_highprod_losses:
                 return False
+        if not self._activation_initial_map_allowed(local):
+            return False
+        return True
+
+    def _activation_initial_map_allowed(self, local: LocalObs) -> bool:
+        if (
+            self.activation_map_min_low_adv_min <= -900.0
+            and self.activation_map_close_home_dist <= 0
+            and self.activation_map_block_close_low_radius <= 0
+            and self.activation_map_min_all_nearest_enemy <= 0
+            and self.activation_map_max_p5_enemy_front_prod >= 900.0
+            and self.activation_map_p4_close_radius <= 0
+            and self.activation_map_p4_far_min_low_adv <= -900.0
+            and self.activation_map_min_high_count <= 0
+            and self.activation_map_max_p5_front_count >= 900
+            and self.activation_map_min_all_nearest_own <= 0
+            and self.activation_map_high_far_radius <= 0
+            and self.activation_map_high_far_min_p4_enemy_dist <= 0
+        ):
+            return True
+        own_homes = [planet for planet in local.initial_planets if planet.owner == local.player]
+        enemy_homes = [planet for planet in local.initial_planets if planet.owner not in (-1, local.player)]
+        low_neutrals = [planet for planet in local.initial_planets if planet.owner == -1 and planet.production <= 2.0]
+        all_neutrals = [planet for planet in local.initial_planets if planet.owner == -1]
+        high_neutrals = [planet for planet in all_neutrals if planet.production >= 3.0]
+        p4_neutrals = [planet for planet in all_neutrals if planet.production >= 4.0]
+        p5_neutrals = [planet for planet in all_neutrals if planet.production >= 5.0]
+        if not own_homes or not enemy_homes:
+            return True
+        home_enemy_dist = min(distance(own, enemy) for own in own_homes for enemy in enemy_homes)
+        if low_neutrals:
+            low_adv_min = min(
+                min(distance(low, enemy) for enemy in enemy_homes) - min(distance(low, own) for own in own_homes)
+                for low in low_neutrals
+            )
+            low_nearest_own = min(min(distance(low, own) for own in own_homes) for low in low_neutrals)
+        else:
+            low_adv_min = 999.0
+            low_nearest_own = 999.0
+        all_nearest_enemy = min((min(distance(planet, enemy) for enemy in enemy_homes) for planet in all_neutrals), default=999.0)
+        all_nearest_own = min((min(distance(planet, own) for own in own_homes) for planet in all_neutrals), default=999.0)
+        high_nearest_own = min((min(distance(planet, own) for own in own_homes) for planet in high_neutrals), default=999.0)
+        p4_nearest_enemy = min((min(distance(planet, enemy) for enemy in enemy_homes) for planet in p4_neutrals), default=999.0)
+        p4_nearest_own = min((min(distance(planet, own) for own in own_homes) for planet in p4_neutrals), default=999.0)
+        p5_enemy_front_prod = sum(
+            planet.production
+            for planet in p5_neutrals
+            if min(distance(planet, enemy) for enemy in enemy_homes) <= 45.0
+            and abs(
+                min(distance(planet, enemy) for enemy in enemy_homes)
+                - min(distance(planet, own) for own in own_homes)
+            )
+            <= 20.0
+        )
+        p5_front_count = sum(
+            1
+            for planet in p5_neutrals
+            if min(distance(planet, own) for own in own_homes) <= 60.0
+            and min(distance(planet, enemy) for enemy in enemy_homes) <= 60.0
+        )
+        if low_adv_min < self.activation_map_min_low_adv_min:
+            return False
+        if len(high_neutrals) < self.activation_map_min_high_count:
+            return False
+        if p5_front_count > self.activation_map_max_p5_front_count:
+            return False
+        if all_nearest_own < self.activation_map_min_all_nearest_own:
+            return False
+        if (
+            self.activation_map_high_far_radius > 0
+            and high_nearest_own > self.activation_map_high_far_radius
+            and p4_nearest_enemy < self.activation_map_high_far_min_p4_enemy_dist
+        ):
+            return False
+        if all_nearest_enemy < self.activation_map_min_all_nearest_enemy:
+            return False
+        if p5_enemy_front_prod > self.activation_map_max_p5_enemy_front_prod:
+            return False
+        if (
+            self.activation_map_p4_close_radius > 0
+            and p4_nearest_own > self.activation_map_p4_close_radius
+            and low_adv_min < self.activation_map_p4_far_min_low_adv
+        ):
+            return False
+        if (
+            self.activation_map_close_home_dist > 0
+            and self.activation_map_block_close_low_radius > 0
+            and home_enemy_dist <= self.activation_map_close_home_dist
+            and low_nearest_own <= self.activation_map_block_close_low_radius
+        ):
+            return False
         return True
 
     def _activation_attack_target_bonus(self, source: Planet, target: Planet, local: LocalObs) -> float:
@@ -4419,6 +4527,7 @@ class PublicRuleAgent:
         score -= self._contested_stop_loss_penalty(target, local)
         score += self._third_party_tail_capture_score(source, target, local)
         score += self._multiplayer_diplomacy_score(source, target, local)
+        score += self._static_moving_target_score(source, target, local)
         if not self.enable_holdability_target_score:
             return score
 
@@ -4451,6 +4560,18 @@ class PublicRuleAgent:
         if self._early_neutral_allowed(source, target, local) and self.early_neutral_holdability_relief < 1.0:
             risk *= max(0.0, self.early_neutral_holdability_relief)
         return score - risk * self.holdability_weight
+
+    def _static_moving_target_score(self, source: Planet, target: Planet, local: LocalObs) -> float:
+        if not self.enable_static_moving_target_score:
+            return 0.0
+        if target.id not in self.moving_planets:
+            return self.target_score_static_bonus
+        score = self.target_score_moving_bonus
+        if self.target_score_moving_eta_penalty > 0 or self.target_score_moving_max_eta < 999:
+            eta = self._estimate_arrival_for_requirement(source, target, max(1, self.min_ships_mine_attack), local)
+            if eta > self.target_score_moving_max_eta:
+                score -= self.target_score_moving_eta_penalty * (eta - self.target_score_moving_max_eta)
+        return score
 
     def _enemy_high_prod_pressure_score(self, source: Planet, target: Planet, local: LocalObs) -> float:
         if not self.enable_enemy_high_prod_pressure:
