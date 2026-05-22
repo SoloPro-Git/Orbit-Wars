@@ -717,6 +717,21 @@ def main() -> None:
             ),
             flush=True,
         )
+        if target_fresh_episodes > 0 and collected_episodes < target_fresh_episodes:
+            print(
+                json.dumps(
+                    {
+                        "event": "collect_incomplete_retry",
+                        "update": update,
+                        "episodes": collected_episodes,
+                        "fresh_episodes_target": target_fresh_episodes,
+                        "reason": "not enough rollout episodes after worker failures",
+                    },
+                    ensure_ascii=False,
+                ),
+                flush=True,
+            )
+            continue
 
         buffer = RolloutBuffer()
         worker_metrics = []
