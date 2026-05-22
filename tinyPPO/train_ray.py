@@ -178,6 +178,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--eval-workers", type=int, default=3)
     parser.add_argument("--gpus-per-eval-worker", type=float, default=1.0 / 3.0)
     parser.add_argument("--eval-gpu-ids", default="", help="Comma list forced inside eval actors, e.g. '0'. Use with --gpus-per-eval-worker 0 to keep eval on a GPU excluded from rollout Ray resources.")
+    parser.add_argument("--eval-progress-every", type=int, default=5, help="Print eval worker progress every N games per matchup. 0 disables progress logs.")
     parser.add_argument("--eval-node-ip", default="", help="Pin async eval actors to this Ray node IP. Defaults to the driver node.")
     parser.add_argument("--cpus-per-eval-worker", type=float, default=1.0)
     parser.add_argument("--stop-eval-confirmations", type=int, default=2)
@@ -336,14 +337,18 @@ def main() -> None:
             use_numba: bool,
             max_actions_per_source: int,
             eval_gpu_ids: str = "",
+            worker_index: int = 0,
             launch_bias: float = 0.0,
             ship_bias: float = 0.0,
             launch_temperature: float = 1.0,
             deterministic: bool = True,
         ):
             torch.set_num_threads(1)
+            self.worker_index = int(worker_index)
             if eval_gpu_ids:
-                os.environ["CUDA_VISIBLE_DEVICES"] = str(eval_gpu_ids)
+                gpu_ids = [item.strip() for item in str(eval_gpu_ids).split(",") if item.strip()]
+                if gpu_ids:
+                    os.environ["CUDA_VISIBLE_DEVICES"] = gpu_ids[self.worker_index % len(gpu_ids)]
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             self.model = TinyPolicyValueNet(**model_cfg).to(self.device)
             self.episode_steps = episode_steps
@@ -371,7 +376,7 @@ def main() -> None:
             )
             return actions
 
-        def _run_matchups(self, opponent_name: str, games: int, seed: int) -> dict[str, float]:
+        def _run_matchups(self, update: int, label: str, opponent_name: str, games: int, seed: int, progress_every: int) -> dict[str, float]:
             opponent = random_policy_agent if opponent_name == "random" else nearest_planet_agent
             wins = losses = draws = 0
             reward_sum = 0.0
@@ -396,6 +401,24 @@ def main() -> None:
                     reward_sum -= 1.0
                 else:
                     draws += 1
+                if progress_every > 0 and ((i + 1) % progress_every == 0 or i + 1 == games):
+                    print(
+                        json.dumps(
+                            {
+                                "event": "eval_progress",
+                                "update": update,
+                                "worker": self.worker_index,
+                                "label": label,
+                                "done": i + 1,
+                                "total": games,
+                                "wins": wins,
+                                "losses": losses,
+                                "draws": draws,
+                            },
+                            ensure_ascii=False,
+                        ),
+                        flush=True,
+                    )
             return {
                 "games": float(games),
                 "wins": float(wins),
@@ -406,21 +429,32 @@ def main() -> None:
                 "mean_reward": reward_sum / max(1, games),
             }
 
-        def evaluate(self, state_dict: dict[str, torch.Tensor], update: int, games: int, seed: int, stochastic_compare: bool = False) -> dict:
+        def evaluate(self, state_dict: dict[str, torch.Tensor], update: int, games: int, seed: int, stochastic_compare: bool = False, progress_every: int = 5) -> dict:
             self.set_weights(state_dict)
+            print(
+                json.dumps(
+                    {"event": "eval_worker_start", "update": update, "worker": self.worker_index, "games": games, "stochastic_compare": bool(stochastic_compare)},
+                    ensure_ascii=False,
+                ),
+                flush=True,
+            )
             summary = {
                 "update": update,
-                "eval_vs_random": self._run_matchups("random", games, seed),
-                "eval_vs_nearest": self._run_matchups("nearest", games, seed + 100_000),
+                "eval_vs_random": self._run_matchups(update, "eval_vs_random", "random", games, seed, progress_every),
+                "eval_vs_nearest": self._run_matchups(update, "eval_vs_nearest", "nearest", games, seed + 100_000, progress_every),
             }
             if stochastic_compare:
                 previous = self.deterministic
                 self.deterministic = False
                 try:
-                    summary["eval_stochastic_vs_random"] = self._run_matchups("random", games, seed + 200_000)
-                    summary["eval_stochastic_vs_nearest"] = self._run_matchups("nearest", games, seed + 300_000)
+                    summary["eval_stochastic_vs_random"] = self._run_matchups(update, "eval_stochastic_vs_random", "random", games, seed + 200_000, progress_every)
+                    summary["eval_stochastic_vs_nearest"] = self._run_matchups(update, "eval_stochastic_vs_nearest", "nearest", games, seed + 300_000, progress_every)
                 finally:
                     self.deterministic = previous
+            print(
+                json.dumps({"event": "eval_worker_done", "update": update, "worker": self.worker_index, "games": games}, ensure_ascii=False),
+                flush=True,
+            )
             return summary
 
     set_seed(args.seed)
@@ -471,25 +505,14 @@ def main() -> None:
             args.episode_steps,
             not args.no_numba,
             args.max_actions_per_source_safety,
-            "",
-            eval_launch_bias,
-            eval_ship_bias,
-            args.eval_launch_temperature,
-            not args.eval_stochastic,
-        )
-        if not args.eval_gpu_ids
-        else EvalWorker.options(**eval_actor_options).remote(
-            model_cfg,
-            args.episode_steps,
-            not args.no_numba,
-            args.max_actions_per_source_safety,
             args.eval_gpu_ids,
+            i,
             eval_launch_bias,
             eval_ship_bias,
             args.eval_launch_temperature,
             not args.eval_stochastic,
         )
-        for _ in range(max(1, args.eval_workers))
+        for i in range(max(1, args.eval_workers))
     ]
     print(
         json.dumps(
@@ -507,6 +530,8 @@ def main() -> None:
                 "eval_launch_temperature": args.eval_launch_temperature,
                 "eval_stochastic": args.eval_stochastic,
                 "eval_stochastic_compare": args.eval_stochastic_compare,
+                "eval_gpu_ids": args.eval_gpu_ids,
+                "eval_progress_every": args.eval_progress_every,
                 "collect_overassign_factor": args.collect_overassign_factor,
             },
             ensure_ascii=False,
@@ -793,12 +818,13 @@ def main() -> None:
                     not args.no_numba,
                     args.max_actions_per_source_safety,
                     args.eval_gpu_ids,
+                    0,
                     eval_launch_bias,
                     eval_ship_bias,
                     args.eval_launch_temperature,
                     not args.eval_stochastic,
                 )
-                part = ray.get(temp_worker.evaluate.remote(eval_state_ref, update, args.eval_games, args.seed + 300_000 + update * 1_000, args.eval_stochastic_compare))
+                part = ray.get(temp_worker.evaluate.remote(eval_state_ref, update, args.eval_games, args.seed + 300_000 + update * 1_000, args.eval_stochastic_compare, args.eval_progress_every))
                 merged_eval = _merge_eval_parts([part])
                 summary.update(merged_eval)
                 top_manifest = update_top_checkpoints(out_dir, eval_state, model_cfg, update, {"async_eval_update": update, **merged_eval}, args.top_k_checkpoints)
@@ -828,6 +854,7 @@ def main() -> None:
                             shard_games,
                             args.seed + 300_000 + update * 10_000 + i * 1_000,
                             args.eval_stochastic_compare,
+                            args.eval_progress_every,
                         )
                     )
                 for ref in parts:
