@@ -12,7 +12,8 @@ from tinyPPO.features import MAX_PLANETS, encode_obs
 from tinyPPO.model import TinyPolicyValueNet
 
 SHIP_FRACTIONS = (0.20, 0.35, 0.50, 0.75)
-MAX_ACTIONS_PER_SOURCE_SAFETY = 64
+ACTION_SLOTS = 3
+MAX_ACTIONS_PER_SOURCE_SAFETY = ACTION_SLOTS
 
 
 def _planet_dict(obs: dict[str, Any]) -> dict[int, list]:
@@ -101,18 +102,17 @@ class TinyPPOAgent:
         target_slots: list[int] = []
         ship_slots: list[int] = []
         for src in own_slots.tolist():
-            for _ in range(MAX_ACTIONS_PER_SOURCE_SAFETY):
+            for slot in range(min(source_logits.size(1), MAX_ACTIONS_PER_SOURCE_SAFETY)):
                 if self.deterministic:
-                    launch = int(torch.argmax(source_logits[src]).item())
-                    tgt = int(torch.argmax(target_logits[src]).item())
-                    ship = int(torch.argmax(ship_logits[src, tgt]).item())
+                    launch = int(torch.argmax(source_logits[src, slot]).item())
+                    tgt = int(torch.argmax(target_logits[src, slot]).item())
+                    ship = int(torch.argmax(ship_logits[src, slot, tgt]).item())
                 else:
-                    launch = int(torch.distributions.Categorical(logits=source_logits[src]).sample().item())
-                    tgt = int(torch.distributions.Categorical(logits=target_logits[src]).sample().item())
-                    ship = int(torch.distributions.Categorical(logits=ship_logits[src, tgt]).sample().item())
-                if launch != 1:
-                    break
-                source_slots.append(src)
-                target_slots.append(tgt)
-                ship_slots.append(ship)
+                    launch = int(torch.distributions.Categorical(logits=source_logits[src, slot]).sample().item())
+                    tgt = int(torch.distributions.Categorical(logits=target_logits[src, slot]).sample().item())
+                    ship = int(torch.distributions.Categorical(logits=ship_logits[src, slot, tgt]).sample().item())
+                if launch == 1:
+                    source_slots.append(src)
+                    target_slots.append(tgt)
+                    ship_slots.append(ship)
         return actions_from_decisions(obs, player, np.array(source_slots), np.array(target_slots), np.array(ship_slots))

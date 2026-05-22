@@ -57,20 +57,15 @@ def action_log_prob_entropy(
     launch_mask: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     action_count = launch_actions.size(-1)
-    source_logits = out["source_logits"][:, :, None, :].expand(-1, -1, action_count, -1)
-    target_logits = out["target_logits"][:, :, None, :].expand(-1, -1, action_count, -1)
-    source_dist = torch.distributions.Categorical(logits=source_logits)
-    target_dist = torch.distributions.Categorical(logits=target_logits)
+    source_dist = torch.distributions.Categorical(logits=out["source_logits"])
+    target_dist = torch.distributions.Categorical(logits=out["target_logits"])
     ship_logits = out["ship_logits"]
-    ship_logits = ship_logits[:, :, None, :, :].expand(-1, -1, action_count, -1, -1)
     gather_idx = target_actions[:, :, :, None, None].expand(-1, -1, -1, 1, ship_logits.size(-1))
     chosen_ship_logits = ship_logits.gather(dim=3, index=gather_idx).squeeze(3)
     ship_dist = torch.distributions.Categorical(logits=chosen_ship_logits)
 
     own_slot_mask = own_mask[:, :, None]
-    action_idx = torch.arange(action_count, device=launch_actions.device)[None, None, :]
-    launch_counts = launch_mask.long().sum(dim=-1, keepdim=True)
-    decision_mask = (action_idx <= launch_counts).logical_and(own_slot_mask)
+    decision_mask = own_slot_mask.expand(-1, -1, action_count)
     source_lp = source_dist.log_prob(launch_actions).masked_fill(~decision_mask, 0.0).sum(dim=(1, 2))
     target_lp = target_dist.log_prob(target_actions).masked_fill(~launch_mask, 0.0).sum(dim=1)
     target_lp = target_lp.sum(dim=1)

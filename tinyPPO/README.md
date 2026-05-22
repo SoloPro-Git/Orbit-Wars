@@ -7,9 +7,13 @@ Design choices:
 - Uses `training2.make_fast_orbit_wars(..., use_numba=True)` for rollout and smoke checks.
 - Starts with 2P only and sparse terminal reward `+1/-1`.
 - The model never outputs an angle. It builds every source-target pair from map coordinates, scores target choices on those edges, and predicts ship-fraction buckets conditioned on the selected edge. The agent computes the actual firing angle from source and target coordinates.
-- Each owned source planet uses an autoregressive launch loop: continue/stop, target, ship bucket, repeat until stop or no ships remain. A source can launch multiple fleets in the same turn. The decoder tracks remaining ships per source planet and clips/skips launches so the total ships launched from one planet never exceeds its current garrison. `--max-actions-per-source-safety` is only a dead-loop guard for training/inference, not a fixed slot head in the model.
+- Each owned source planet has a small fixed number of launch slots
+  (`--action-slots`, default 3). A source can launch multiple fleets in the same
+  turn, but at most three. The decoder tracks remaining ships per source planet
+  and clips/skips launches so the total ships launched from one planet never
+  exceeds its current garrison.
 - Source planets are represented by current board coordinates, not just planet IDs. `from_planet_id` is only used after the geometric action is decoded for the simulator.
-- The architecture is not a copy of the older Transformer policy. It is a small geometry-first actor critic: planet MLP, pairwise source-target edge MLP, per-source continue/stop head, per-edge target head, per-edge ship bucket head, and a pooled value head.
+- The architecture is not a copy of the older Transformer policy. It is a small geometry-first actor critic: planet MLP, pairwise source-target edge MLP, per-source-slot launch head, per-source-slot target head, per-source-slot ship bucket head, and a pooled value head.
 - `nearest_planet_agent` is eval-only. It is not sampled during training.
 
 Quick smoke:

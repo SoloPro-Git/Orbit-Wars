@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from tinyPPO.agents import MAX_ACTIONS_PER_SOURCE_SAFETY, SHIP_FRACTIONS, nearest_planet_agent, random_policy_agent
+from tinyPPO.agents import ACTION_SLOTS, MAX_ACTIONS_PER_SOURCE_SAFETY, SHIP_FRACTIONS, nearest_planet_agent, random_policy_agent
 from tinyPPO.features import score
 from tinyPPO.model import TinyPolicyValueNet
 from tinyPPO.ppo import PPOConfig, PPOUpdater, RolloutBuffer
@@ -95,6 +95,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hidden", type=int, default=64)
     parser.add_argument("--heads", type=int, default=4)
     parser.add_argument("--layers", type=int, default=1)
+    parser.add_argument("--action-slots", type=int, default=ACTION_SLOTS)
     parser.add_argument("--max-actions-per-source-safety", type=int, default=MAX_ACTIONS_PER_SOURCE_SAFETY)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--entropy-coef", type=float, default=0.02)
@@ -272,7 +273,7 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     log_path = out_dir / "train_log.jsonl"
     swan = init_swanlab_or_none(args, "ray")
-    model_cfg = {"hidden": args.hidden, "heads": args.heads, "layers": args.layers, "ship_buckets": len(SHIP_FRACTIONS)}
+    model_cfg = {"hidden": args.hidden, "heads": args.heads, "layers": args.layers, "ship_buckets": len(SHIP_FRACTIONS), "action_slots": args.action_slots}
     learner_device = torch.device(args.learner_device)
     model = TinyPolicyValueNet(**model_cfg).to(learner_device)
     updater = PPOUpdater(model, PPOConfig(learning_rate=args.lr, entropy_coef=args.entropy_coef), device=str(learner_device))
