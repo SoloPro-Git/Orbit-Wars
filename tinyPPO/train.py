@@ -13,7 +13,17 @@ import torch
 
 from training2 import make_fast_orbit_wars
 
-from tinyPPO.agents import ACTION_SLOTS, MAX_ACTIONS_PER_SOURCE_SAFETY, TinyPPOAgent, actions_from_decisions, apply_ship_fraction_bias, nearest_planet_agent, random_policy_agent
+from tinyPPO.agents import (
+    ACTION_SLOTS,
+    MAX_ACTIONS_PER_SOURCE_SAFETY,
+    TinyPPOAgent,
+    actions_from_decisions,
+    apply_ship_fraction_bias,
+    apply_target_safety_mask,
+    nearest_planet_agent,
+    random_policy_agent,
+    safe_target_mask,
+)
 from tinyPPO.eval import run_matchups
 from tinyPPO.features import MAX_PLANETS, encode_obs, final_result
 from tinyPPO.model import TinyPolicyValueNet
@@ -178,6 +188,8 @@ def sample_policy_action(
         source_logits[..., 1] += float(launch_bias)
     target_logits = out["target_logits"][0]
     ship_params = apply_ship_fraction_bias(out["ship_params"][0], ship_bias)
+    target_safety_mask = safe_target_mask(obs, player)
+    source_logits, target_logits = apply_target_safety_mask(source_logits, target_logits, obs, player)
 
     action_slots = min(int(getattr(model, "action_slots", ACTION_SLOTS)), int(max_actions_per_source))
     launch_actions = torch.zeros((MAX_PLANETS, action_slots), dtype=torch.long, device=device)
@@ -216,6 +228,7 @@ def sample_policy_action(
         ship_actions[None],
         batch["own_mask"],
         launch_mask[None],
+        torch.tensor(target_safety_mask[None], dtype=torch.bool, device=device),
     )
     value = out["value"][0]
     actions = actions_from_decisions(obs, player, np.asarray(source_slots), np.asarray(target_slots), np.asarray(ship_slots))
@@ -231,6 +244,7 @@ def sample_policy_action(
         "target_actions": target_actions.cpu().numpy(),
         "ship_actions": ship_actions.cpu().numpy(),
         "launch_mask": launch_mask.cpu().numpy(),
+        "target_safety_mask": target_safety_mask,
         "logprob": float(logprob.item()),
         "value": float(value.item()),
         "reward": 0.0,

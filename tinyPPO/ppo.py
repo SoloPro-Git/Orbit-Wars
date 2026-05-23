@@ -57,10 +57,20 @@ def action_log_prob_entropy(
     ship_actions: torch.Tensor,
     own_mask: torch.Tensor,
     launch_mask: torch.Tensor,
+    target_safety_mask: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     action_count = launch_actions.size(-1)
-    source_dist = torch.distributions.Categorical(logits=out["source_logits"])
-    target_dist = torch.distributions.Categorical(logits=out["target_logits"])
+    source_logits = out["source_logits"]
+    target_logits = out["target_logits"]
+    if target_safety_mask is not None:
+        safe_sources = target_safety_mask.any(dim=-1)
+        target_logits = target_logits.clone().masked_fill(~target_safety_mask[:, :, None, :], -1e9)
+        if (~safe_sources).any():
+            target_logits[~safe_sources] = out["target_logits"][~safe_sources]
+            source_logits = source_logits.clone()
+            source_logits[~safe_sources, :, 1] = -1e9
+    source_dist = torch.distributions.Categorical(logits=source_logits)
+    target_dist = torch.distributions.Categorical(logits=target_logits)
     ship_params = out["ship_params"]
     gather_idx = target_actions[:, :, :, None, None].expand(-1, -1, -1, 1, ship_params.size(-1))
     chosen_ship_params = ship_params.gather(dim=3, index=gather_idx).squeeze(3)
@@ -108,6 +118,16 @@ class PPOUpdater:
             "target_actions": torch.tensor(np.stack([r["target_actions"] for r in buffer.rows]), dtype=torch.long, device=self.device),
             "ship_actions": torch.tensor(np.stack([r["ship_actions"] for r in buffer.rows]), dtype=torch.float32, device=self.device),
             "launch_mask": torch.tensor(np.stack([r["launch_mask"] for r in buffer.rows]), dtype=torch.bool, device=self.device),
+            "target_safety_mask": torch.tensor(
+                np.stack(
+                    [
+                        r.get("target_safety_mask", np.ones((r["planet_mask"].shape[0], r["planet_mask"].shape[0]), dtype=np.bool_))
+                        for r in buffer.rows
+                    ]
+                ),
+                dtype=torch.bool,
+                device=self.device,
+            ),
             "old_logprob": torch.tensor([r["logprob"] for r in buffer.rows], dtype=torch.float32, device=self.device),
             "advantages": torch.tensor(adv, dtype=torch.float32, device=self.device),
             "returns": torch.tensor(returns, dtype=torch.float32, device=self.device),
@@ -141,6 +161,7 @@ class PPOUpdater:
                     tensors["ship_actions"][idx],
                     tensors["own_mask"][idx],
                     tensors["launch_mask"][idx],
+                    tensors["target_safety_mask"][idx],
                 )
                 logratio = new_logprob - tensors["old_logprob"][idx]
                 ratio = logratio.exp()
