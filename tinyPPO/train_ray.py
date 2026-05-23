@@ -119,8 +119,9 @@ def save_opponent_refresh(
     model_cfg: dict,
     eval_update: int,
     metrics: dict,
+    reason_key: str = "opponent_refreshed_from_eval_update",
 ) -> tuple[Path, Path]:
-    payload_metrics = {"opponent_refreshed_from_eval_update": eval_update, **metrics}
+    payload_metrics = {reason_key: eval_update, **metrics}
     current_path = out_dir / "opponent.pt"
     history_path = out_dir / "opponent_history" / f"opponent_u{eval_update:06d}.pt"
     save_checkpoint_state(current_path, state_dict, model_cfg, eval_update, payload_metrics)
@@ -826,12 +827,13 @@ def main() -> None:
                     if promote_winrate >= args.promote_opponent_threshold:
                         latest_opponent_state = best_state
                         phase = "latest"
-                        save_checkpoint_state(
-                            out_dir / "opponent.pt",
+                        current_path, history_path = save_opponent_refresh(
+                            out_dir,
                             latest_opponent_state,
                             model_cfg,
                             eval_update,
                             {"promoted_from_eval_update": eval_update, **merged_eval},
+                            reason_key="promoted_from_eval_update",
                         )
                         print(
                             json.dumps(
@@ -842,7 +844,8 @@ def main() -> None:
                                     "metric": args.promote_opponent_metric,
                                     "winrate": promote_winrate,
                                     "threshold": args.promote_opponent_threshold,
-                                    "path": str(out_dir / "opponent.pt"),
+                                    "path": str(current_path),
+                                    "history_path": str(history_path),
                                 },
                                 ensure_ascii=False,
                             ),
@@ -1153,12 +1156,13 @@ def main() -> None:
                     if promote_winrate >= args.promote_opponent_threshold:
                         latest_opponent_state = eval_state
                         phase = "latest"
-                        save_checkpoint_state(
-                            out_dir / "opponent.pt",
+                        current_path, history_path = save_opponent_refresh(
+                            out_dir,
                             latest_opponent_state,
                             model_cfg,
                             update,
                             {"promoted_from_eval_update": update, **merged_eval},
+                            reason_key="promoted_from_eval_update",
                         )
                         print(
                             json.dumps(
@@ -1169,7 +1173,8 @@ def main() -> None:
                                     "metric": args.promote_opponent_metric,
                                     "winrate": promote_winrate,
                                     "threshold": args.promote_opponent_threshold,
-                                    "path": str(out_dir / "opponent.pt"),
+                                    "path": str(current_path),
+                                    "history_path": str(history_path),
                                 },
                                 ensure_ascii=False,
                             ),
