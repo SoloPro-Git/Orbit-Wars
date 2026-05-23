@@ -170,7 +170,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--learner-device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--torch-threads", type=int, default=1)
     parser.add_argument("--seed", type=int, default=20260522)
-    parser.add_argument("--updates", type=int, default=200)
+    parser.add_argument("--updates", type=int, default=100000)
     parser.add_argument("--episodes-per-worker", type=int, default=2, help="Maximum episodes assigned to one rollout worker in one update.")
     parser.add_argument("--episodes-per-update", type=int, default=42, help="Fixed fresh rollout episodes per PPO update. 0 restores num_workers * episodes_per_worker.")
     parser.add_argument("--collect-overassign-factor", type=float, default=1.0, help="Assign extra rollout capacity and stop after episodes-per-update to avoid stragglers.")
@@ -184,7 +184,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--opponent-checkpoint", default="", help="Optional frozen checkpoint used as the latest/self-play opponent seed.")
     parser.add_argument("--freeze-latest-opponent", action="store_true", help="Do not refresh the latest opponent every update; update it only through promotion/manual checkpoint load.")
     parser.add_argument("--promote-opponent-on-eval", action="store_true", help="Promote the evaluated model to frozen opponent when the configured opponent eval metric passes threshold.")
-    parser.add_argument("--promote-opponent-threshold", type=float, default=0.70)
+    parser.add_argument("--promote-opponent-threshold", type=float, default=0.80)
     parser.add_argument(
         "--promote-opponent-metric",
         choices=["eval_stochastic_vs_opponent", "eval_vs_opponent"],
@@ -211,7 +211,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--eval-node-ip", default="", help="Pin async eval actors to this Ray node IP. Defaults to the driver node.")
     parser.add_argument("--cpus-per-eval-worker", type=float, default=1.0)
     parser.add_argument("--stop-eval-confirmations", type=int, default=2)
-    parser.add_argument("--stop-winrate", type=float, default=0.55)
+    parser.add_argument(
+        "--stop-metric",
+        choices=[
+            "eval_vs_random",
+            "eval_vs_nearest",
+            "eval_vs_regular",
+            "eval_vs_opponent",
+            "eval_stochastic_vs_random",
+            "eval_stochastic_vs_nearest",
+            "eval_stochastic_vs_regular",
+            "eval_stochastic_vs_opponent",
+        ],
+        default="eval_stochastic_vs_regular",
+    )
+    parser.add_argument("--stop-winrate", type=float, default=0.70)
     parser.add_argument("--top-k-checkpoints", type=int, default=5, help="Keep this many eval-ranked checkpoints under best_top/.")
     parser.add_argument("--hidden", type=int, default=64)
     parser.add_argument("--heads", type=int, default=4)
@@ -269,7 +283,10 @@ def rollout_assignments(
 def main() -> None:
     args = build_arg_parser().parse_args()
     args.opponent_refresh_interval = max(1, int(args.opponent_refresh_interval))
-    if args.promote_opponent_on_eval and args.promote_opponent_metric.startswith("eval_stochastic") and not args.eval_stochastic_compare:
+    if (
+        (args.promote_opponent_on_eval and args.promote_opponent_metric.startswith("eval_stochastic"))
+        or args.stop_metric.startswith("eval_stochastic")
+    ) and not args.eval_stochastic_compare:
         args.eval_stochastic_compare = True
     if args.torch_threads > 0:
         torch.set_num_threads(args.torch_threads)
@@ -725,7 +742,7 @@ def main() -> None:
     eval_parts: dict[int, list[dict]] = {}
     eval_expected_parts: dict[int, int] = {}
     eval_completion_count = 0
-    nearest_stop_streak = 0
+    stop_metric_streak = 0
     stop_after_update: int | None = None
     for update in range(start_update, args.updates + 1):
         ready_refs = []
@@ -846,16 +863,30 @@ def main() -> None:
                             ),
                             flush=True,
                         )
-                if merged_eval["eval_vs_nearest"]["winrate"] >= args.stop_winrate:
-                    nearest_stop_streak += 1
+                stop_metric = merged_eval.get(args.stop_metric, {})
+                stop_winrate = float(stop_metric.get("winrate", -1.0)) if isinstance(stop_metric, dict) else -1.0
+                if stop_winrate >= args.stop_winrate:
+                    stop_metric_streak += 1
                 else:
-                    nearest_stop_streak = 0
-                if nearest_stop_streak >= args.stop_eval_confirmations:
+                    stop_metric_streak = 0
+                if stop_metric_streak >= args.stop_eval_confirmations:
                     stop_after_update = update
                 pending_eval_states.pop(eval_update, None)
 
         if stop_after_update is not None:
-            print(json.dumps({"event": "stop_confirmed", "update": update, "confirmations": nearest_stop_streak}, ensure_ascii=False), flush=True)
+            print(
+                json.dumps(
+                    {
+                        "event": "stop_confirmed",
+                        "update": update,
+                        "metric": args.stop_metric,
+                        "threshold": args.stop_winrate,
+                        "confirmations": stop_metric_streak,
+                    },
+                    ensure_ascii=False,
+                ),
+                flush=True,
+            )
             break
 
         target_fresh_episodes = int(sum(episodes for _wid, episodes in rollout_assignments(num_workers, args.episodes_per_worker, args.episodes_per_update, update, 1.0)))
@@ -1159,6 +1190,14 @@ def main() -> None:
                             ),
                             flush=True,
                         )
+                stop_metric = merged_eval.get(args.stop_metric, {})
+                stop_winrate = float(stop_metric.get("winrate", -1.0)) if isinstance(stop_metric, dict) else -1.0
+                if stop_winrate >= args.stop_winrate:
+                    stop_metric_streak += 1
+                else:
+                    stop_metric_streak = 0
+                if stop_metric_streak >= args.stop_eval_confirmations:
+                    stop_after_update = update
                 print(
                     json.dumps(
                         {"event": "top_checkpoints_updated", "update": update, "top_k": len(top_manifest), "best": top_manifest[0] if top_manifest else None},

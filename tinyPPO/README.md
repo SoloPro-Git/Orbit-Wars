@@ -105,9 +105,13 @@ comparison is enabled automatically when the promotion metric needs it:
   --opponent-checkpoint tinyPPO/runs/<run>/opponent.pt \
   --freeze-latest-opponent \
   --promote-opponent-on-eval \
-  --promote-opponent-threshold 0.70 \
+  --promote-opponent-threshold 0.80 \
   --promote-opponent-metric eval_stochastic_vs_opponent
 ```
+
+By default Ray training runs for up to `100000` updates and stops only after
+`eval_stochastic_vs_regular` reaches `0.70` for the configured confirmation
+count.
 
 To instead refresh the frozen opponent on a fixed eval cadence, use:
 
