@@ -109,6 +109,16 @@ comparison is enabled automatically when the promotion metric needs it:
   --promote-opponent-metric eval_stochastic_vs_opponent
 ```
 
+To instead refresh the frozen opponent on a fixed eval cadence, use:
+
+```bash
+  --refresh-opponent-on-eval \
+  --opponent-refresh-interval 1
+```
+
+Each refresh updates `opponent.pt` and also saves the exact switch point under
+`opponent_history/opponent_uXXXXXX.pt`.
+
 To add one async eval worker on physical GPU 1 while keeping it outside Ray's
 fractional GPU accounting:
 

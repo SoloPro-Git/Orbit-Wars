@@ -113,6 +113,21 @@ def update_top_checkpoints(
     return keep
 
 
+def save_opponent_refresh(
+    out_dir: Path,
+    state_dict: dict[str, torch.Tensor],
+    model_cfg: dict,
+    eval_update: int,
+    metrics: dict,
+) -> tuple[Path, Path]:
+    payload_metrics = {"opponent_refreshed_from_eval_update": eval_update, **metrics}
+    current_path = out_dir / "opponent.pt"
+    history_path = out_dir / "opponent_history" / f"opponent_u{eval_update:06d}.pt"
+    save_checkpoint_state(current_path, state_dict, model_cfg, eval_update, payload_metrics)
+    save_checkpoint_state(history_path, state_dict, model_cfg, eval_update, payload_metrics)
+    return current_path, history_path
+
+
 def _merge_eval_parts(parts: list[dict]) -> dict[str, dict[str, float]]:
     merged: dict[str, dict[str, float]] = {}
     keys = sorted({key for part in parts for key in part if key.startswith("eval_")})
@@ -176,6 +191,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="eval_stochastic_vs_opponent",
     )
     parser.add_argument("--opponent-eval-stochastic", action="store_true", help="Use stochastic actions for the frozen opponent during vs-opponent eval.")
+    parser.add_argument("--refresh-opponent-on-eval", action="store_true", help="After eval completes, always switch the frozen/latest opponent to that evaluated checkpoint.")
+    parser.add_argument("--opponent-refresh-interval", type=int, default=1, help="Refresh opponent every N eval completions when --refresh-opponent-on-eval is set.")
     parser.add_argument("--eval-interval", type=int, default=10)
     parser.add_argument("--eval-games", type=int, default=40)
     parser.add_argument("--eval-first", action="store_true")
@@ -251,6 +268,7 @@ def rollout_assignments(
 
 def main() -> None:
     args = build_arg_parser().parse_args()
+    args.opponent_refresh_interval = max(1, int(args.opponent_refresh_interval))
     if args.promote_opponent_on_eval and args.promote_opponent_metric.startswith("eval_stochastic") and not args.eval_stochastic_compare:
         args.eval_stochastic_compare = True
     if args.torch_threads > 0:
@@ -683,6 +701,8 @@ def main() -> None:
                 "promote_opponent_threshold": args.promote_opponent_threshold,
                 "promote_opponent_metric": args.promote_opponent_metric,
                 "opponent_eval_stochastic": args.opponent_eval_stochastic,
+                "refresh_opponent_on_eval": args.refresh_opponent_on_eval,
+                "opponent_refresh_interval": args.opponent_refresh_interval,
                 "collect_overassign_factor": args.collect_overassign_factor,
             },
             ensure_ascii=False,
@@ -698,12 +718,13 @@ def main() -> None:
         if not args.start_phase:
             phase = str(resume_metrics.get("phase", phase))
     latest_opponent_state = initial_opponent_state if initial_opponent_state is not None else cpu_state_dict(model)
-    has_frozen_opponent_eval = bool(args.opponent_checkpoint or args.promote_opponent_on_eval or args.freeze_latest_opponent)
+    has_frozen_opponent_eval = bool(args.opponent_checkpoint or args.promote_opponent_on_eval or args.freeze_latest_opponent or args.refresh_opponent_on_eval)
     replay_batches: deque[tuple[int, list[dict]]] = deque(maxlen=max(0, args.replay_updates))
     pending_eval_refs: dict[object, int] = {}
     pending_eval_states: dict[int, dict[str, torch.Tensor]] = {}
     eval_parts: dict[int, list[dict]] = {}
     eval_expected_parts: dict[int, int] = {}
+    eval_completion_count = 0
     nearest_stop_streak = 0
     stop_after_update: int | None = None
     for update in range(start_update, args.updates + 1):
@@ -720,6 +741,7 @@ def main() -> None:
                 eval_summary = {"update": eval_update, **merged_eval, "phase": phase, "event": "async_eval_done"}
                 print(json.dumps(eval_summary, ensure_ascii=False), flush=True)
                 log_swanlab(swan, eval_summary, eval_update)
+                eval_completion_count += 1
                 best_state = pending_eval_states.get(eval_update)
                 best_metrics = {"async_eval_update": eval_update, **merged_eval}
                 if best_state is not None:
@@ -763,7 +785,27 @@ def main() -> None:
                     )
                 promote_metric = merged_eval.get(args.promote_opponent_metric, {})
                 promote_winrate = float(promote_metric.get("winrate", -1.0)) if isinstance(promote_metric, dict) else -1.0
-                if args.promote_opponent_on_eval and best_state is not None:
+                refresh_due = args.refresh_opponent_on_eval and eval_completion_count % args.opponent_refresh_interval == 0
+                if refresh_due and best_state is not None:
+                    latest_opponent_state = best_state
+                    phase = "latest"
+                    current_path, history_path = save_opponent_refresh(out_dir, latest_opponent_state, model_cfg, eval_update, best_metrics)
+                    print(
+                        json.dumps(
+                            {
+                                "event": "opponent_refreshed",
+                                "update": update,
+                                "eval_update": eval_update,
+                                "eval_completion": eval_completion_count,
+                                "interval": args.opponent_refresh_interval,
+                                "path": str(current_path),
+                                "history_path": str(history_path),
+                            },
+                            ensure_ascii=False,
+                        ),
+                        flush=True,
+                    )
+                elif args.promote_opponent_on_eval and best_state is not None:
                     if promote_winrate >= args.promote_opponent_threshold:
                         latest_opponent_state = best_state
                         phase = "latest"
@@ -1042,6 +1084,7 @@ def main() -> None:
                     )
                 )
                 merged_eval = _merge_eval_parts([part])
+                eval_completion_count += 1
                 summary.update(merged_eval)
                 top_manifest = update_top_checkpoints(out_dir, eval_state, model_cfg, update, {"async_eval_update": update, **merged_eval}, args.top_k_checkpoints)
                 if merged_eval["eval_vs_nearest"]["winrate"] > best_winrate:
@@ -1049,7 +1092,33 @@ def main() -> None:
                     save_checkpoint_state(out_dir / "best.pt", eval_state, model_cfg, update, {"async_eval_update": update, **merged_eval})
                 promote_metric = merged_eval.get(args.promote_opponent_metric, {})
                 promote_winrate = float(promote_metric.get("winrate", -1.0)) if isinstance(promote_metric, dict) else -1.0
-                if args.promote_opponent_on_eval:
+                refresh_due = args.refresh_opponent_on_eval and eval_completion_count % args.opponent_refresh_interval == 0
+                if refresh_due:
+                    latest_opponent_state = eval_state
+                    phase = "latest"
+                    current_path, history_path = save_opponent_refresh(
+                        out_dir,
+                        latest_opponent_state,
+                        model_cfg,
+                        update,
+                        {"async_eval_update": update, **merged_eval},
+                    )
+                    print(
+                        json.dumps(
+                            {
+                                "event": "opponent_refreshed",
+                                "update": update,
+                                "eval_update": update,
+                                "eval_completion": eval_completion_count,
+                                "interval": args.opponent_refresh_interval,
+                                "path": str(current_path),
+                                "history_path": str(history_path),
+                            },
+                            ensure_ascii=False,
+                        ),
+                        flush=True,
+                    )
+                elif args.promote_opponent_on_eval:
                     if promote_winrate >= args.promote_opponent_threshold:
                         latest_opponent_state = eval_state
                         phase = "latest"
