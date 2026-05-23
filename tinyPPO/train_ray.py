@@ -25,6 +25,7 @@ from tinyPPO.train import (
     set_seed,
 )
 from training2 import make_fast_orbit_wars
+from training2.rulebase_bridge import make_rulebase_agent
 
 
 try:
@@ -160,10 +161,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--collect-overassign-factor", type=float, default=1.0, help="Assign extra rollout capacity and stop after episodes-per-update to avoid stragglers.")
     parser.add_argument("--episode-steps", type=int, default=500)
     parser.add_argument("--opponent-mode", choices=["random", "self", "mix"], default="random")
+    parser.add_argument("--start-phase", choices=["random", "self", "mix", "latest"], default="", help="Override initial rollout phase; use latest with --opponent-checkpoint for frozen-ckpt training.")
     parser.add_argument("--curriculum", action="store_true", help="Train vs random first, then switch training opponent to latest checkpoint.")
     parser.add_argument("--random-winrate-threshold", type=float, default=0.90)
     parser.add_argument("--selfplay-entropy-coef", type=float, default=0.04)
     parser.add_argument("--latest-opponent-stochastic", action="store_true")
+    parser.add_argument("--opponent-checkpoint", default="", help="Optional frozen checkpoint used as the latest/self-play opponent seed.")
+    parser.add_argument("--freeze-latest-opponent", action="store_true", help="Do not refresh the latest opponent every update; update it only through promotion/manual checkpoint load.")
+    parser.add_argument("--promote-opponent-on-eval", action="store_true", help="Promote the evaluated model to frozen opponent when the configured opponent eval metric passes threshold.")
+    parser.add_argument("--promote-opponent-threshold", type=float, default=0.70)
+    parser.add_argument(
+        "--promote-opponent-metric",
+        choices=["eval_stochastic_vs_opponent", "eval_vs_opponent"],
+        default="eval_stochastic_vs_opponent",
+    )
+    parser.add_argument("--opponent-eval-stochastic", action="store_true", help="Use stochastic actions for the frozen opponent during vs-opponent eval.")
     parser.add_argument("--eval-interval", type=int, default=10)
     parser.add_argument("--eval-games", type=int, default=40)
     parser.add_argument("--eval-first", action="store_true")
@@ -239,6 +251,8 @@ def rollout_assignments(
 
 def main() -> None:
     args = build_arg_parser().parse_args()
+    if args.promote_opponent_on_eval and args.promote_opponent_metric.startswith("eval_stochastic") and not args.eval_stochastic_compare:
+        args.eval_stochastic_compare = True
     if args.torch_threads > 0:
         torch.set_num_threads(args.torch_threads)
     if args.gpu_ids:
@@ -351,6 +365,7 @@ def main() -> None:
                     os.environ["CUDA_VISIBLE_DEVICES"] = gpu_ids[self.worker_index % len(gpu_ids)]
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             self.model = TinyPolicyValueNet(**model_cfg).to(self.device)
+            self.opponent_model = TinyPolicyValueNet(**model_cfg).to(self.device)
             self.episode_steps = episode_steps
             self.use_numba = use_numba
             self.max_actions_per_source = max_actions_per_source
@@ -363,12 +378,16 @@ def main() -> None:
             self.model.load_state_dict(state_dict)
             self.model.eval()
 
-        def model_agent(self, obs: dict, configuration=None) -> list[list]:
+        def set_opponent_weights(self, state_dict: dict[str, torch.Tensor]) -> None:
+            self.opponent_model.load_state_dict(state_dict)
+            self.opponent_model.eval()
+
+        def _model_action(self, model: TinyPolicyValueNet, obs: dict, deterministic: bool) -> list[list]:
             actions, _row = sample_policy_action(
-                self.model,
+                model,
                 obs,
                 self.device,
-                deterministic=self.deterministic,
+                deterministic=deterministic,
                 max_actions_per_source=self.max_actions_per_source,
                 launch_bias=self.launch_bias,
                 ship_bias=self.ship_bias,
@@ -376,13 +395,28 @@ def main() -> None:
             )
             return actions
 
+        def model_agent(self, obs: dict, configuration=None) -> list[list]:
+            return self._model_action(self.model, obs, self.deterministic)
+
+        def opponent_agent(self, obs: dict, configuration=None) -> list[list]:
+            return self._model_action(self.opponent_model, obs, self.opponent_deterministic)
+
+        def _opponent_factory(self, opponent_name: str):
+            if opponent_name == "random":
+                return lambda: random_policy_agent
+            if opponent_name == "nearest":
+                return lambda: nearest_planet_agent
+            if opponent_name == "regular":
+                return lambda: make_rulebase_agent("regular")
+            raise ValueError(f"unknown eval opponent: {opponent_name}")
+
         def _run_matchups(self, update: int, label: str, opponent_name: str, games: int, seed: int, progress_every: int) -> dict[str, float]:
-            opponent = random_policy_agent if opponent_name == "random" else nearest_planet_agent
+            opponent_factory = self._opponent_factory(opponent_name)
             wins = losses = draws = 0
             reward_sum = 0.0
             for i in range(games):
                 model_seat = i % 2
-                agents = [opponent, opponent]
+                agents = [opponent_factory(), opponent_factory()]
                 agents[model_seat] = self.model_agent
                 env = make_fast_orbit_wars(
                     {"episodeSteps": self.episode_steps, "seed": seed + i},
@@ -429,11 +463,91 @@ def main() -> None:
                 "mean_reward": reward_sum / max(1, games),
             }
 
-        def evaluate(self, state_dict: dict[str, torch.Tensor], update: int, games: int, seed: int, stochastic_compare: bool = False, progress_every: int = 5) -> dict:
+        def _run_opponent_matchups(
+            self,
+            update: int,
+            label: str,
+            games: int,
+            seed: int,
+            progress_every: int,
+        ) -> dict[str, float]:
+            wins = losses = draws = 0
+            reward_sum = 0.0
+            for i in range(games):
+                model_seat = i % 2
+                agents = [self.opponent_agent, self.opponent_agent]
+                agents[model_seat] = self.model_agent
+                env = make_fast_orbit_wars(
+                    {"episodeSteps": self.episode_steps, "seed": seed + i},
+                    keep_history=False,
+                    use_numba=self.use_numba,
+                )
+                env.run(agents)
+                obs = env.steps[-1][model_seat]["observation"]
+                model_score = score(obs, model_seat)
+                other_score = score(obs, 1 - model_seat)
+                if model_score > other_score:
+                    wins += 1
+                    reward_sum += 1.0
+                elif model_score < other_score:
+                    losses += 1
+                    reward_sum -= 1.0
+                else:
+                    draws += 1
+                if progress_every > 0 and ((i + 1) % progress_every == 0 or i + 1 == games):
+                    print(
+                        json.dumps(
+                            {
+                                "event": "eval_progress",
+                                "update": update,
+                                "worker": self.worker_index,
+                                "label": label,
+                                "done": i + 1,
+                                "total": games,
+                                "wins": wins,
+                                "losses": losses,
+                                "draws": draws,
+                            },
+                            ensure_ascii=False,
+                        ),
+                        flush=True,
+                    )
+            return {
+                "games": float(games),
+                "wins": float(wins),
+                "losses": float(losses),
+                "draws": float(draws),
+                "winrate": wins / max(1, games),
+                "nonloss": (wins + draws) / max(1, games),
+                "mean_reward": reward_sum / max(1, games),
+            }
+
+        def evaluate(
+            self,
+            state_dict: dict[str, torch.Tensor],
+            update: int,
+            games: int,
+            seed: int,
+            stochastic_compare: bool = False,
+            progress_every: int = 5,
+            opponent_state_dict: dict[str, torch.Tensor] | None = None,
+            opponent_deterministic: bool = True,
+        ) -> dict:
             self.set_weights(state_dict)
+            self.opponent_deterministic = bool(opponent_deterministic)
+            has_opponent = opponent_state_dict is not None
+            if has_opponent:
+                self.set_opponent_weights(opponent_state_dict)
             print(
                 json.dumps(
-                    {"event": "eval_worker_start", "update": update, "worker": self.worker_index, "games": games, "stochastic_compare": bool(stochastic_compare)},
+                    {
+                        "event": "eval_worker_start",
+                        "update": update,
+                        "worker": self.worker_index,
+                        "games": games,
+                        "stochastic_compare": bool(stochastic_compare),
+                        "has_opponent_eval": bool(has_opponent),
+                    },
                     ensure_ascii=False,
                 ),
                 flush=True,
@@ -442,13 +556,25 @@ def main() -> None:
                 "update": update,
                 "eval_vs_random": self._run_matchups(update, "eval_vs_random", "random", games, seed, progress_every),
                 "eval_vs_nearest": self._run_matchups(update, "eval_vs_nearest", "nearest", games, seed + 100_000, progress_every),
+                "eval_vs_regular": self._run_matchups(update, "eval_vs_regular", "regular", games, seed + 120_000, progress_every),
             }
+            if has_opponent:
+                summary["eval_vs_opponent"] = self._run_opponent_matchups(update, "eval_vs_opponent", games, seed + 150_000, progress_every)
             if stochastic_compare:
                 previous = self.deterministic
                 self.deterministic = False
                 try:
                     summary["eval_stochastic_vs_random"] = self._run_matchups(update, "eval_stochastic_vs_random", "random", games, seed + 200_000, progress_every)
                     summary["eval_stochastic_vs_nearest"] = self._run_matchups(update, "eval_stochastic_vs_nearest", "nearest", games, seed + 300_000, progress_every)
+                    summary["eval_stochastic_vs_regular"] = self._run_matchups(update, "eval_stochastic_vs_regular", "regular", games, seed + 320_000, progress_every)
+                    if has_opponent:
+                        summary["eval_stochastic_vs_opponent"] = self._run_opponent_matchups(
+                            update,
+                            "eval_stochastic_vs_opponent",
+                            games,
+                            seed + 350_000,
+                            progress_every,
+                        )
                 finally:
                     self.deterministic = previous
             print(
@@ -495,6 +621,25 @@ def main() -> None:
             ),
             flush=True,
         )
+    initial_opponent_state: dict[str, torch.Tensor] | None = None
+    if args.opponent_checkpoint:
+        opponent_path = Path(args.opponent_checkpoint)
+        opponent_payload = torch.load(opponent_path, map_location=learner_device, weights_only=True)
+        opponent_cfg = opponent_payload.get("model", {})
+        if opponent_cfg and opponent_cfg != model_cfg:
+            raise ValueError(f"Opponent checkpoint model config {opponent_cfg} does not match requested config {model_cfg}")
+        initial_opponent_state = {key: value.detach().cpu() for key, value in opponent_payload["state_dict"].items()}
+        print(
+            json.dumps(
+                {
+                    "event": "opponent_checkpoint_loaded",
+                    "path": str(opponent_path),
+                    "checkpoint_update": int(opponent_payload.get("update", -1)),
+                },
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
     workers = [RolloutWorker.remote(model_cfg, args.episode_steps, args.opponent_mode, not args.no_numba) for _ in range(num_workers)]
     eval_actor_options = {"resources": {f"node:{eval_node_ip}": 0.001}}
     eval_launch_bias = args.eval_launch_bias + args.eval_aggression
@@ -532,6 +677,12 @@ def main() -> None:
                 "eval_stochastic_compare": args.eval_stochastic_compare,
                 "eval_gpu_ids": args.eval_gpu_ids,
                 "eval_progress_every": args.eval_progress_every,
+                "opponent_checkpoint": args.opponent_checkpoint,
+                "freeze_latest_opponent": args.freeze_latest_opponent,
+                "promote_opponent_on_eval": args.promote_opponent_on_eval,
+                "promote_opponent_threshold": args.promote_opponent_threshold,
+                "promote_opponent_metric": args.promote_opponent_metric,
+                "opponent_eval_stochastic": args.opponent_eval_stochastic,
                 "collect_overassign_factor": args.collect_overassign_factor,
             },
             ensure_ascii=False,
@@ -540,10 +691,14 @@ def main() -> None:
 
     best_winrate = -1.0
     phase = "random" if args.curriculum else args.opponent_mode
+    if args.start_phase:
+        phase = args.start_phase
     if isinstance(resume_metrics, dict):
         best_winrate = max(best_winrate, float(resume_metrics.get("eval_vs_nearest", {}).get("winrate", -1.0)))
-        phase = str(resume_metrics.get("phase", phase))
-    latest_opponent_state = cpu_state_dict(model)
+        if not args.start_phase:
+            phase = str(resume_metrics.get("phase", phase))
+    latest_opponent_state = initial_opponent_state if initial_opponent_state is not None else cpu_state_dict(model)
+    has_frozen_opponent_eval = bool(args.opponent_checkpoint or args.promote_opponent_on_eval or args.freeze_latest_opponent)
     replay_batches: deque[tuple[int, list[dict]]] = deque(maxlen=max(0, args.replay_updates))
     pending_eval_refs: dict[object, int] = {}
     pending_eval_states: dict[int, dict[str, torch.Tensor]] = {}
@@ -582,10 +737,16 @@ def main() -> None:
                         save_checkpoint_state(out_dir / "best.pt", best_state, model_cfg, eval_update, best_metrics)
                     else:
                         save_checkpoint(out_dir / "best.pt", model, args, update, {"async_eval_update": eval_update, **merged_eval})
-                if args.curriculum and phase == "random" and merged_eval["eval_vs_random"]["winrate"] >= args.random_winrate_threshold:
+                if (
+                    args.curriculum
+                    and not args.promote_opponent_on_eval
+                    and phase == "random"
+                    and merged_eval["eval_vs_random"]["winrate"] >= args.random_winrate_threshold
+                ):
                     phase = "latest"
                     updater.cfg.entropy_coef = max(updater.cfg.entropy_coef, args.selfplay_entropy_coef)
-                    latest_opponent_state = cpu_state_dict(model)
+                    if not args.promote_opponent_on_eval and not args.freeze_latest_opponent:
+                        latest_opponent_state = cpu_state_dict(model)
                     print(
                         json.dumps(
                             {
@@ -600,6 +761,49 @@ def main() -> None:
                         ),
                         flush=True,
                     )
+                promote_metric = merged_eval.get(args.promote_opponent_metric, {})
+                promote_winrate = float(promote_metric.get("winrate", -1.0)) if isinstance(promote_metric, dict) else -1.0
+                if args.promote_opponent_on_eval and best_state is not None:
+                    if promote_winrate >= args.promote_opponent_threshold:
+                        latest_opponent_state = best_state
+                        phase = "latest"
+                        save_checkpoint_state(
+                            out_dir / "opponent.pt",
+                            latest_opponent_state,
+                            model_cfg,
+                            eval_update,
+                            {"promoted_from_eval_update": eval_update, **merged_eval},
+                        )
+                        print(
+                            json.dumps(
+                                {
+                                    "event": "opponent_promoted",
+                                    "update": update,
+                                    "eval_update": eval_update,
+                                    "metric": args.promote_opponent_metric,
+                                    "winrate": promote_winrate,
+                                    "threshold": args.promote_opponent_threshold,
+                                    "path": str(out_dir / "opponent.pt"),
+                                },
+                                ensure_ascii=False,
+                            ),
+                            flush=True,
+                        )
+                    else:
+                        print(
+                            json.dumps(
+                                {
+                                    "event": "opponent_promotion_skipped",
+                                    "update": update,
+                                    "eval_update": eval_update,
+                                    "metric": args.promote_opponent_metric,
+                                    "winrate": promote_winrate,
+                                    "threshold": args.promote_opponent_threshold,
+                                },
+                                ensure_ascii=False,
+                            ),
+                            flush=True,
+                        )
                 if merged_eval["eval_vs_nearest"]["winrate"] >= args.stop_winrate:
                     nearest_stop_streak += 1
                 else:
@@ -806,6 +1010,7 @@ def main() -> None:
                 save_checkpoint(out_dir / "latest.pt", model, args, update, summary)
             eval_state = cpu_state_dict(model)
             eval_state_ref = ray.put(eval_state)
+            eval_opponent_ref = ray.put(latest_opponent_state) if has_frozen_opponent_eval else None
             if args.sync_eval:
                 print(json.dumps({"event": "sync_eval_start", "update": update, "games_each": args.eval_games}, ensure_ascii=False), flush=True)
                 temp_worker = EvalWorker.options(
@@ -824,13 +1029,67 @@ def main() -> None:
                     args.eval_launch_temperature,
                     not args.eval_stochastic,
                 )
-                part = ray.get(temp_worker.evaluate.remote(eval_state_ref, update, args.eval_games, args.seed + 300_000 + update * 1_000, args.eval_stochastic_compare, args.eval_progress_every))
+                part = ray.get(
+                    temp_worker.evaluate.remote(
+                        eval_state_ref,
+                        update,
+                        args.eval_games,
+                        args.seed + 300_000 + update * 1_000,
+                        args.eval_stochastic_compare,
+                        args.eval_progress_every,
+                        eval_opponent_ref,
+                        not args.opponent_eval_stochastic,
+                    )
+                )
                 merged_eval = _merge_eval_parts([part])
                 summary.update(merged_eval)
                 top_manifest = update_top_checkpoints(out_dir, eval_state, model_cfg, update, {"async_eval_update": update, **merged_eval}, args.top_k_checkpoints)
                 if merged_eval["eval_vs_nearest"]["winrate"] > best_winrate:
                     best_winrate = merged_eval["eval_vs_nearest"]["winrate"]
                     save_checkpoint_state(out_dir / "best.pt", eval_state, model_cfg, update, {"async_eval_update": update, **merged_eval})
+                promote_metric = merged_eval.get(args.promote_opponent_metric, {})
+                promote_winrate = float(promote_metric.get("winrate", -1.0)) if isinstance(promote_metric, dict) else -1.0
+                if args.promote_opponent_on_eval:
+                    if promote_winrate >= args.promote_opponent_threshold:
+                        latest_opponent_state = eval_state
+                        phase = "latest"
+                        save_checkpoint_state(
+                            out_dir / "opponent.pt",
+                            latest_opponent_state,
+                            model_cfg,
+                            update,
+                            {"promoted_from_eval_update": update, **merged_eval},
+                        )
+                        print(
+                            json.dumps(
+                                {
+                                    "event": "opponent_promoted",
+                                    "update": update,
+                                    "eval_update": update,
+                                    "metric": args.promote_opponent_metric,
+                                    "winrate": promote_winrate,
+                                    "threshold": args.promote_opponent_threshold,
+                                    "path": str(out_dir / "opponent.pt"),
+                                },
+                                ensure_ascii=False,
+                            ),
+                            flush=True,
+                        )
+                    else:
+                        print(
+                            json.dumps(
+                                {
+                                    "event": "opponent_promotion_skipped",
+                                    "update": update,
+                                    "eval_update": update,
+                                    "metric": args.promote_opponent_metric,
+                                    "winrate": promote_winrate,
+                                    "threshold": args.promote_opponent_threshold,
+                                },
+                                ensure_ascii=False,
+                            ),
+                            flush=True,
+                        )
                 print(
                     json.dumps(
                         {"event": "top_checkpoints_updated", "update": update, "top_k": len(top_manifest), "best": top_manifest[0] if top_manifest else None},
@@ -855,6 +1114,8 @@ def main() -> None:
                             args.seed + 300_000 + update * 10_000 + i * 1_000,
                             args.eval_stochastic_compare,
                             args.eval_progress_every,
+                            eval_opponent_ref,
+                            not args.opponent_eval_stochastic,
                         )
                     )
                 for ref in parts:
@@ -870,7 +1131,7 @@ def main() -> None:
 
         if args.checkpoint_interval > 0 and update % args.checkpoint_interval == 0 and not should_eval:
             save_checkpoint(out_dir / "latest.pt", model, args, update, summary)
-        if phase == "latest":
+        if phase == "latest" and not args.freeze_latest_opponent and not args.promote_opponent_on_eval:
             latest_opponent_state = cpu_state_dict(model)
         with log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(summary, ensure_ascii=False) + "\n")

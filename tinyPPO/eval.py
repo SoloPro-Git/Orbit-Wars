@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Callable
 
 from training2 import make_fast_orbit_wars
+from training2.rulebase_bridge import make_rulebase_agent
 
 from tinyPPO.agents import TinyPPOAgent, nearest_planet_agent, random_policy_agent
 from tinyPPO.features import score
@@ -67,7 +68,7 @@ def run_matchups(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", required=True)
-    parser.add_argument("--opponent", choices=["nearest", "random"], default="nearest")
+    parser.add_argument("--opponent", choices=["nearest", "random", "regular"], default="nearest")
     parser.add_argument("--games", type=int, default=20)
     parser.add_argument("--seed", type=int, default=1000)
     parser.add_argument("--episode-steps", type=int, default=500)
@@ -81,7 +82,11 @@ def main() -> None:
     args = parser.parse_args()
 
     ckpt = Path(args.checkpoint)
-    opponent = nearest_planet_agent if args.opponent == "nearest" else random_policy_agent
+    if args.opponent == "regular":
+        opponent_factory = lambda: make_rulebase_agent("regular")
+    else:
+        opponent = nearest_planet_agent if args.opponent == "nearest" else random_policy_agent
+        opponent_factory = lambda: opponent
     launch_bias = args.launch_bias + args.aggression
     ship_bias = args.ship_bias + args.aggression
     result = run_matchups(
@@ -93,7 +98,7 @@ def main() -> None:
             ship_bias=ship_bias,
             launch_temperature=args.launch_temperature,
         ),
-        lambda: opponent,
+        opponent_factory,
         games=args.games,
         seed=args.seed,
         episode_steps=args.episode_steps,

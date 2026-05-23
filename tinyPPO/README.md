@@ -97,6 +97,31 @@ To keep eval on local physical GPU 0 while rollout uses GPUs 1-7:
   --gpus-per-eval-worker 0
 ```
 
+To evaluate and promote against a frozen previous checkpoint, keep the
+checkpoint as `opponent.pt` and enable the promotion gate. The stochastic
+comparison is enabled automatically when the promotion metric needs it:
+
+```bash
+  --opponent-checkpoint tinyPPO/runs/<run>/opponent.pt \
+  --freeze-latest-opponent \
+  --promote-opponent-on-eval \
+  --promote-opponent-threshold 0.70 \
+  --promote-opponent-metric eval_stochastic_vs_opponent
+```
+
+To add one async eval worker on physical GPU 1 while keeping it outside Ray's
+fractional GPU accounting:
+
+```bash
+  --eval-workers 1 \
+  --eval-gpu-ids 1 \
+  --gpus-per-eval-worker 0
+```
+
+Ray eval also reports the strongest local regular rulebase as an eval-only
+opponent. It appears in logs/SwanLab as `eval_vs_regular`, and when stochastic
+comparison is enabled as `eval_stochastic_vs_regular`.
+
 Ray rollout training on a remote node exposing GPUs 0-8:
 
 ```bash
