@@ -36,8 +36,21 @@ except Exception:
 from tinyPPO.agents import TinyPPOAgent
 
 
+def _checkpoint_path():
+    candidates = [
+        Path("tinyppo_checkpoint.pt"),
+        Path("/kaggle_simulations/agent/tinyppo_checkpoint.pt"),
+    ]
+    if "__file__" in globals():
+        candidates.insert(0, Path(__file__).resolve().with_name("tinyppo_checkpoint.pt"))
+    for path in candidates:
+        if path.exists():
+            return path
+    return candidates[0]
+
+
 _AGENT = TinyPPOAgent(
-    Path(__file__).with_name("tinyppo_checkpoint.pt"),
+    _checkpoint_path(),
     device="cpu",
     deterministic=False,
 )
