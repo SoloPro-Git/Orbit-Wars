@@ -36,23 +36,16 @@ except Exception:
 from tinyPPO.agents import TinyPPOAgent
 
 
-_AGENT = None
-
-
-def _get_agent():
-    global _AGENT
-    if _AGENT is None:
-        _AGENT = TinyPPOAgent(
-            Path(__file__).with_name("tinyppo_checkpoint.pt"),
-            device="cpu",
-            deterministic=False,
-        )
-    return _AGENT
+_AGENT = TinyPPOAgent(
+    Path(__file__).with_name("tinyppo_checkpoint.pt"),
+    device="cpu",
+    deterministic=False,
+)
 
 
 def agent(obs, configuration=None):
     try:
-        return _get_agent()(obs, configuration)
+        return _AGENT(obs, configuration)
     except Exception:
         return []
 '''
