@@ -14,6 +14,7 @@ from tinyPPO.model import TinyPolicyValueNet
 MIN_SHIP_FRACTION = 0.02
 ACTION_SLOTS = 3
 MAX_ACTIONS_PER_SOURCE_SAFETY = ACTION_SLOTS
+SHIP_BUCKET_MULTIPLIERS = (0.75, 1.0, 1.25, 1.5, 2.0)
 BOARD_SIZE = 100.0
 CENTER = 50.0
 SUN_RADIUS = 10.0
@@ -129,6 +130,68 @@ def _approx_pair_ships(source: list, target: list) -> int:
     return min(src_ships, needed)
 
 
+def _incoming_by_planet(obs: dict[str, Any], player: int, horizon: int = 80) -> tuple[dict[int, float], dict[int, float]]:
+    planets = list(obs.get("planets", []))
+    incoming_friend = {int(p[0]): 0.0 for p in planets}
+    incoming_enemy = {int(p[0]): 0.0 for p in planets}
+    for fleet in obs.get("fleets", []) or []:
+        owner = int(fleet[1])
+        fx, fy, angle, ships = float(fleet[2]), float(fleet[3]), float(fleet[4]), float(fleet[6])
+        speed = _fleet_speed(ships)
+        vx, vy = math.cos(angle), math.sin(angle)
+        for planet in planets:
+            dx = float(planet[2]) - fx
+            dy = float(planet[3]) - fy
+            proj = dx * vx + dy * vy
+            if proj <= 0.0:
+                continue
+            eta = proj / max(speed, 1e-6)
+            if eta > horizon:
+                continue
+            perp = abs(dx * vy - dy * vx)
+            if perp <= float(planet[4]) + 1.0:
+                key = int(planet[0])
+                if owner == player:
+                    incoming_friend[key] += ships
+                elif owner != -1:
+                    incoming_enemy[key] += ships
+    return incoming_friend, incoming_enemy
+
+
+def required_ships(obs: dict[str, Any], player: int, source: list, target: list) -> int:
+    incoming_friend, incoming_enemy = _incoming_by_planet(obs, player)
+    src_ships = max(1, int(float(source[5])))
+    base = max(1.0, float(target[5]) + 1.0 + incoming_enemy.get(int(target[0]), 0.0) - incoming_friend.get(int(target[0]), 0.0))
+    speed = _fleet_speed(min(src_ships, max(1, int(base))))
+    dist = max(0.0, math.hypot(float(target[2]) - float(source[2]), float(target[3]) - float(source[3])) - float(source[4]))
+    eta = dist / max(speed, 1e-6)
+    if int(target[1]) not in (-1, player):
+        base += min(80.0, eta + 2.0) * float(target[6])
+    return max(1, int(math.ceil(base)))
+
+
+def _target_candidate_score(obs: dict[str, Any], player: int, source: list, target: list, required: int, safe: bool) -> float:
+    if not safe:
+        return -1e9
+    if int(target[0]) == int(source[0]):
+        return -1e9
+    available = max(0, int(float(source[5])))
+    if available < max(1, int(required * SHIP_BUCKET_MULTIPLIERS[0])):
+        return -1e9
+    dist = math.hypot(float(target[2]) - float(source[2]), float(target[3]) - float(source[3]))
+    eta = dist / max(_fleet_speed(max(1, required)), 1e-6)
+    owner = int(target[1])
+    prod = float(target[6])
+    score = 100.0 - dist + 15.0 * prod - 0.7 * required - 2.0 * eta
+    if owner not in (-1, player):
+        score += 10.0 * prod
+    if owner == -1 and float(obs.get("step", 0)) <= 80 and prod >= 3.0 and required <= 20:
+        score += 18.0
+    if _target_moves(obs, target):
+        score -= max(0.0, eta - 24.0) * 2.0
+    return score
+
+
 def safe_target_mask(obs: dict[str, Any], player: int) -> np.ndarray:
     planets = list(obs.get("planets", []))[:MAX_PLANETS]
     mask = np.zeros((MAX_PLANETS, MAX_PLANETS), dtype=np.bool_)
@@ -144,13 +207,36 @@ def safe_target_mask(obs: dict[str, Any], player: int) -> np.ndarray:
     return mask
 
 
+def candidate_target_mask(obs: dict[str, Any], player: int, top_k: int = 6) -> np.ndarray:
+    planets = list(obs.get("planets", []))[:MAX_PLANETS]
+    safe = safe_target_mask(obs, player)
+    mask = np.zeros((MAX_PLANETS, MAX_PLANETS), dtype=np.bool_)
+    top_k = max(1, int(top_k))
+    for src_i, src in enumerate(planets):
+        if int(src[1]) != player or int(src[5]) <= 1:
+            continue
+        scored: list[tuple[float, int]] = []
+        for tgt_i, tgt in enumerate(planets):
+            if int(tgt[1]) == player:
+                continue
+            needed = required_ships(obs, player, src, tgt)
+            score = _target_candidate_score(obs, player, src, tgt, needed, bool(safe[src_i, tgt_i]))
+            if score > -1e8:
+                scored.append((score, tgt_i))
+        scored.sort(reverse=True)
+        for _score, tgt_i in scored[:top_k]:
+            mask[src_i, tgt_i] = True
+    return mask
+
+
 def apply_target_safety_mask(
     source_logits: torch.Tensor,
     target_logits: torch.Tensor,
     obs: dict[str, Any],
     player: int,
+    target_mask: np.ndarray | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    mask = torch.tensor(safe_target_mask(obs, player), dtype=torch.bool, device=target_logits.device)
+    mask = torch.tensor(target_mask if target_mask is not None else safe_target_mask(obs, player), dtype=torch.bool, device=target_logits.device)
     safe_sources = mask.any(dim=-1)
     masked_targets = target_logits.clone().masked_fill(~mask[:, None, :], -1e9)
     if (~safe_sources).any():
@@ -160,7 +246,14 @@ def apply_target_safety_mask(
     return source_logits, masked_targets
 
 
-def actions_from_decisions(obs: dict[str, Any], player: int, source_slots: np.ndarray, target_slots: np.ndarray, ship_slots: np.ndarray) -> list[list]:
+def actions_from_decisions(
+    obs: dict[str, Any],
+    player: int,
+    source_slots: np.ndarray,
+    target_slots: np.ndarray,
+    ship_slots: np.ndarray,
+    ship_mode: str = "fraction",
+) -> list[list]:
     planets = list(obs.get("planets", []))
     remaining = {i: int(p[5]) for i, p in enumerate(planets)}
     actions: list[list] = []
@@ -175,8 +268,14 @@ def actions_from_decisions(obs: dict[str, Any], player: int, source_slots: np.nd
         available = remaining.get(src_i, 0)
         if src_ships <= 1 or available <= 0:
             continue
-        frac = float(np.clip(float(ship_i), MIN_SHIP_FRACTION, 1.0))
-        ships = max(1, min(available, int(src_ships * frac)))
+        if ship_mode == "required_bucket":
+            bucket = int(np.clip(int(ship_i), 0, len(SHIP_BUCKET_MULTIPLIERS) - 1))
+            needed = required_ships(obs, player, src, tgt)
+            ships = max(1, int(math.ceil(needed * SHIP_BUCKET_MULTIPLIERS[bucket])))
+            ships = min(available, ships)
+        else:
+            frac = float(np.clip(float(ship_i), MIN_SHIP_FRACTION, 1.0))
+            ships = max(1, min(available, int(src_ships * frac)))
         angle, eta = _aim_angle_and_eta(obs, src, tgt, ships)
         if math.isfinite(angle) and ships > 0 and _path_is_safe(src, angle, ships, eta + 3):
             actions.append([int(src[0]), angle, ships])
@@ -227,6 +326,7 @@ class TinyPPOAgent:
         self.model = TinyPolicyValueNet(**cfg).to(device)
         self.model.load_state_dict(payload["state_dict"])
         self.model.eval()
+        self.ship_mode = "required_bucket" if int(cfg.get("ship_buckets", 0) or 0) > 0 else "fraction"
         self.device = torch.device(device)
         self.deterministic = deterministic
         self.launch_bias = float(launch_bias)
@@ -250,8 +350,10 @@ class TinyPPOAgent:
             source_logits = source_logits.clone()
             source_logits[..., 1] += self.launch_bias
         target_logits = out["target_logits"][0]
-        ship_params = apply_ship_fraction_bias(out["ship_params"][0], self.ship_bias)
-        source_logits, target_logits = apply_target_safety_mask(source_logits, target_logits, obs, player)
+        target_mask = candidate_target_mask(obs, player) if self.ship_mode == "required_bucket" else safe_target_mask(obs, player)
+        source_logits, target_logits = apply_target_safety_mask(source_logits, target_logits, obs, player, target_mask=target_mask)
+        ship_params = apply_ship_fraction_bias(out["ship_params"][0], self.ship_bias) if "ship_params" in out else None
+        ship_logits = out.get("ship_logits")
         own_slots = torch.where(batch["own_mask"][0])[0]
         source_slots: list[int] = []
         target_slots: list[int] = []
@@ -261,15 +363,21 @@ class TinyPPOAgent:
                 if self.deterministic:
                     launch = int(torch.argmax(source_logits[src, slot]).item())
                     tgt = int(torch.argmax(target_logits[src, slot]).item())
-                    alpha_beta = ship_params[src, slot, tgt]
-                    ship = float((alpha_beta[0] / alpha_beta.sum()).clamp(1e-4, 1.0).item())
+                    if ship_logits is not None:
+                        ship = float(torch.argmax(ship_logits[0, src, slot, tgt]).item())
+                    else:
+                        alpha_beta = ship_params[src, slot, tgt]
+                        ship = float((alpha_beta[0] / alpha_beta.sum()).clamp(1e-4, 1.0).item())
                 else:
                     launch = int(torch.distributions.Categorical(logits=source_logits[src, slot]).sample().item())
                     tgt = int(torch.distributions.Categorical(logits=target_logits[src, slot]).sample().item())
-                    alpha_beta = ship_params[src, slot, tgt]
-                    ship = float(torch.distributions.Beta(alpha_beta[0], alpha_beta[1]).sample().clamp(1e-4, 1.0 - 1e-4).item())
+                    if ship_logits is not None:
+                        ship = float(torch.distributions.Categorical(logits=ship_logits[0, src, slot, tgt]).sample().item())
+                    else:
+                        alpha_beta = ship_params[src, slot, tgt]
+                        ship = float(torch.distributions.Beta(alpha_beta[0], alpha_beta[1]).sample().clamp(1e-4, 1.0 - 1e-4).item())
                 if launch == 1:
                     source_slots.append(src)
                     target_slots.append(tgt)
                     ship_slots.append(ship)
-        return actions_from_decisions(obs, player, np.array(source_slots), np.array(target_slots), np.array(ship_slots))
+        return actions_from_decisions(obs, player, np.array(source_slots), np.array(target_slots), np.array(ship_slots), ship_mode=self.ship_mode)

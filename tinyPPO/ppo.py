@@ -72,21 +72,31 @@ def action_log_prob_entropy(
             source_logits[~safe_sources, :, 1] = -1e9
     source_dist = torch.distributions.Categorical(logits=source_logits)
     target_dist = torch.distributions.Categorical(logits=target_logits)
-    ship_params = out["ship_params"]
-    gather_idx = target_actions[:, :, :, None, None].expand(-1, -1, -1, 1, ship_params.size(-1))
-    chosen_ship_params = ship_params.gather(dim=3, index=gather_idx).squeeze(3)
-    ship_dist = torch.distributions.Beta(chosen_ship_params[..., 0], chosen_ship_params[..., 1])
+    if "ship_logits" in out:
+        ship_logits = torch.nan_to_num(out["ship_logits"], nan=-1e9, posinf=1e9, neginf=-1e9)
+        gather_idx = target_actions[:, :, :, None, None].expand(-1, -1, -1, 1, ship_logits.size(-1))
+        chosen_ship_logits = ship_logits.gather(dim=3, index=gather_idx).squeeze(3)
+        ship_dist = torch.distributions.Categorical(logits=chosen_ship_logits)
+        ship_lp_raw = ship_dist.log_prob(ship_actions.long())
+        ship_ent_raw = ship_dist.entropy()
+    else:
+        ship_params = out["ship_params"]
+        gather_idx = target_actions[:, :, :, None, None].expand(-1, -1, -1, 1, ship_params.size(-1))
+        chosen_ship_params = ship_params.gather(dim=3, index=gather_idx).squeeze(3)
+        ship_dist = torch.distributions.Beta(chosen_ship_params[..., 0], chosen_ship_params[..., 1])
+        ship_lp_raw = ship_dist.log_prob(ship_actions.clamp(1e-4, 1.0 - 1e-4))
+        ship_ent_raw = ship_dist.entropy()
 
     own_slot_mask = own_mask[:, :, None]
     decision_mask = own_slot_mask.expand(-1, -1, action_count)
     source_lp = source_dist.log_prob(launch_actions).masked_fill(~decision_mask, 0.0).sum(dim=(1, 2))
     target_lp = target_dist.log_prob(target_actions).masked_fill(~launch_mask, 0.0).sum(dim=1)
     target_lp = target_lp.sum(dim=1)
-    ship_lp = ship_dist.log_prob(ship_actions.clamp(1e-4, 1.0 - 1e-4)).masked_fill(~launch_mask, 0.0).sum(dim=(1, 2))
+    ship_lp = ship_lp_raw.masked_fill(~launch_mask, 0.0).sum(dim=(1, 2))
 
     source_ent = source_dist.entropy().masked_fill(~decision_mask, 0.0).sum(dim=(1, 2))
     target_ent = target_dist.entropy().masked_fill(~launch_mask, 0.0).sum(dim=(1, 2))
-    ship_ent = ship_dist.entropy().masked_fill(~launch_mask, 0.0).sum(dim=(1, 2))
+    ship_ent = ship_ent_raw.masked_fill(~launch_mask, 0.0).sum(dim=(1, 2))
     denom = decision_mask.sum(dim=(1, 2)).clamp_min(1)
     entropy = (source_ent + target_ent + ship_ent) / denom
     return source_lp + target_lp + ship_lp, entropy
@@ -121,7 +131,7 @@ class PPOUpdater:
             "own_mask": torch.tensor(np.stack([r["own_mask"] for r in buffer.rows]), dtype=torch.bool, device=self.device),
             "launch_actions": torch.tensor(np.stack([r["launch_actions"] for r in buffer.rows]), dtype=torch.long, device=self.device),
             "target_actions": torch.tensor(np.stack([r["target_actions"] for r in buffer.rows]), dtype=torch.long, device=self.device),
-            "ship_actions": torch.tensor(np.stack([r["ship_actions"] for r in buffer.rows]), dtype=torch.float32, device=self.device),
+            "ship_actions": torch.tensor(np.stack([r["ship_actions"] for r in buffer.rows]), device=self.device),
             "launch_mask": torch.tensor(np.stack([r["launch_mask"] for r in buffer.rows]), dtype=torch.bool, device=self.device),
             "target_safety_mask": torch.tensor(
                 np.stack(

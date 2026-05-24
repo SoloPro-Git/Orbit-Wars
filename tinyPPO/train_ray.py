@@ -232,6 +232,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--heads", type=int, default=4)
     parser.add_argument("--layers", type=int, default=1)
     parser.add_argument("--action-slots", type=int, default=ACTION_SLOTS)
+    parser.add_argument("--ship-buckets", type=int, default=0, help="0 uses legacy Beta ship fractions; >0 uses required-ships multiplier buckets.")
     parser.add_argument("--max-actions-per-source-safety", type=int, default=MAX_ACTIONS_PER_SOURCE_SAFETY)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--entropy-coef", type=float, default=0.02)
@@ -624,7 +625,13 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     log_path = out_dir / "train_log.jsonl"
     swan = init_swanlab_or_none(args, "ray")
-    model_cfg = {"hidden": args.hidden, "heads": args.heads, "layers": args.layers, "ship_buckets": 0, "action_slots": args.action_slots}
+    model_cfg = {
+        "hidden": args.hidden,
+        "heads": args.heads,
+        "layers": args.layers,
+        "ship_buckets": int(args.ship_buckets),
+        "action_slots": args.action_slots,
+    }
     learner_device = torch.device(args.learner_device)
     model = TinyPolicyValueNet(**model_cfg).to(learner_device)
     updater = PPOUpdater(

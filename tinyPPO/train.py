@@ -20,6 +20,7 @@ from tinyPPO.agents import (
     actions_from_decisions,
     apply_ship_fraction_bias,
     apply_target_safety_mask,
+    candidate_target_mask,
     nearest_planet_agent,
     random_policy_agent,
     safe_target_mask,
@@ -187,14 +188,16 @@ def sample_policy_action(
         source_logits = source_logits.clone()
         source_logits[..., 1] += float(launch_bias)
     target_logits = out["target_logits"][0]
-    ship_params = apply_ship_fraction_bias(out["ship_params"][0], ship_bias)
-    target_safety_mask = safe_target_mask(obs, player)
-    source_logits, target_logits = apply_target_safety_mask(source_logits, target_logits, obs, player)
+    use_ship_buckets = "ship_logits" in out
+    ship_params = apply_ship_fraction_bias(out["ship_params"][0], ship_bias) if "ship_params" in out else None
+    ship_logits = out.get("ship_logits")
+    target_safety_mask = candidate_target_mask(obs, player) if use_ship_buckets else safe_target_mask(obs, player)
+    source_logits, target_logits = apply_target_safety_mask(source_logits, target_logits, obs, player, target_mask=target_safety_mask)
 
     action_slots = min(int(getattr(model, "action_slots", ACTION_SLOTS)), int(max_actions_per_source))
     launch_actions = torch.zeros((MAX_PLANETS, action_slots), dtype=torch.long, device=device)
     target_actions = torch.zeros((MAX_PLANETS, action_slots), dtype=torch.long, device=device)
-    ship_actions = torch.full((MAX_PLANETS, action_slots), 0.5, dtype=torch.float32, device=device)
+    ship_actions = torch.zeros((MAX_PLANETS, action_slots), dtype=torch.long if use_ship_buckets else torch.float32, device=device)
     launch_mask = torch.zeros((MAX_PLANETS, action_slots), dtype=torch.bool, device=device)
 
     source_slots: list[int] = []
@@ -205,13 +208,19 @@ def sample_policy_action(
             if deterministic:
                 launch = int(torch.argmax(source_logits[src, action_idx]).item())
                 target = int(torch.argmax(target_logits[src, action_idx]).item())
-                alpha_beta = ship_params[src, action_idx, target]
-                ship = float((alpha_beta[0] / alpha_beta.sum()).clamp(1e-4, 1.0 - 1e-4).item())
+                if use_ship_buckets:
+                    ship = int(torch.argmax(ship_logits[0, src, action_idx, target]).item())
+                else:
+                    alpha_beta = ship_params[src, action_idx, target]
+                    ship = float((alpha_beta[0] / alpha_beta.sum()).clamp(1e-4, 1.0 - 1e-4).item())
             else:
                 launch = int(torch.distributions.Categorical(logits=source_logits[src, action_idx]).sample().item())
                 target = int(torch.distributions.Categorical(logits=target_logits[src, action_idx]).sample().item())
-                alpha_beta = ship_params[src, action_idx, target]
-                ship = float(torch.distributions.Beta(alpha_beta[0], alpha_beta[1]).sample().clamp(1e-4, 1.0 - 1e-4).item())
+                if use_ship_buckets:
+                    ship = int(torch.distributions.Categorical(logits=ship_logits[0, src, action_idx, target]).sample().item())
+                else:
+                    alpha_beta = ship_params[src, action_idx, target]
+                    ship = float(torch.distributions.Beta(alpha_beta[0], alpha_beta[1]).sample().clamp(1e-4, 1.0 - 1e-4).item())
             launch_actions[src, action_idx] = launch
             target_actions[src, action_idx] = target
             ship_actions[src, action_idx] = ship
@@ -231,7 +240,14 @@ def sample_policy_action(
         torch.tensor(target_safety_mask[None], dtype=torch.bool, device=device),
     )
     value = out["value"][0]
-    actions = actions_from_decisions(obs, player, np.asarray(source_slots), np.asarray(target_slots), np.asarray(ship_slots))
+    actions = actions_from_decisions(
+        obs,
+        player,
+        np.asarray(source_slots),
+        np.asarray(target_slots),
+        np.asarray(ship_slots),
+        ship_mode="required_bucket" if use_ship_buckets else "fraction",
+    )
     row = {
         "player": player,
         "planets": enc.planets,
@@ -325,7 +341,13 @@ def save_checkpoint(path: Path, model: TinyPolicyValueNet, args: argparse.Namesp
     torch.save(
         {
             "state_dict": model.state_dict(),
-            "model": {"hidden": args.hidden, "heads": args.heads, "layers": args.layers, "ship_buckets": 0, "action_slots": args.action_slots},
+            "model": {
+                "hidden": args.hidden,
+                "heads": args.heads,
+                "layers": args.layers,
+                "ship_buckets": int(getattr(args, "ship_buckets", 0)),
+                "action_slots": args.action_slots,
+            },
             "update": update,
             "metrics": metrics,
         },
@@ -356,6 +378,7 @@ def main() -> None:
     parser.add_argument("--heads", type=int, default=4)
     parser.add_argument("--layers", type=int, default=1)
     parser.add_argument("--action-slots", type=int, default=ACTION_SLOTS)
+    parser.add_argument("--ship-buckets", type=int, default=0, help="0 uses legacy Beta ship fractions; >0 uses required-ships multiplier buckets.")
     parser.add_argument("--max-actions-per-source-safety", type=int, default=MAX_ACTIONS_PER_SOURCE_SAFETY)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--entropy-coef", type=float, default=0.02)
@@ -382,7 +405,7 @@ def main() -> None:
         torch.set_num_threads(args.torch_threads)
     device = torch.device(args.device)
     out_dir = Path(args.out_dir)
-    model = TinyPolicyValueNet(hidden=args.hidden, heads=args.heads, layers=args.layers, ship_buckets=0, action_slots=args.action_slots).to(device)
+    model = TinyPolicyValueNet(hidden=args.hidden, heads=args.heads, layers=args.layers, ship_buckets=args.ship_buckets, action_slots=args.action_slots).to(device)
     ppo_cfg = PPOConfig(
         learning_rate=args.lr,
         entropy_coef=args.entropy_coef,
@@ -398,7 +421,7 @@ def main() -> None:
 
     best_winrate = -1.0
     phase = "random" if args.curriculum else args.opponent_mode
-    latest_opponent = TinyPolicyValueNet(hidden=args.hidden, heads=args.heads, layers=args.layers, ship_buckets=0, action_slots=args.action_slots).to(device)
+    latest_opponent = TinyPolicyValueNet(hidden=args.hidden, heads=args.heads, layers=args.layers, ship_buckets=args.ship_buckets, action_slots=args.action_slots).to(device)
     latest_opponent.load_state_dict(model.state_dict())
     latest_opponent.eval()
     replay_batches: deque[tuple[int, list[dict]]] = deque(maxlen=max(0, args.replay_updates))
