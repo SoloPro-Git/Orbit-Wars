@@ -158,8 +158,14 @@ def _incoming_by_planet(obs: dict[str, Any], player: int, horizon: int = 80) -> 
     return incoming_friend, incoming_enemy
 
 
-def required_ships(obs: dict[str, Any], player: int, source: list, target: list) -> int:
-    incoming_friend, incoming_enemy = _incoming_by_planet(obs, player)
+def required_ships(
+    obs: dict[str, Any],
+    player: int,
+    source: list,
+    target: list,
+    incoming: tuple[dict[int, float], dict[int, float]] | None = None,
+) -> int:
+    incoming_friend, incoming_enemy = incoming if incoming is not None else _incoming_by_planet(obs, player)
     src_ships = max(1, int(float(source[5])))
     base = max(1.0, float(target[5]) + 1.0 + incoming_enemy.get(int(target[0]), 0.0) - incoming_friend.get(int(target[0]), 0.0))
     speed = _fleet_speed(min(src_ships, max(1, int(base))))
@@ -170,9 +176,7 @@ def required_ships(obs: dict[str, Any], player: int, source: list, target: list)
     return max(1, int(math.ceil(base)))
 
 
-def _target_candidate_score(obs: dict[str, Any], player: int, source: list, target: list, required: int, safe: bool) -> float:
-    if not safe:
-        return -1e9
+def _target_candidate_score(obs: dict[str, Any], player: int, source: list, target: list, required: int) -> float:
     if int(target[0]) == int(source[0]):
         return -1e9
     available = max(0, int(float(source[5])))
@@ -209,9 +213,9 @@ def safe_target_mask(obs: dict[str, Any], player: int) -> np.ndarray:
 
 def candidate_target_mask(obs: dict[str, Any], player: int, top_k: int = 6) -> np.ndarray:
     planets = list(obs.get("planets", []))[:MAX_PLANETS]
-    safe = safe_target_mask(obs, player)
     mask = np.zeros((MAX_PLANETS, MAX_PLANETS), dtype=np.bool_)
     top_k = max(1, int(top_k))
+    incoming = _incoming_by_planet(obs, player)
     for src_i, src in enumerate(planets):
         if int(src[1]) != player or int(src[5]) <= 1:
             continue
@@ -219,13 +223,20 @@ def candidate_target_mask(obs: dict[str, Any], player: int, top_k: int = 6) -> n
         for tgt_i, tgt in enumerate(planets):
             if int(tgt[1]) == player:
                 continue
-            needed = required_ships(obs, player, src, tgt)
-            score = _target_candidate_score(obs, player, src, tgt, needed, bool(safe[src_i, tgt_i]))
+            needed = required_ships(obs, player, src, tgt, incoming=incoming)
+            score = _target_candidate_score(obs, player, src, tgt, needed)
             if score > -1e8:
                 scored.append((score, tgt_i))
         scored.sort(reverse=True)
-        for _score, tgt_i in scored[:top_k]:
+        for _score, tgt_i in scored[: max(top_k * 4, top_k)]:
+            tgt = planets[tgt_i]
+            ships = min(max(1, int(float(src[5]))), max(1, required_ships(obs, player, src, tgt, incoming=incoming)))
+            angle, eta = _aim_angle_and_eta(obs, src, tgt, ships)
+            if not (math.isfinite(angle) and _path_is_safe(src, angle, ships, eta + 3)):
+                continue
             mask[src_i, tgt_i] = True
+            if int(mask[src_i].sum()) >= top_k:
+                break
     return mask
 
 

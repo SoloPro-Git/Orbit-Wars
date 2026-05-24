@@ -43,8 +43,8 @@ reward while sampling arbitrary ship fractions.
 
 ### Candidate Target Mask
 
-`candidate_target_mask(obs, player, top_k=6)` first applies the safe path mask,
-then scores non-owned targets per source with a regular-like heuristic:
+`candidate_target_mask(obs, player, top_k=6)` first scores non-owned targets per
+source with a cheap regular-like heuristic:
 
 - high production is good;
 - shorter distance/ETA is good;
@@ -52,8 +52,11 @@ then scores non-owned targets per source with a regular-like heuristic:
 - early high-production neutral captures are boosted;
 - moving targets with long ETA are penalized.
 
-Only the top candidates per source remain selectable. If a source has no
-candidate, launch logits for that source are forced to no-launch.
+Only the strongest rough candidates are then checked with the moving-target and
+sun/path safety helpers. The top safe candidates per source remain selectable.
+This keeps the fast simulator path usable: full source-target safety scans are
+too expensive once moving-target interception uses tick-by-tick search. If a
+source has no candidate, launch logits for that source are forced to no-launch.
 
 ### Required-Ship Buckets
 
