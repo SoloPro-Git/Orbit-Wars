@@ -18,6 +18,7 @@ BOARD_SIZE = 100.0
 CENTER = 50.0
 SUN_RADIUS = 10.0
 ROTATION_RADIUS_LIMIT = 50.0
+MOVING_AIM_TICKS = 120
 
 
 def apply_ship_fraction_bias(alpha_beta: torch.Tensor, bias: float) -> torch.Tensor:
@@ -83,16 +84,28 @@ def _future_target_position(obs: dict[str, Any], target: list, eta: int) -> tupl
     return float(target[2]), float(target[3])
 
 
+def _target_moves(obs: dict[str, Any], target: list) -> bool:
+    return _comet_future_position(obs, int(target[0]), 1) is not None or _is_orbital_target(obs, target)
+
+
 def _aim_angle_and_eta(obs: dict[str, Any], source: list, target: list, ships: int) -> tuple[float, int]:
     speed = _fleet_speed(max(1, ships))
-    tx = float(target[2])
-    ty = float(target[3])
-    eta = 1
-    for _ in range(3):
-        dist = math.hypot(tx - float(source[2]), ty - float(source[3]))
-        eta = max(1, int(math.ceil(dist / max(speed, 1e-6))))
-        tx, ty = _future_target_position(obs, target, eta)
-    return math.atan2(ty - float(source[3]), tx - float(source[2])), eta
+    sx = float(source[2])
+    sy = float(source[3])
+    if _target_moves(obs, target):
+        best: tuple[float, float, int] | None = None
+        for tick in range(1, MOVING_AIM_TICKS + 1):
+            tx, ty = _future_target_position(obs, target, tick)
+            dist_to_target = max(0.0, math.hypot(tx - sx, ty - sy) - float(source[4]))
+            err = abs(speed * tick - dist_to_target)
+            if best is None or err < best[0]:
+                best = (err, math.atan2(ty - sy, tx - sx), tick)
+            if err <= float(target[4]):
+                return math.atan2(ty - sy, tx - sx), tick
+        return (float("nan"), 1) if best is None else (float("nan"), best[2])
+    dist = max(0.0, math.hypot(float(target[2]) - sx, float(target[3]) - sy) - float(source[4]))
+    eta = max(1, int(math.floor(dist / max(speed, 1e-6))))
+    return math.atan2(float(target[3]) - sy, float(target[2]) - sx), eta
 
 
 def _path_is_safe(source: list, angle: float, ships: int, ticks: int) -> bool:

@@ -60,13 +60,14 @@ def action_log_prob_entropy(
     target_safety_mask: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     action_count = launch_actions.size(-1)
-    source_logits = out["source_logits"]
-    target_logits = out["target_logits"]
+    source_logits = torch.nan_to_num(out["source_logits"], nan=0.0, posinf=1e9, neginf=-1e9)
+    target_logits = torch.nan_to_num(out["target_logits"], nan=-1e9, posinf=1e9, neginf=-1e9)
+    base_target_logits = target_logits
     if target_safety_mask is not None:
         safe_sources = target_safety_mask.any(dim=-1)
         target_logits = target_logits.clone().masked_fill(~target_safety_mask[:, :, None, :], -1e9)
         if (~safe_sources).any():
-            target_logits[~safe_sources] = out["target_logits"][~safe_sources]
+            target_logits[~safe_sources] = base_target_logits[~safe_sources]
             source_logits = source_logits.clone()
             source_logits[~safe_sources, :, 1] = -1e9
     source_dist = torch.distributions.Categorical(logits=source_logits)
@@ -109,9 +110,13 @@ class PPOUpdater:
             adv = (adv - adv.mean()) / (adv.std() + 1e-8)
 
         tensors = {
-            "planets": torch.tensor(np.stack([r["planets"] for r in buffer.rows]), dtype=torch.float32, device=self.device),
-            "pair_features": torch.tensor(np.stack([r["pair_features"] for r in buffer.rows]), dtype=torch.float32, device=self.device),
-            "global_features": torch.tensor(np.stack([r["global_features"] for r in buffer.rows]), dtype=torch.float32, device=self.device),
+            "planets": torch.nan_to_num(torch.tensor(np.stack([r["planets"] for r in buffer.rows]), dtype=torch.float32, device=self.device)),
+            "pair_features": torch.nan_to_num(
+                torch.tensor(np.stack([r["pair_features"] for r in buffer.rows]), dtype=torch.float32, device=self.device)
+            ),
+            "global_features": torch.nan_to_num(
+                torch.tensor(np.stack([r["global_features"] for r in buffer.rows]), dtype=torch.float32, device=self.device)
+            ),
             "planet_mask": torch.tensor(np.stack([r["planet_mask"] for r in buffer.rows]), dtype=torch.bool, device=self.device),
             "own_mask": torch.tensor(np.stack([r["own_mask"] for r in buffer.rows]), dtype=torch.bool, device=self.device),
             "launch_actions": torch.tensor(np.stack([r["launch_actions"] for r in buffer.rows]), dtype=torch.long, device=self.device),
@@ -139,6 +144,7 @@ class PPOUpdater:
         metrics: dict[str, list[float]] = {"loss": [], "policy_loss": [], "value_loss": [], "entropy": [], "clip_frac": [], "approx_kl": []}
         epochs_used = 0
         update_steps = 0
+        skipped_steps = 0
         early_stop = 0.0
         min_epochs = max(1, min(int(self.cfg.min_epochs), int(self.cfg.epochs)))
         max_epochs = max(min_epochs, int(self.cfg.epochs))
@@ -163,7 +169,8 @@ class PPOUpdater:
                     tensors["launch_mask"][idx],
                     tensors["target_safety_mask"][idx],
                 )
-                logratio = new_logprob - tensors["old_logprob"][idx]
+                raw_logratio = torch.nan_to_num(new_logprob - tensors["old_logprob"][idx], nan=0.0, posinf=20.0, neginf=-20.0)
+                logratio = raw_logratio.clamp(-20.0, 20.0)
                 ratio = logratio.exp()
                 adv_b = tensors["advantages"][idx]
                 weight_b = tensors["weights"][idx].clamp_min(0.0)
@@ -174,10 +181,17 @@ class PPOUpdater:
                 value_loss = (((out["value"] - tensors["returns"][idx]) ** 2) * weight_b).sum() / weight_norm
                 entropy_loss = (entropy * weight_b).sum() / weight_norm
                 loss = policy_loss + self.cfg.value_coef * value_loss - self.cfg.entropy_coef * entropy_loss
+                if not torch.isfinite(loss):
+                    skipped_steps += 1
+                    continue
 
                 self.optimizer.zero_grad(set_to_none=True)
                 loss.backward()
-                nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.max_grad_norm)
+                grad_norm = nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.max_grad_norm)
+                if not torch.isfinite(grad_norm):
+                    self.optimizer.zero_grad(set_to_none=True)
+                    skipped_steps += 1
+                    continue
                 self.optimizer.step()
 
                 with torch.no_grad():
@@ -200,6 +214,7 @@ class PPOUpdater:
         summary["epochs_used"] = float(epochs_used)
         summary["update_steps"] = float(update_steps)
         summary["kl_early_stop"] = early_stop
+        summary["skipped_steps"] = float(skipped_steps)
         summary["min_epochs"] = float(min_epochs)
         summary["max_epochs"] = float(max_epochs)
         summary["target_kl"] = float(self.cfg.target_kl)
