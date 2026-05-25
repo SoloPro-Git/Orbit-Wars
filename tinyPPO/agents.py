@@ -211,6 +211,18 @@ def safe_target_mask(obs: dict[str, Any], player: int) -> np.ndarray:
     return mask
 
 
+def all_planets_target_mask(obs: dict[str, Any], player: int) -> np.ndarray:
+    planets = list(obs.get("planets", []))[:MAX_PLANETS]
+    mask = np.zeros((MAX_PLANETS, MAX_PLANETS), dtype=np.bool_)
+    valid_targets = np.array([i < len(planets) for i in range(MAX_PLANETS)], dtype=np.bool_)
+    for src_i, src in enumerate(planets):
+        if int(src[1]) != player or int(src[5]) <= 1:
+            continue
+        mask[src_i] = valid_targets
+        mask[src_i, src_i] = False
+    return mask
+
+
 def candidate_target_mask(obs: dict[str, Any], player: int, top_k: int = 6, include_friendly: bool = False) -> np.ndarray:
     planets = list(obs.get("planets", []))[:MAX_PLANETS]
     mask = np.zeros((MAX_PLANETS, MAX_PLANETS), dtype=np.bool_)
@@ -353,7 +365,7 @@ class TinyPPOAgent:
         self.launch_temperature = max(1e-4, float(launch_temperature))
         self.target_top_k = max(1, int(target_top_k))
         self.include_friendly_targets = bool(include_friendly_targets)
-        if target_mask_mode not in {"candidate", "safe"}:
+        if target_mask_mode not in {"candidate", "safe", "all_planets"}:
             raise ValueError(f"unsupported target_mask_mode: {target_mask_mode!r}")
         self.target_mask_mode = target_mask_mode
 
@@ -376,6 +388,8 @@ class TinyPPOAgent:
         target_logits = out["target_logits"][0]
         if self.ship_mode == "required_bucket" and self.target_mask_mode == "candidate":
             target_mask = candidate_target_mask(obs, player, top_k=self.target_top_k, include_friendly=self.include_friendly_targets)
+        elif self.target_mask_mode == "all_planets":
+            target_mask = all_planets_target_mask(obs, player)
         else:
             target_mask = safe_target_mask(obs, player)
         source_logits, target_logits = apply_target_safety_mask(source_logits, target_logits, obs, player, target_mask=target_mask)

@@ -26,6 +26,10 @@ Phase split:
   (`source_f1`, `source_target_f1`, `action_f1`, action-count error, and target
   legality). Online games against regular are only a sanity check because both
   agents immediately change the state distribution after the first mismatch.
+- For all-planets BC checkpoints, evaluate and later roll out with
+  `--target-mask-mode all_planets`. The older candidate mask can exclude many
+  regular targets before the learned target head gets to choose; the decoder
+  still checks ship counts, sun paths, and board bounds before emitting actions.
 - Phase 2 starts from the best Phase 1 checkpoint and runs PPO/self-play against
   a frozen older checkpoint. That is where winning the old checkpoint, promotion
   gates, and eventually beating regular belong.

@@ -17,7 +17,7 @@ from training2 import make_fast_orbit_wars
 from training2.rulebase_bridge import make_rulebase_agent
 
 from tinyPPO.agents import TinyPPOAgent
-from tinyPPO.agents import ACTION_SLOTS, MAX_ACTIONS_PER_SOURCE_SAFETY, candidate_target_mask
+from tinyPPO.agents import ACTION_SLOTS, MAX_ACTIONS_PER_SOURCE_SAFETY, all_planets_target_mask, candidate_target_mask, safe_target_mask
 from tinyPPO.features import MAX_PLANETS, encode_obs
 from tinyPPO.imitation_regular import row_from_regular_action
 
@@ -131,6 +131,7 @@ def diagnose_policy_on_label(
     bc_row: Any,
     target_top_k: int,
     include_friendly_targets: bool,
+    target_mask_mode: str,
 ) -> dict[str, float]:
     enc = encode_obs(obs, player, players=players)
     batch = {
@@ -144,11 +145,13 @@ def diagnose_policy_on_label(
     source_logits = out["source_logits"][0]
     target_logits = out["target_logits"][0]
     train_mask = torch.tensor(bc_row.target_safety_mask, dtype=torch.bool, device=agent.device)
-    runtime_mask = torch.tensor(
-        candidate_target_mask(obs, player, top_k=target_top_k, include_friendly=include_friendly_targets),
-        dtype=torch.bool,
-        device=agent.device,
-    )
+    if target_mask_mode == "candidate":
+        runtime_mask_np = candidate_target_mask(obs, player, top_k=target_top_k, include_friendly=include_friendly_targets)
+    elif target_mask_mode == "all_planets":
+        runtime_mask_np = all_planets_target_mask(obs, player)
+    else:
+        runtime_mask_np = safe_target_mask(obs, player)
+    runtime_mask = torch.tensor(runtime_mask_np, dtype=torch.bool, device=agent.device)
     train_target_logits = target_logits.masked_fill(~train_mask[:, None, :], -1e9)
     runtime_target_logits = target_logits.masked_fill(~runtime_mask[:, None, :], -1e9)
     active = np.argwhere(bc_row.launch_mask)
@@ -262,6 +265,7 @@ def evaluate(args: argparse.Namespace) -> dict[str, float]:
                 bc_row,
                 args.target_top_k,
                 args.include_friendly_targets,
+                args.target_mask_mode,
             )
             for key, value in diag.items():
                 diag_sums[key] = diag_sums.get(key, 0.0) + float(value)
@@ -332,7 +336,7 @@ def main() -> None:
     parser.add_argument("--launch-temperature", type=float, default=1.0)
     parser.add_argument("--target-top-k", type=int, default=6)
     parser.add_argument("--include-friendly-targets", action="store_true")
-    parser.add_argument("--target-mask-mode", choices=["candidate", "safe"], default="candidate")
+    parser.add_argument("--target-mask-mode", choices=["candidate", "safe", "all_planets"], default="candidate")
     parser.add_argument("--stochastic", action="store_true")
     parser.add_argument("--diagnose-policy", action="store_true", help="Also compare raw policy logits and runtime candidate masks against regular labels.")
     parser.add_argument("--no-numba", action="store_true")

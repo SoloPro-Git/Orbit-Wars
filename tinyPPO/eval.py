@@ -79,7 +79,7 @@ def main() -> None:
     parser.add_argument("--launch-temperature", type=float, default=1.0, help="Temperature for launch/no-launch logits before bias.")
     parser.add_argument("--target-top-k", type=int, default=6, help="Candidate targets per source for required-bucket policies.")
     parser.add_argument("--include-friendly-targets", action="store_true", help="Allow candidate targets owned by the acting player.")
-    parser.add_argument("--target-mask-mode", choices=["candidate", "safe"], default="candidate")
+    parser.add_argument("--target-mask-mode", choices=["candidate", "safe", "all_planets"], default="candidate")
     parser.add_argument("--stochastic", action="store_true", help="Sample actions instead of deterministic argmax/mean.")
     parser.add_argument("--no-numba", action="store_true")
     args = parser.parse_args()

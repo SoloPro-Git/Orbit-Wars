@@ -18,6 +18,7 @@ from tinyPPO.agents import (
     MAX_ACTIONS_PER_SOURCE_SAFETY,
     TinyPPOAgent,
     actions_from_decisions,
+    all_planets_target_mask,
     apply_ship_fraction_bias,
     apply_target_safety_mask,
     candidate_target_mask,
@@ -178,6 +179,7 @@ def sample_policy_action(
     launch_bias: float = 0.0,
     ship_bias: float = 0.0,
     launch_temperature: float = 1.0,
+    target_mask_mode: str = "candidate",
 ) -> tuple[list[list], dict]:
     player = int(obs.get("player", 0))
     enc = encode_obs(obs, player, players=2)
@@ -191,7 +193,14 @@ def sample_policy_action(
     use_ship_buckets = "ship_logits" in out
     ship_params = apply_ship_fraction_bias(out["ship_params"][0], ship_bias) if "ship_params" in out else None
     ship_logits = out.get("ship_logits")
-    target_safety_mask = candidate_target_mask(obs, player) if use_ship_buckets else safe_target_mask(obs, player)
+    if target_mask_mode == "candidate":
+        target_safety_mask = candidate_target_mask(obs, player) if use_ship_buckets else safe_target_mask(obs, player)
+    elif target_mask_mode == "all_planets":
+        target_safety_mask = all_planets_target_mask(obs, player)
+    elif target_mask_mode == "safe":
+        target_safety_mask = safe_target_mask(obs, player)
+    else:
+        raise ValueError(f"unsupported target_mask_mode: {target_mask_mode!r}")
     source_logits, target_logits = apply_target_safety_mask(source_logits, target_logits, obs, player, target_mask=target_safety_mask)
 
     action_slots = min(int(getattr(model, "action_slots", ACTION_SLOTS)), int(max_actions_per_source))
@@ -279,6 +288,7 @@ def collect_episode(
     opponent_model: TinyPolicyValueNet | None = None,
     opponent_deterministic: bool = True,
     max_actions_per_source: int = MAX_ACTIONS_PER_SOURCE_SAFETY,
+    target_mask_mode: str = "candidate",
 ) -> tuple[list[dict], dict[str, float]]:
     env = make_fast_orbit_wars({"episodeSteps": episode_steps, "seed": seed}, keep_history=False, use_numba=use_numba)
     env.reset(2)
@@ -298,7 +308,14 @@ def collect_episode(
         for pid in range(2):
             obs = env.steps[-1][pid]["observation"]
             if pid in controlled:
-                action, row = sample_policy_action(model, obs, device, deterministic=False, max_actions_per_source=max_actions_per_source)
+                action, row = sample_policy_action(
+                    model,
+                    obs,
+                    device,
+                    deterministic=False,
+                    max_actions_per_source=max_actions_per_source,
+                    target_mask_mode=target_mask_mode,
+                )
                 by_player[pid].append(row)
                 launch_counts.append(len(action))
             elif opponent_kind == "latest":
@@ -311,6 +328,7 @@ def collect_episode(
                         device,
                         deterministic=opponent_deterministic,
                         max_actions_per_source=max_actions_per_source,
+                        target_mask_mode=target_mask_mode,
                     )
             else:
                 action = random_policy_agent(obs)
@@ -382,6 +400,7 @@ def main() -> None:
     parser.add_argument("--action-slots", type=int, default=ACTION_SLOTS)
     parser.add_argument("--ship-buckets", type=int, default=0, help="0 uses legacy Beta ship fractions; >0 uses required-ships multiplier buckets.")
     parser.add_argument("--max-actions-per-source-safety", type=int, default=MAX_ACTIONS_PER_SOURCE_SAFETY)
+    parser.add_argument("--target-mask-mode", choices=["candidate", "safe", "all_planets"], default="candidate")
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--entropy-coef", type=float, default=0.02)
     parser.add_argument("--min-ppo-epochs", type=int, default=4, help="Minimum PPO epochs per rollout before KL early stopping can trigger.")
@@ -459,6 +478,7 @@ def main() -> None:
                 opponent_model=latest_opponent if rollout_mode == "latest" else None,
                 opponent_deterministic=not args.latest_opponent_stochastic,
                 max_actions_per_source=args.max_actions_per_source_safety,
+                target_mask_mode=args.target_mask_mode,
             )
             add_weighted_rows(buffer, rows, 1.0)
             fresh_rows_for_replay.extend(dict(row) for row in rows)
@@ -503,7 +523,7 @@ def main() -> None:
             save_checkpoint(ckpt_path, model, args, update, summary)
             print(json.dumps({"event": "eval_start", "update": update, "games_each": args.eval_games}, ensure_ascii=False), flush=True)
             eval_random = run_matchups(
-                lambda: TinyPPOAgent(ckpt_path, device=str(device), deterministic=True),
+                lambda: TinyPPOAgent(ckpt_path, device=str(device), deterministic=True, target_mask_mode=args.target_mask_mode),
                 lambda: random_policy_agent,
                 games=args.eval_games,
                 seed=args.seed + 300000 + update * 1000,
@@ -514,7 +534,7 @@ def main() -> None:
             )
             print(json.dumps({"event": "eval_random_done", "update": update, "eval_vs_random": eval_random}, ensure_ascii=False), flush=True)
             eval_result = run_matchups(
-                lambda: TinyPPOAgent(ckpt_path, device=str(device), deterministic=True),
+                lambda: TinyPPOAgent(ckpt_path, device=str(device), deterministic=True, target_mask_mode=args.target_mask_mode),
                 lambda: nearest_planet_agent,
                 games=args.eval_games,
                 seed=args.seed + 500000 + update * 1000,

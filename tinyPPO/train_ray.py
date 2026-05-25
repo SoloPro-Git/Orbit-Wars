@@ -344,6 +344,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--action-slots", type=int, default=ACTION_SLOTS)
     parser.add_argument("--ship-buckets", type=int, default=0, help="0 uses legacy Beta ship fractions; >0 uses required-ships multiplier buckets.")
     parser.add_argument("--max-actions-per-source-safety", type=int, default=MAX_ACTIONS_PER_SOURCE_SAFETY)
+    parser.add_argument("--target-mask-mode", choices=["candidate", "safe", "all_planets"], default="candidate")
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--entropy-coef", type=float, default=0.02)
     parser.add_argument("--min-ppo-epochs", type=int, default=4, help="Minimum PPO epochs per rollout before KL early stopping can trigger.")
@@ -433,7 +434,7 @@ def main() -> None:
 
     @ray.remote(num_cpus=args.cpus_per_worker, num_gpus=args.gpus_per_worker)
     class RolloutWorker:
-        def __init__(self, model_cfg: dict, episode_steps: int, opponent_mode: str, use_numba: bool):
+        def __init__(self, model_cfg: dict, episode_steps: int, opponent_mode: str, use_numba: bool, target_mask_mode: str):
             torch.set_num_threads(1)
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             self.model = TinyPolicyValueNet(**model_cfg).to(self.device)
@@ -441,6 +442,7 @@ def main() -> None:
             self.episode_steps = episode_steps
             self.opponent_mode = opponent_mode
             self.use_numba = use_numba
+            self.target_mask_mode = target_mask_mode
 
         def set_weights(self, state_dict: dict[str, torch.Tensor]) -> None:
             self.model.load_state_dict(state_dict)
@@ -478,6 +480,7 @@ def main() -> None:
                     opponent_model=opponent_model if train_mode == "latest" else None,
                     opponent_deterministic=latest_opponent_deterministic,
                     max_actions_per_source=max_actions_per_source,
+                    target_mask_mode=self.target_mask_mode,
                 )
                 rows.extend(ep_rows)
                 metrics.append(ep_metrics)
@@ -504,6 +507,7 @@ def main() -> None:
             ship_bias: float = 0.0,
             launch_temperature: float = 1.0,
             deterministic: bool = True,
+            target_mask_mode: str = "candidate",
         ):
             torch.set_num_threads(1)
             self.worker_index = int(worker_index)
@@ -521,6 +525,7 @@ def main() -> None:
             self.ship_bias = float(ship_bias)
             self.launch_temperature = float(launch_temperature)
             self.deterministic = bool(deterministic)
+            self.target_mask_mode = target_mask_mode
 
         def set_weights(self, state_dict: dict[str, torch.Tensor]) -> None:
             self.model.load_state_dict(state_dict)
@@ -540,6 +545,7 @@ def main() -> None:
                 launch_bias=self.launch_bias,
                 ship_bias=self.ship_bias,
                 launch_temperature=self.launch_temperature,
+                target_mask_mode=self.target_mask_mode,
             )
             return actions
 
@@ -802,7 +808,7 @@ def main() -> None:
             ),
             flush=True,
         )
-    workers = [RolloutWorker.remote(model_cfg, args.episode_steps, args.opponent_mode, not args.no_numba) for _ in range(num_workers)]
+    workers = [RolloutWorker.remote(model_cfg, args.episode_steps, args.opponent_mode, not args.no_numba, args.target_mask_mode) for _ in range(num_workers)]
     eval_actor_options = {"resources": {f"node:{eval_node_ip}": 0.001}}
     eval_launch_bias = args.eval_launch_bias + args.eval_aggression
     eval_ship_bias = args.eval_ship_bias + args.eval_aggression
@@ -818,6 +824,7 @@ def main() -> None:
             eval_ship_bias,
             args.eval_launch_temperature,
             not args.eval_stochastic,
+            args.target_mask_mode,
         )
         for i in range(max(1, args.eval_workers))
     ]
@@ -838,6 +845,7 @@ def main() -> None:
                 "eval_stochastic": args.eval_stochastic,
                 "eval_stochastic_compare": args.eval_stochastic_compare,
                 "eval_opponents": ",".join(eval_opponents),
+                "target_mask_mode": args.target_mask_mode,
                 "eval_gpu_ids": args.eval_gpu_ids,
                 "eval_progress_every": args.eval_progress_every,
                 "opponent_checkpoint": args.opponent_checkpoint,
@@ -1168,7 +1176,7 @@ def main() -> None:
             except Exception as exc:
                 stale_wid = future_to_worker.get(done_ref)
                 if stale_wid is not None:
-                    workers[stale_wid] = RolloutWorker.remote(model_cfg, args.episode_steps, args.opponent_mode, not args.no_numba)
+                    workers[stale_wid] = RolloutWorker.remote(model_cfg, args.episode_steps, args.opponent_mode, not args.no_numba, args.target_mask_mode)
                     straggler_restarts += 1
                 print(
                     json.dumps(
@@ -1219,7 +1227,7 @@ def main() -> None:
                         flush=True,
                     )
             for wid in stale_workers:
-                workers[wid] = RolloutWorker.remote(model_cfg, args.episode_steps, args.opponent_mode, not args.no_numba)
+                workers[wid] = RolloutWorker.remote(model_cfg, args.episode_steps, args.opponent_mode, not args.no_numba, args.target_mask_mode)
             straggler_restarts = len(stale_workers)
         if pbar is not None:
             pbar.close()
@@ -1348,6 +1356,7 @@ def main() -> None:
                     eval_ship_bias,
                     args.eval_launch_temperature,
                     not args.eval_stochastic,
+                    args.target_mask_mode,
                 )
                 part = ray.get(
                     temp_worker.evaluate.remote(
