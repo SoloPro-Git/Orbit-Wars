@@ -289,6 +289,9 @@ def collect_episode(
     opponent_deterministic: bool = True,
     max_actions_per_source: int = MAX_ACTIONS_PER_SOURCE_SAFETY,
     target_mask_mode: str = "candidate",
+    launch_bias: float = 0.0,
+    ship_bias: float = 0.0,
+    launch_temperature: float = 1.0,
 ) -> tuple[list[dict], dict[str, float]]:
     env = make_fast_orbit_wars({"episodeSteps": episode_steps, "seed": seed}, keep_history=False, use_numba=use_numba)
     env.reset(2)
@@ -315,6 +318,9 @@ def collect_episode(
                     deterministic=False,
                     max_actions_per_source=max_actions_per_source,
                     target_mask_mode=target_mask_mode,
+                    launch_bias=launch_bias,
+                    ship_bias=ship_bias,
+                    launch_temperature=launch_temperature,
                 )
                 by_player[pid].append(row)
                 launch_counts.append(len(action))
@@ -329,6 +335,9 @@ def collect_episode(
                         deterministic=opponent_deterministic,
                         max_actions_per_source=max_actions_per_source,
                         target_mask_mode=target_mask_mode,
+                        launch_bias=launch_bias,
+                        ship_bias=ship_bias,
+                        launch_temperature=launch_temperature,
                     )
             else:
                 action = random_policy_agent(obs)
@@ -401,6 +410,9 @@ def main() -> None:
     parser.add_argument("--ship-buckets", type=int, default=0, help="0 uses legacy Beta ship fractions; >0 uses required-ships multiplier buckets.")
     parser.add_argument("--max-actions-per-source-safety", type=int, default=MAX_ACTIONS_PER_SOURCE_SAFETY)
     parser.add_argument("--target-mask-mode", choices=["candidate", "safe", "all_planets"], default="candidate")
+    parser.add_argument("--launch-bias", type=float, default=0.0)
+    parser.add_argument("--ship-bias", type=float, default=0.0)
+    parser.add_argument("--launch-temperature", type=float, default=1.0)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--entropy-coef", type=float, default=0.02)
     parser.add_argument("--min-ppo-epochs", type=int, default=4, help="Minimum PPO epochs per rollout before KL early stopping can trigger.")
@@ -479,6 +491,9 @@ def main() -> None:
                 opponent_deterministic=not args.latest_opponent_stochastic,
                 max_actions_per_source=args.max_actions_per_source_safety,
                 target_mask_mode=args.target_mask_mode,
+                launch_bias=args.launch_bias,
+                ship_bias=args.ship_bias,
+                launch_temperature=args.launch_temperature,
             )
             add_weighted_rows(buffer, rows, 1.0)
             fresh_rows_for_replay.extend(dict(row) for row in rows)

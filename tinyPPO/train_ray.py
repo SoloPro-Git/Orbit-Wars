@@ -345,6 +345,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ship-buckets", type=int, default=0, help="0 uses legacy Beta ship fractions; >0 uses required-ships multiplier buckets.")
     parser.add_argument("--max-actions-per-source-safety", type=int, default=MAX_ACTIONS_PER_SOURCE_SAFETY)
     parser.add_argument("--target-mask-mode", choices=["candidate", "safe", "all_planets"], default="candidate")
+    parser.add_argument("--launch-bias", type=float, default=0.0, help="Rollout logit bias for launch vs no-launch.")
+    parser.add_argument("--ship-bias", type=float, default=0.0, help="Rollout logit-space bias for ship fraction mean.")
+    parser.add_argument("--launch-temperature", type=float, default=1.0, help="Rollout temperature for launch/no-launch logits.")
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--entropy-coef", type=float, default=0.02)
     parser.add_argument("--min-ppo-epochs", type=int, default=4, help="Minimum PPO epochs per rollout before KL early stopping can trigger.")
@@ -464,6 +467,9 @@ def main() -> None:
             max_actions_per_source: int,
             seed_base: int,
             episodes: int,
+            launch_bias: float,
+            ship_bias: float,
+            launch_temperature: float,
         ) -> tuple[list[dict], dict[str, float]]:
             self.set_weights(state_dict)
             opponent_model = self.set_opponent_weights(opponent_state_dict)
@@ -481,6 +487,9 @@ def main() -> None:
                     opponent_deterministic=latest_opponent_deterministic,
                     max_actions_per_source=max_actions_per_source,
                     target_mask_mode=self.target_mask_mode,
+                    launch_bias=launch_bias,
+                    ship_bias=ship_bias,
+                    launch_temperature=launch_temperature,
                 )
                 rows.extend(ep_rows)
                 metrics.append(ep_metrics)
@@ -839,6 +848,9 @@ def main() -> None:
                 "eval_node_ip": eval_node_ip,
                 "episodes_per_update": args.episodes_per_update,
                 "episodes_per_worker_cap": args.episodes_per_worker,
+                "launch_bias": args.launch_bias,
+                "ship_bias": args.ship_bias,
+                "launch_temperature": args.launch_temperature,
                 "eval_launch_bias": eval_launch_bias,
                 "eval_ship_bias": eval_ship_bias,
                 "eval_launch_temperature": args.eval_launch_temperature,
@@ -1151,6 +1163,9 @@ def main() -> None:
                 args.max_actions_per_source_safety,
                 args.seed + update * 1_000_000 + wid * 10_000,
                 episodes,
+                args.launch_bias,
+                args.ship_bias,
+                args.launch_temperature,
             )
             futures.append(ref)
             future_to_worker[ref] = wid
