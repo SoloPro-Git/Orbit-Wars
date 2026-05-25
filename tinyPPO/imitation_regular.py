@@ -365,14 +365,30 @@ def bc_loss(
     launch_pred = out["source_logits"][own_slots].argmax(dim=-1)
     launch_acc = (launch_pred == launch_targets).float().mean()
     pos = launch_targets == 1
+    pred_pos = launch_pred == 1
+    true_count = batch["launch_actions"].masked_fill(~own_slots, 0).sum(dim=(1, 2)).float()
+    pred_count = (out["source_logits"].argmax(dim=-1) == 1).masked_fill(~own_slots, False).sum(dim=(1, 2)).float()
+    tp = (pred_pos & pos).float().sum()
+    fp = (pred_pos & ~pos).float().sum()
+    fn = (~pred_pos & pos).float().sum()
+    launch_precision = tp / (tp + fp).clamp_min(1.0)
     launch_recall = (launch_pred[pos] == 1).float().mean() if pos.any() else torch.tensor(0.0, device=launch_logits.device)
+    launch_f1 = 2.0 * launch_precision * launch_recall / (launch_precision + launch_recall).clamp_min(1e-6)
+    launch_pred_rate = pred_pos.float().mean()
+    launch_true_rate = pos.float().mean()
+    action_count_mae = (pred_count - true_count).abs().mean()
     return loss, {
         "loss": float(loss.detach().cpu()),
         "launch_loss": float(launch_loss.detach().cpu()),
         "target_loss": float(target_loss.detach().cpu()),
         "ship_loss": float(ship_loss.detach().cpu()),
         "launch_acc": float(launch_acc.detach().cpu()),
+        "launch_precision": float(launch_precision.detach().cpu()),
         "launch_recall": float(launch_recall.detach().cpu()),
+        "launch_f1": float(launch_f1.detach().cpu()),
+        "launch_pred_rate": float(launch_pred_rate.detach().cpu()),
+        "launch_true_rate": float(launch_true_rate.detach().cpu()),
+        "action_count_mae": float(action_count_mae.detach().cpu()),
         "target_acc": float(target_acc.detach().cpu()),
         "ship_acc": float(ship_acc.detach().cpu()),
         "action_weight_mean": float(action_weight_mean.detach().cpu()),

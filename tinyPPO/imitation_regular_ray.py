@@ -262,6 +262,14 @@ def _merge_eval(parts: list[dict[str, float]]) -> dict[str, float]:
     }
 
 
+def _imitation_score(metrics: dict[str, float]) -> float:
+    launch_f1 = float(metrics.get("val_launch_f1", 0.0))
+    target_acc = float(metrics.get("val_target_acc", 0.0))
+    ship_acc = float(metrics.get("val_ship_acc", 0.0))
+    count_mae = min(3.0, float(metrics.get("val_action_count_mae", 3.0)))
+    return 0.45 * launch_f1 + 0.35 * target_acc + 0.20 * ship_acc - 0.05 * count_mae
+
+
 def save_checkpoint(path: Path, state: dict[str, torch.Tensor], model_cfg: dict[str, int], epoch: int, metrics: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save({"state_dict": state, "model": model_cfg, "update": epoch, "metrics": metrics}, path)
@@ -391,6 +399,7 @@ def main() -> None:
     parser.add_argument("--ray-address", default="auto")
     parser.add_argument("--out", default="tinyPPO/regular_bc_ray.pt")
     parser.add_argument("--best-out", default="tinyPPO/regular_bc.pt")
+    parser.add_argument("--best-online-out", default="", help="Optional checkpoint path for the best online vs-regular nonloss result.")
     parser.add_argument("--resume", default="", help="Resume model weights from a regular BC checkpoint. Epoch numbering continues from checkpoint update.")
     parser.add_argument("--players-list", default="2")
     parser.add_argument("--games-per-players", type=int, default=2000)
@@ -496,6 +505,7 @@ def main() -> None:
         for _ in range(args.eval_actors)
     ]
     best_nonloss = -1.0
+    best_imitation_score = -1e9
     best_metrics: dict[str, Any] = {}
     pending_eval_refs: dict[Any, int] = {}
     pending_eval_states: dict[int, dict[str, torch.Tensor]] = {}
@@ -527,7 +537,8 @@ def main() -> None:
             if eval_metrics["nonloss"] > best_nonloss:
                 best_nonloss = eval_metrics["nonloss"]
                 best_metrics = dict(summary)
-                save_checkpoint(Path(args.best_out), eval_state, model_cfg, eval_epoch, {"collect": collect_metrics, **summary, "best": True})
+                online_path = Path(args.best_online_out) if args.best_online_out else Path(args.out).with_name("regular_bc_ray_online_best.pt")
+                save_checkpoint(online_path, eval_state, model_cfg, eval_epoch, {"collect": collect_metrics, **summary, "best_online": True})
                 save_checkpoint(
                     Path(args.out).with_name(f"regular_bc_ray_best_e{eval_epoch:04d}.pt"),
                     eval_state,
@@ -560,6 +571,24 @@ def main() -> None:
         results = ray.get(state_refs)
         state = _average_states([item[0] for item in results])
         train_metrics = _weighted_mean([item[1] for item in results])
+        imitation_score = _imitation_score(train_metrics)
+        train_metrics["val_imitation_score"] = imitation_score
+        if imitation_score > best_imitation_score:
+            best_imitation_score = imitation_score
+            save_checkpoint(
+                Path(args.best_out),
+                state,
+                model_cfg,
+                epoch,
+                {"collect": collect_metrics, "epoch": epoch, "train": train_metrics, "best_imitation": True},
+            )
+            save_checkpoint(
+                Path(args.out).with_name(f"regular_bc_ray_best_imitation_e{epoch:04d}.pt") if epoch % args.eval_interval == 0 else Path(args.best_out),
+                state,
+                model_cfg,
+                epoch,
+                {"collect": collect_metrics, "epoch": epoch, "train": train_metrics, "best_imitation": True},
+            )
         summary: dict[str, Any] = {"epoch": epoch, "train": train_metrics}
 
         should_eval = (
@@ -633,7 +662,13 @@ def main() -> None:
             part = ray.get(ref)
             eval_parts_by_epoch.setdefault(eval_epoch, []).append(part)
             maybe_finish_eval(eval_epoch)
-    print(json.dumps({"event": "done", "best_nonloss": best_nonloss, "best": best_metrics}, ensure_ascii=True), flush=True)
+    print(
+        json.dumps(
+            {"event": "done", "best_nonloss": best_nonloss, "best_imitation_score": best_imitation_score, "best": best_metrics},
+            ensure_ascii=True,
+        ),
+        flush=True,
+    )
     if swan is not None:
         swan.finish()
 
