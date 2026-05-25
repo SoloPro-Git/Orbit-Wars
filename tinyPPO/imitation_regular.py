@@ -432,6 +432,7 @@ def train_bc(args: argparse.Namespace, dataset: TensorDataset) -> tuple[TinyPoli
         "layers": args.layers,
         "ship_buckets": len(SHIP_BUCKET_MULTIPLIERS),
         "action_slots": ACTION_SLOTS,
+        "source_target_summary": bool(args.source_target_summary),
     }
     model = TinyPolicyValueNet(**model_cfg).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
@@ -528,6 +529,7 @@ def main() -> None:
     parser.add_argument("--hidden", type=int, default=64)
     parser.add_argument("--heads", type=int, default=4)
     parser.add_argument("--layers", type=int, default=1)
+    parser.add_argument("--source-target-summary", action="store_true", help="Let the launch/source head see a pooled summary of source-target edge features.")
     parser.add_argument("--no-numba", action="store_true")
     parser.add_argument("--progress", action="store_true")
     args = parser.parse_args()

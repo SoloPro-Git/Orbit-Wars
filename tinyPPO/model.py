@@ -16,10 +16,19 @@ class TinyPolicyValueNet(nn.Module):
     angle from map coordinates.
     """
 
-    def __init__(self, hidden: int = 64, heads: int = 4, layers: int = 1, ship_buckets: int = 0, action_slots: int = 3):
+    def __init__(
+        self,
+        hidden: int = 64,
+        heads: int = 4,
+        layers: int = 1,
+        ship_buckets: int = 0,
+        action_slots: int = 3,
+        source_target_summary: bool = False,
+    ):
         super().__init__()
         self.ship_buckets = ship_buckets
         self.action_slots = action_slots
+        self.source_target_summary = source_target_summary
         self.planet_in = nn.Sequential(
             nn.Linear(PLANET_FEAT_DIM, hidden),
             nn.GELU(),
@@ -32,7 +41,8 @@ class TinyPolicyValueNet(nn.Module):
             nn.GELU(),
             nn.Linear(hidden, hidden),
         )
-        self.source_head = nn.Linear(hidden, 2)
+        source_head_in = hidden * 2 if source_target_summary else hidden
+        self.source_head = nn.Linear(source_head_in, 2)
         self.slot_embed = nn.Parameter(torch.zeros(action_slots, hidden))
         self.edge = nn.Sequential(
             nn.Linear(hidden * 3 + PAIR_FEAT_DIM, hidden),
@@ -56,13 +66,23 @@ class TinyPolicyValueNet(nn.Module):
         x = self.planet_in(planets)
         g = self.global_in(global_features)
         source_context = self.source_context(torch.cat([x, g[:, None, :].expand(-1, MAX_PLANETS, -1)], dim=-1))
-        slot_context = source_context[:, :, None, :] + self.slot_embed[None, None, :, :]
-        source_logits = self.source_head(slot_context)
-
         src = source_context[:, :, None, :].expand(-1, -1, MAX_PLANETS, -1)
         tgt = x[:, None, :, :].expand(-1, MAX_PLANETS, -1, -1)
         glob = g[:, None, None, :].expand(-1, MAX_PLANETS, MAX_PLANETS, -1)
         edge_hidden = self.edge(torch.cat([src, tgt, glob, pair_features], dim=-1))
+        source_policy_context = source_context
+        if self.source_target_summary:
+            target_valid = planet_mask[:, None, :].expand(-1, MAX_PLANETS, -1)
+            eye_sources = torch.eye(MAX_PLANETS, dtype=torch.bool, device=planets.device)[None, :, :]
+            target_valid = target_valid & ~eye_sources
+            masked_edges = edge_hidden.masked_fill(~target_valid[..., None], -1e9)
+            target_summary = masked_edges.max(dim=2).values
+            target_summary = torch.where(torch.isfinite(target_summary), target_summary, torch.zeros_like(target_summary))
+            source_policy_context = torch.cat([source_context, target_summary], dim=-1)
+        slot_context = source_context[:, :, None, :] + self.slot_embed[None, None, :, :]
+        source_slot_context = source_policy_context[:, :, None, :].expand(-1, -1, self.action_slots, -1)
+        source_logits = self.source_head(source_slot_context)
+
         edge_by_slot = edge_hidden[:, :, None, :, :].expand(-1, -1, self.action_slots, -1, -1)
         slot_by_target = slot_context[:, :, :, None, :].expand(-1, -1, -1, MAX_PLANETS, -1)
         slot_edge = torch.cat([edge_by_slot, slot_by_target], dim=-1)

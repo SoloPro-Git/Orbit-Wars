@@ -347,6 +347,7 @@ def save_checkpoint(path: Path, model: TinyPolicyValueNet, args: argparse.Namesp
                 "layers": args.layers,
                 "ship_buckets": int(getattr(args, "ship_buckets", 0)),
                 "action_slots": args.action_slots,
+                "source_target_summary": bool(getattr(args, "source_target_summary", False)),
             },
             "update": update,
             "metrics": metrics,
@@ -377,6 +378,7 @@ def main() -> None:
     parser.add_argument("--hidden", type=int, default=64)
     parser.add_argument("--heads", type=int, default=4)
     parser.add_argument("--layers", type=int, default=1)
+    parser.add_argument("--source-target-summary", action="store_true")
     parser.add_argument("--action-slots", type=int, default=ACTION_SLOTS)
     parser.add_argument("--ship-buckets", type=int, default=0, help="0 uses legacy Beta ship fractions; >0 uses required-ships multiplier buckets.")
     parser.add_argument("--max-actions-per-source-safety", type=int, default=MAX_ACTIONS_PER_SOURCE_SAFETY)
@@ -405,7 +407,14 @@ def main() -> None:
         torch.set_num_threads(args.torch_threads)
     device = torch.device(args.device)
     out_dir = Path(args.out_dir)
-    model = TinyPolicyValueNet(hidden=args.hidden, heads=args.heads, layers=args.layers, ship_buckets=args.ship_buckets, action_slots=args.action_slots).to(device)
+    model = TinyPolicyValueNet(
+        hidden=args.hidden,
+        heads=args.heads,
+        layers=args.layers,
+        ship_buckets=args.ship_buckets,
+        action_slots=args.action_slots,
+        source_target_summary=args.source_target_summary,
+    ).to(device)
     ppo_cfg = PPOConfig(
         learning_rate=args.lr,
         entropy_coef=args.entropy_coef,
@@ -421,7 +430,14 @@ def main() -> None:
 
     best_winrate = -1.0
     phase = "random" if args.curriculum else args.opponent_mode
-    latest_opponent = TinyPolicyValueNet(hidden=args.hidden, heads=args.heads, layers=args.layers, ship_buckets=args.ship_buckets, action_slots=args.action_slots).to(device)
+    latest_opponent = TinyPolicyValueNet(
+        hidden=args.hidden,
+        heads=args.heads,
+        layers=args.layers,
+        ship_buckets=args.ship_buckets,
+        action_slots=args.action_slots,
+        source_target_summary=args.source_target_summary,
+    ).to(device)
     latest_opponent.load_state_dict(model.state_dict())
     latest_opponent.eval()
     replay_batches: deque[tuple[int, list[dict]]] = deque(maxlen=max(0, args.replay_updates))

@@ -590,6 +590,7 @@ def main() -> None:
     parser.add_argument("--best-out", default="tinyPPO/regular_bc.pt")
     parser.add_argument("--best-online-out", default="", help="Optional checkpoint path for the best online vs-regular nonloss result.")
     parser.add_argument("--resume", default="", help="Resume model weights from a regular BC checkpoint. Epoch numbering continues from checkpoint update.")
+    parser.add_argument("--resume-compatible", action="store_true", help="Warm-start only checkpoint tensors whose names and shapes match the requested model config.")
     parser.add_argument("--players-list", default="2")
     parser.add_argument("--games-per-players", type=int, default=2000)
     parser.add_argument("--dataset-cache", default="", help="Pickle cache for collected BC rows. Existing cache is reused unless --refresh-dataset is set.")
@@ -625,6 +626,7 @@ def main() -> None:
     parser.add_argument("--hidden", type=int, default=64)
     parser.add_argument("--heads", type=int, default=4)
     parser.add_argument("--layers", type=int, default=1)
+    parser.add_argument("--source-target-summary", action="store_true", help="Let the launch/source head see a pooled summary of source-target edge features.")
     parser.add_argument("--eval-interval", type=int, default=40)
     parser.add_argument("--eval-games", type=int, default=64)
     parser.add_argument("--max-pending-evals", type=int, default=2)
@@ -663,9 +665,9 @@ def main() -> None:
     if args.resume:
         resume_payload = torch.load(args.resume, map_location="cpu", weights_only=False)
         resume_state = {key: value.detach().cpu() for key, value in resume_payload["state_dict"].items()}
-        resume_update = int(resume_payload.get("update", 0))
-        if isinstance(resume_payload.get("model"), dict):
-            resume_model_cfg = {key: int(value) for key, value in resume_payload["model"].items()}
+        resume_update = 0 if args.resume_compatible else int(resume_payload.get("update", 0))
+        if isinstance(resume_payload.get("model"), dict) and not args.resume_compatible:
+            resume_model_cfg = {key: bool(value) if key == "source_target_summary" else int(value) for key, value in resume_payload["model"].items()}
         print(
             json.dumps(
                 {"event": "resume_loaded", "path": args.resume, "resume_update": resume_update, "model": resume_model_cfg},
@@ -680,9 +682,34 @@ def main() -> None:
         "layers": args.layers,
         "ship_buckets": len(SHIP_BUCKET_MULTIPLIERS),
         "action_slots": ACTION_SLOTS,
+        "source_target_summary": bool(args.source_target_summary),
     }
     init_model = TinyPolicyValueNet(**model_cfg)
-    state = resume_state or _cpu_state_dict(init_model)
+    state = _cpu_state_dict(init_model)
+    if resume_state:
+        if args.resume_compatible:
+            loaded_keys = []
+            skipped_keys = []
+            for key, value in resume_state.items():
+                if key in state and tuple(state[key].shape) == tuple(value.shape):
+                    state[key] = value
+                    loaded_keys.append(key)
+                else:
+                    skipped_keys.append(key)
+            print(
+                json.dumps(
+                    {
+                        "event": "resume_compatible_loaded",
+                        "path": args.resume,
+                        "loaded_tensors": len(loaded_keys),
+                        "skipped_tensors": skipped_keys,
+                    },
+                    ensure_ascii=True,
+                ),
+                flush=True,
+            )
+        else:
+            state = resume_state
     actors = [
         BCTrainEvalActor.options(num_cpus=args.cpus_per_trainer, num_gpus=args.gpus_per_trainer).remote(
             shard,
