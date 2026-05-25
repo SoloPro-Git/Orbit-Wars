@@ -169,13 +169,23 @@ class BCTrainEvalActor:
         ship_loss_weight: float,
         critical_action_weight: float,
         target_loss_mask: str,
+        trainable_modules: str,
         seed: int,
     ):
         torch.set_num_threads(1)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model_cfg = dict(model_cfg)
         self.model = TinyPolicyValueNet(**self.model_cfg).to(self.device)
-        self.opt = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=weight_decay)
+        trainable_params = list(self.model.parameters())
+        if trainable_modules == "target_head":
+            for param in self.model.parameters():
+                param.requires_grad_(False)
+            for param in self.model.target_head.parameters():
+                param.requires_grad_(True)
+            trainable_params = list(self.model.target_head.parameters())
+        elif trainable_modules != "all":
+            raise ValueError(f"unsupported trainable_modules: {trainable_modules!r}")
+        self.opt = torch.optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
         self.max_grad_norm = float(max_grad_norm)
         self.launch_pos_weight = float(launch_pos_weight)
         self.target_loss_weight = float(target_loss_weight)
@@ -627,6 +637,7 @@ def main() -> None:
     parser.add_argument("--ship-loss-weight", type=float, default=0.5)
     parser.add_argument("--critical-action-weight", type=float, default=0.0)
     parser.add_argument("--target-loss-mask", choices=["dataset", "all_planets"], default="dataset")
+    parser.add_argument("--trainable-modules", choices=["all", "target_head"], default="all")
     parser.add_argument("--val-frac", type=float, default=0.08)
     parser.add_argument("--hidden", type=int, default=64)
     parser.add_argument("--heads", type=int, default=4)
@@ -729,6 +740,7 @@ def main() -> None:
             args.ship_loss_weight,
             args.critical_action_weight,
             args.target_loss_mask,
+            args.trainable_modules,
             args.seed + i,
         )
         for i, shard in enumerate(shards)
