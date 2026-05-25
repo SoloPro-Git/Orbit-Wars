@@ -110,6 +110,15 @@ def _promotion_guard_reasons(metrics: dict, args: argparse.Namespace) -> list[st
     return reasons
 
 
+def _parse_eval_opponents(value: str) -> tuple[str, ...]:
+    allowed = {"random", "nearest", "regular", "opponent"}
+    opponents = tuple(dict.fromkeys(item.strip() for item in value.split(",") if item.strip()))
+    unknown = sorted(set(opponents) - allowed)
+    if unknown:
+        raise ValueError(f"unknown eval opponents: {unknown}; allowed={sorted(allowed)}")
+    return opponents
+
+
 def _load_state_into_training(
     model: TinyPolicyValueNet,
     updater: PPOUpdater,
@@ -291,6 +300,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--eval-stochastic-compare", action="store_true", help="Also log stochastic eval beside the main deterministic eval.")
     parser.add_argument("--sync-eval", action="store_true", help="Block training during eval instead of running Ray eval actors asynchronously.")
     parser.add_argument("--eval-workers", type=int, default=3)
+    parser.add_argument(
+        "--eval-opponents",
+        default="random,nearest,regular,opponent",
+        help="Comma list from random,nearest,regular,opponent. Use nearest,regular,opponent to skip low-signal random eval.",
+    )
     parser.add_argument("--gpus-per-eval-worker", type=float, default=1.0 / 3.0)
     parser.add_argument("--eval-gpu-ids", default="", help="Comma list forced inside eval actors, e.g. '0'. Use with --gpus-per-eval-worker 0 to keep eval on a GPU excluded from rollout Ray resources.")
     parser.add_argument("--eval-progress-every", type=int, default=5, help="Print eval worker progress every N games per matchup. 0 disables progress logs.")
@@ -379,6 +393,7 @@ def rollout_assignments(
 
 def main() -> None:
     args = build_arg_parser().parse_args()
+    eval_opponents = _parse_eval_opponents(args.eval_opponents)
     args.opponent_refresh_interval = max(1, int(args.opponent_refresh_interval))
     if (
         (args.promote_opponent_on_eval and args.promote_opponent_metric.startswith("eval_stochastic"))
@@ -664,12 +679,14 @@ def main() -> None:
             progress_every: int = 5,
             opponent_state_dict: dict[str, torch.Tensor] | None = None,
             opponent_deterministic: bool = True,
+            eval_opponents: tuple[str, ...] = ("random", "nearest", "regular", "opponent"),
         ) -> dict:
             self.set_weights(state_dict)
             self.opponent_deterministic = bool(opponent_deterministic)
             has_opponent = opponent_state_dict is not None
             if has_opponent:
                 self.set_opponent_weights(opponent_state_dict)
+            requested_opponents = set(eval_opponents)
             print(
                 json.dumps(
                     {
@@ -679,27 +696,32 @@ def main() -> None:
                         "games": games,
                         "stochastic_compare": bool(stochastic_compare),
                         "has_opponent_eval": bool(has_opponent),
+                        "eval_opponents": sorted(requested_opponents),
                     },
                     ensure_ascii=False,
                 ),
                 flush=True,
             )
-            summary = {
-                "update": update,
-                "eval_vs_random": self._run_matchups(update, "eval_vs_random", "random", games, seed, progress_every),
-                "eval_vs_nearest": self._run_matchups(update, "eval_vs_nearest", "nearest", games, seed + 100_000, progress_every),
-                "eval_vs_regular": self._run_matchups(update, "eval_vs_regular", "regular", games, seed + 120_000, progress_every),
-            }
-            if has_opponent:
+            summary = {"update": update}
+            if "random" in requested_opponents:
+                summary["eval_vs_random"] = self._run_matchups(update, "eval_vs_random", "random", games, seed, progress_every)
+            if "nearest" in requested_opponents:
+                summary["eval_vs_nearest"] = self._run_matchups(update, "eval_vs_nearest", "nearest", games, seed + 100_000, progress_every)
+            if "regular" in requested_opponents:
+                summary["eval_vs_regular"] = self._run_matchups(update, "eval_vs_regular", "regular", games, seed + 120_000, progress_every)
+            if has_opponent and "opponent" in requested_opponents:
                 summary["eval_vs_opponent"] = self._run_opponent_matchups(update, "eval_vs_opponent", games, seed + 150_000, progress_every)
             if stochastic_compare:
                 previous = self.deterministic
                 self.deterministic = False
                 try:
-                    summary["eval_stochastic_vs_random"] = self._run_matchups(update, "eval_stochastic_vs_random", "random", games, seed + 200_000, progress_every)
-                    summary["eval_stochastic_vs_nearest"] = self._run_matchups(update, "eval_stochastic_vs_nearest", "nearest", games, seed + 300_000, progress_every)
-                    summary["eval_stochastic_vs_regular"] = self._run_matchups(update, "eval_stochastic_vs_regular", "regular", games, seed + 320_000, progress_every)
-                    if has_opponent:
+                    if "random" in requested_opponents:
+                        summary["eval_stochastic_vs_random"] = self._run_matchups(update, "eval_stochastic_vs_random", "random", games, seed + 200_000, progress_every)
+                    if "nearest" in requested_opponents:
+                        summary["eval_stochastic_vs_nearest"] = self._run_matchups(update, "eval_stochastic_vs_nearest", "nearest", games, seed + 300_000, progress_every)
+                    if "regular" in requested_opponents:
+                        summary["eval_stochastic_vs_regular"] = self._run_matchups(update, "eval_stochastic_vs_regular", "regular", games, seed + 320_000, progress_every)
+                    if has_opponent and "opponent" in requested_opponents:
                         summary["eval_stochastic_vs_opponent"] = self._run_opponent_matchups(
                             update,
                             "eval_stochastic_vs_opponent",
@@ -813,6 +835,7 @@ def main() -> None:
                 "eval_launch_temperature": args.eval_launch_temperature,
                 "eval_stochastic": args.eval_stochastic,
                 "eval_stochastic_compare": args.eval_stochastic_compare,
+                "eval_opponents": ",".join(eval_opponents),
                 "eval_gpu_ids": args.eval_gpu_ids,
                 "eval_progress_every": args.eval_progress_every,
                 "opponent_checkpoint": args.opponent_checkpoint,
@@ -964,7 +987,7 @@ def main() -> None:
                     args.curriculum
                     and not args.promote_opponent_on_eval
                     and phase == "random"
-                    and merged_eval["eval_vs_random"]["winrate"] >= args.random_winrate_threshold
+                    and _metric_winrate(merged_eval, "eval_vs_random") >= args.random_winrate_threshold
                 ):
                     phase = "latest"
                     updater.cfg.entropy_coef = max(updater.cfg.entropy_coef, args.selfplay_entropy_coef)
@@ -977,7 +1000,7 @@ def main() -> None:
                                 "update": update,
                                 "eval_update": eval_update,
                                 "to": phase,
-                                "reason": f"eval_vs_random winrate {merged_eval['eval_vs_random']['winrate']:.3f} >= {args.random_winrate_threshold:.3f}",
+                                "reason": f"eval_vs_random winrate {_metric_winrate(merged_eval, 'eval_vs_random'):.3f} >= {args.random_winrate_threshold:.3f}",
                                 "entropy_coef": updater.cfg.entropy_coef,
                             },
                             ensure_ascii=False,
@@ -1334,6 +1357,7 @@ def main() -> None:
                         args.eval_progress_every,
                         eval_opponent_ref,
                         not args.opponent_eval_stochastic,
+                        eval_opponents,
                     )
                 )
                 merged_eval = _merge_eval_parts([part])
@@ -1478,6 +1502,7 @@ def main() -> None:
                             args.eval_progress_every,
                             eval_opponent_ref,
                             not args.opponent_eval_stochastic,
+                            eval_opponents,
                         )
                     )
                 for ref in parts:
