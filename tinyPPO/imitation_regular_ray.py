@@ -168,6 +168,7 @@ class BCTrainEvalActor:
         target_loss_weight: float,
         ship_loss_weight: float,
         critical_action_weight: float,
+        target_loss_mask: str,
         seed: int,
     ):
         torch.set_num_threads(1)
@@ -180,6 +181,7 @@ class BCTrainEvalActor:
         self.target_loss_weight = float(target_loss_weight)
         self.ship_loss_weight = float(ship_loss_weight)
         self.critical_action_weight = float(critical_action_weight)
+        self.target_loss_mask = str(target_loss_mask)
         dataset = stack_rows(rows)
         generator = torch.Generator().manual_seed(seed)
         val_size = max(1, int(len(dataset) * val_frac))
@@ -205,6 +207,7 @@ class BCTrainEvalActor:
                 self.target_loss_weight,
                 self.ship_loss_weight,
                 self.critical_action_weight,
+                self.target_loss_mask,
             )
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
@@ -231,6 +234,7 @@ class BCTrainEvalActor:
                 self.target_loss_weight,
                 self.ship_loss_weight,
                 self.critical_action_weight,
+                self.target_loss_mask,
             )
             n = int(batch[0].shape[0])
             for key, value in metrics.items():
@@ -622,6 +626,7 @@ def main() -> None:
     parser.add_argument("--target-loss-weight", type=float, default=1.0)
     parser.add_argument("--ship-loss-weight", type=float, default=0.5)
     parser.add_argument("--critical-action-weight", type=float, default=0.0)
+    parser.add_argument("--target-loss-mask", choices=["dataset", "all_planets"], default="dataset")
     parser.add_argument("--val-frac", type=float, default=0.08)
     parser.add_argument("--hidden", type=int, default=64)
     parser.add_argument("--heads", type=int, default=4)
@@ -723,6 +728,7 @@ def main() -> None:
             args.target_loss_weight,
             args.ship_loss_weight,
             args.critical_action_weight,
+            args.target_loss_mask,
             args.seed + i,
         )
         for i, shard in enumerate(shards)

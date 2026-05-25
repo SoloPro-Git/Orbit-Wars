@@ -211,7 +211,7 @@ def safe_target_mask(obs: dict[str, Any], player: int) -> np.ndarray:
     return mask
 
 
-def candidate_target_mask(obs: dict[str, Any], player: int, top_k: int = 6) -> np.ndarray:
+def candidate_target_mask(obs: dict[str, Any], player: int, top_k: int = 6, include_friendly: bool = False) -> np.ndarray:
     planets = list(obs.get("planets", []))[:MAX_PLANETS]
     mask = np.zeros((MAX_PLANETS, MAX_PLANETS), dtype=np.bool_)
     top_k = max(1, int(top_k))
@@ -221,10 +221,15 @@ def candidate_target_mask(obs: dict[str, Any], player: int, top_k: int = 6) -> n
             continue
         scored: list[tuple[float, int]] = []
         for tgt_i, tgt in enumerate(planets):
-            if int(tgt[1]) == player:
+            if int(tgt[1]) == player and not include_friendly:
                 continue
             needed = required_ships(obs, player, src, tgt, incoming=incoming)
             score = _target_candidate_score(obs, player, src, tgt, needed)
+            if int(tgt[1]) == player and include_friendly and int(tgt[0]) != int(src[0]):
+                friend_in, enemy_in = incoming
+                pressure = enemy_in.get(int(tgt[0]), 0.0) - friend_in.get(int(tgt[0]), 0.0)
+                dist = math.hypot(float(tgt[2]) - float(src[2]), float(tgt[3]) - float(src[3]))
+                score = 35.0 + 2.0 * pressure + float(tgt[6]) - 0.5 * dist
             if score > -1e8:
                 scored.append((score, tgt_i))
         scored.sort(reverse=True)
@@ -331,6 +336,9 @@ class TinyPPOAgent:
         launch_bias: float = 0.0,
         ship_bias: float = 0.0,
         launch_temperature: float = 1.0,
+        target_top_k: int = 6,
+        include_friendly_targets: bool = False,
+        target_mask_mode: str = "candidate",
     ):
         payload = torch.load(checkpoint, map_location=device, weights_only=True)
         cfg = payload.get("model", {})
@@ -343,6 +351,11 @@ class TinyPPOAgent:
         self.launch_bias = float(launch_bias)
         self.ship_bias = float(ship_bias)
         self.launch_temperature = max(1e-4, float(launch_temperature))
+        self.target_top_k = max(1, int(target_top_k))
+        self.include_friendly_targets = bool(include_friendly_targets)
+        if target_mask_mode not in {"candidate", "safe"}:
+            raise ValueError(f"unsupported target_mask_mode: {target_mask_mode!r}")
+        self.target_mask_mode = target_mask_mode
 
     @torch.no_grad()
     def __call__(self, obs: dict[str, Any], configuration=None) -> list[list]:
@@ -361,7 +374,10 @@ class TinyPPOAgent:
             source_logits = source_logits.clone()
             source_logits[..., 1] += self.launch_bias
         target_logits = out["target_logits"][0]
-        target_mask = candidate_target_mask(obs, player) if self.ship_mode == "required_bucket" else safe_target_mask(obs, player)
+        if self.ship_mode == "required_bucket" and self.target_mask_mode == "candidate":
+            target_mask = candidate_target_mask(obs, player, top_k=self.target_top_k, include_friendly=self.include_friendly_targets)
+        else:
+            target_mask = safe_target_mask(obs, player)
         source_logits, target_logits = apply_target_safety_mask(source_logits, target_logits, obs, player, target_mask=target_mask)
         ship_params = apply_ship_fraction_bias(out["ship_params"][0], self.ship_bias) if "ship_params" in out else None
         ship_logits = out.get("ship_logits")

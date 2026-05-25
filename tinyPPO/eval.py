@@ -77,6 +77,9 @@ def main() -> None:
     parser.add_argument("--launch-bias", type=float, default=0.0, help="Logit bias for launch vs no-launch. Positive launches more often.")
     parser.add_argument("--ship-bias", type=float, default=0.0, help="Logit-space bias for ship fraction mean. Positive sends more ships.")
     parser.add_argument("--launch-temperature", type=float, default=1.0, help="Temperature for launch/no-launch logits before bias.")
+    parser.add_argument("--target-top-k", type=int, default=6, help="Candidate targets per source for required-bucket policies.")
+    parser.add_argument("--include-friendly-targets", action="store_true", help="Allow candidate targets owned by the acting player.")
+    parser.add_argument("--target-mask-mode", choices=["candidate", "safe"], default="candidate")
     parser.add_argument("--stochastic", action="store_true", help="Sample actions instead of deterministic argmax/mean.")
     parser.add_argument("--no-numba", action="store_true")
     args = parser.parse_args()
@@ -97,6 +100,9 @@ def main() -> None:
             launch_bias=launch_bias,
             ship_bias=ship_bias,
             launch_temperature=args.launch_temperature,
+            target_top_k=args.target_top_k,
+            include_friendly_targets=args.include_friendly_targets,
+            target_mask_mode=args.target_mask_mode,
         ),
         opponent_factory,
         games=args.games,

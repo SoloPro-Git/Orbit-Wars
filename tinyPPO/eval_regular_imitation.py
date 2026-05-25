@@ -17,6 +17,8 @@ from training2 import make_fast_orbit_wars
 from training2.rulebase_bridge import make_rulebase_agent
 
 from tinyPPO.agents import TinyPPOAgent
+from tinyPPO.agents import ACTION_SLOTS, MAX_ACTIONS_PER_SOURCE_SAFETY, candidate_target_mask
+from tinyPPO.features import MAX_PLANETS, encode_obs
 from tinyPPO.imitation_regular import row_from_regular_action
 
 
@@ -120,6 +122,81 @@ def _prf(pred: Counter, true: Counter) -> tuple[float, float, float]:
     return precision, recall, f1
 
 
+@torch.no_grad()
+def diagnose_policy_on_label(
+    agent: TinyPPOAgent,
+    obs: dict[str, Any],
+    player: int,
+    players: int,
+    bc_row: Any,
+    target_top_k: int,
+    include_friendly_targets: bool,
+) -> dict[str, float]:
+    enc = encode_obs(obs, player, players=players)
+    batch = {
+        "planets": torch.tensor(enc.planets[None], dtype=torch.float32, device=agent.device),
+        "pair_features": torch.tensor(enc.pair_features[None], dtype=torch.float32, device=agent.device),
+        "global_features": torch.tensor(enc.global_features[None], dtype=torch.float32, device=agent.device),
+        "planet_mask": torch.tensor(enc.planet_mask[None], dtype=torch.bool, device=agent.device),
+        "own_mask": torch.tensor(enc.own_mask[None], dtype=torch.bool, device=agent.device),
+    }
+    out = agent.model(**batch)
+    source_logits = out["source_logits"][0]
+    target_logits = out["target_logits"][0]
+    train_mask = torch.tensor(bc_row.target_safety_mask, dtype=torch.bool, device=agent.device)
+    runtime_mask = torch.tensor(
+        candidate_target_mask(obs, player, top_k=target_top_k, include_friendly=include_friendly_targets),
+        dtype=torch.bool,
+        device=agent.device,
+    )
+    train_target_logits = target_logits.masked_fill(~train_mask[:, None, :], -1e9)
+    runtime_target_logits = target_logits.masked_fill(~runtime_mask[:, None, :], -1e9)
+    active = np.argwhere(bc_row.launch_mask)
+
+    own_slots = torch.tensor(bc_row.own_mask[:, None].repeat(ACTION_SLOTS, axis=1), dtype=torch.bool, device=agent.device)
+    pred_launch = source_logits.argmax(dim=-1)
+    label_launch = torch.tensor(bc_row.launch_actions, dtype=torch.long, device=agent.device)
+    pred_rate = float((pred_launch[own_slots] == 1).float().mean().detach().cpu()) if own_slots.any() else 0.0
+    true_rate = float((label_launch[own_slots] == 1).float().mean().detach().cpu()) if own_slots.any() else 0.0
+
+    result = {
+        "label_actions": float(len(active)),
+        "raw_launch_pred_rate": pred_rate,
+        "raw_launch_true_rate": true_rate,
+        "label_launch_hit": 0.0,
+        "label_target_hit_train_mask": 0.0,
+        "label_target_hit_runtime_mask": 0.0,
+        "label_target_in_runtime_mask": 0.0,
+        "label_target_friendly": 0.0,
+    }
+    if len(active) == 0:
+        return result
+
+    launch_hit = 0
+    target_hit_train = 0
+    target_hit_runtime = 0
+    target_covered_runtime = 0
+    target_friendly = 0
+    planets = list(obs.get("planets", []))[:MAX_PLANETS]
+    for src_i, slot_i in active.tolist():
+        if src_i >= MAX_PLANETS or slot_i >= MAX_ACTIONS_PER_SOURCE_SAFETY:
+            continue
+        tgt_i = int(bc_row.target_actions[src_i, slot_i])
+        launch_hit += int(pred_launch[src_i, slot_i].item() == 1)
+        target_hit_train += int(torch.argmax(train_target_logits[src_i, slot_i]).item() == tgt_i)
+        target_hit_runtime += int(torch.argmax(runtime_target_logits[src_i, slot_i]).item() == tgt_i)
+        target_covered_runtime += int(bool(runtime_mask[src_i, tgt_i].item()))
+        if 0 <= tgt_i < len(planets):
+            target_friendly += int(int(planets[tgt_i][1]) == player)
+    denom = max(1, len(active))
+    result["label_launch_hit"] = launch_hit / denom
+    result["label_target_hit_train_mask"] = target_hit_train / denom
+    result["label_target_hit_runtime_mask"] = target_hit_runtime / denom
+    result["label_target_in_runtime_mask"] = target_covered_runtime / denom
+    result["label_target_friendly"] = target_friendly / denom
+    return result
+
+
 def evaluate(args: argparse.Namespace) -> dict[str, float]:
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -146,6 +223,9 @@ def evaluate(args: argparse.Namespace) -> dict[str, float]:
         launch_bias=args.launch_bias + args.aggression,
         ship_bias=args.ship_bias + args.aggression,
         launch_temperature=args.launch_temperature,
+        target_top_k=args.target_top_k,
+        include_friendly_targets=args.include_friendly_targets,
+        target_mask_mode=args.target_mask_mode,
     )
 
     source_p = source_r = source_f1 = 0.0
@@ -157,6 +237,7 @@ def evaluate(args: argparse.Namespace) -> dict[str, float]:
     labelled_rows = 0
     skipped_rows = 0
     model_errors = 0
+    diag_sums: dict[str, float] = {}
 
     iterator = states
     if args.progress:
@@ -172,6 +253,18 @@ def evaluate(args: argparse.Namespace) -> dict[str, float]:
             skipped_rows += 1
             continue
         labelled_rows += 1
+        if args.diagnose_policy:
+            diag = diagnose_policy_on_label(
+                agent,
+                row.obs,
+                row.player,
+                row.players,
+                bc_row,
+                args.target_top_k,
+                args.include_friendly_targets,
+            )
+            for key, value in diag.items():
+                diag_sums[key] = diag_sums.get(key, 0.0) + float(value)
         try:
             model_action = agent(row.obs)
         except Exception:
@@ -198,7 +291,7 @@ def evaluate(args: argparse.Namespace) -> dict[str, float]:
         count_abs += abs(pc - tc)
 
     denom = max(1, labelled_rows)
-    return {
+    result = {
         "states": float(len(states)),
         "labelled_rows": float(labelled_rows),
         "skipped_rows": float(skipped_rows),
@@ -216,6 +309,10 @@ def evaluate(args: argparse.Namespace) -> dict[str, float]:
         "model_actions_per_state": pred_count / denom,
         "regular_actions_per_state": true_count / denom,
     }
+    if args.diagnose_policy:
+        for key, value in diag_sums.items():
+            result[f"diag_{key}"] = value / denom
+    return result
 
 
 def main() -> None:
@@ -233,7 +330,11 @@ def main() -> None:
     parser.add_argument("--launch-bias", type=float, default=0.0)
     parser.add_argument("--ship-bias", type=float, default=0.0)
     parser.add_argument("--launch-temperature", type=float, default=1.0)
+    parser.add_argument("--target-top-k", type=int, default=6)
+    parser.add_argument("--include-friendly-targets", action="store_true")
+    parser.add_argument("--target-mask-mode", choices=["candidate", "safe"], default="candidate")
     parser.add_argument("--stochastic", action="store_true")
+    parser.add_argument("--diagnose-policy", action="store_true", help="Also compare raw policy logits and runtime candidate masks against regular labels.")
     parser.add_argument("--no-numba", action="store_true")
     parser.add_argument("--progress", action="store_true")
     args = parser.parse_args()

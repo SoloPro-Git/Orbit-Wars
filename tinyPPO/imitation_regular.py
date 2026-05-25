@@ -317,6 +317,7 @@ def bc_loss(
     target_loss_weight: float = 1.0,
     ship_loss_weight: float = 0.5,
     critical_action_weight: float = 0.0,
+    target_loss_mask: str = "dataset",
 ) -> tuple[torch.Tensor, dict[str, float]]:
     out = model(batch["planets"], batch["pair_features"], batch["global_features"], batch["planet_mask"], batch["own_mask"])
     own_slots = batch["own_mask"][:, :, None].expand_as(batch["launch_actions"])
@@ -335,7 +336,15 @@ def bc_loss(
     ship_acc = torch.tensor(0.0, device=launch_logits.device)
     action_weight_mean = torch.tensor(0.0, device=launch_logits.device)
     if active.any():
-        target_logits = out["target_logits"].masked_fill(~batch["target_safety_mask"][:, :, None, :], -1e9)
+        if target_loss_mask == "all_planets":
+            target_mask = batch["planet_mask"][:, None, :].expand(-1, batch["target_safety_mask"].shape[1], -1).clone()
+            eye = torch.eye(target_mask.shape[1], dtype=torch.bool, device=target_mask.device)[None, :, :]
+            target_mask = target_mask & ~eye
+        elif target_loss_mask == "dataset":
+            target_mask = batch["target_safety_mask"]
+        else:
+            raise ValueError(f"unsupported target_loss_mask: {target_loss_mask!r}")
+        target_logits = out["target_logits"].masked_fill(~target_mask[:, :, None, :], -1e9)
         active_weights = torch.ones_like(batch["target_actions"][active], dtype=torch.float32, device=launch_logits.device)
         if critical_action_weight > 0.0:
             b, s, slot = torch.where(active)
@@ -404,12 +413,21 @@ def evaluate_loader(
     target_loss_weight: float = 1.0,
     ship_loss_weight: float = 0.5,
     critical_action_weight: float = 0.0,
+    target_loss_mask: str = "dataset",
 ) -> dict[str, float]:
     model.eval()
     sums: dict[str, float] = {}
     count = 0
     for batch in loader:
-        _, metrics = bc_loss(model, unpack(batch, device), launch_pos_weight, target_loss_weight, ship_loss_weight, critical_action_weight)
+        _, metrics = bc_loss(
+            model,
+            unpack(batch, device),
+            launch_pos_weight,
+            target_loss_weight,
+            ship_loss_weight,
+            critical_action_weight,
+            target_loss_mask,
+        )
         n = int(batch[0].shape[0])
         for key, value in metrics.items():
             sums[key] = sums.get(key, 0.0) + value * n
@@ -452,6 +470,7 @@ def train_bc(args: argparse.Namespace, dataset: TensorDataset) -> tuple[TinyPoli
                 args.target_loss_weight,
                 args.ship_loss_weight,
                 args.critical_action_weight,
+                args.target_loss_mask,
             )
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
@@ -471,6 +490,7 @@ def train_bc(args: argparse.Namespace, dataset: TensorDataset) -> tuple[TinyPoli
                 args.target_loss_weight,
                 args.ship_loss_weight,
                 args.critical_action_weight,
+                args.target_loss_mask,
             ).items()
         }
         merged = {"epoch": float(epoch), **train_metrics, **val_metrics}
@@ -524,6 +544,7 @@ def main() -> None:
     parser.add_argument("--target-loss-weight", type=float, default=1.0)
     parser.add_argument("--ship-loss-weight", type=float, default=0.5)
     parser.add_argument("--critical-action-weight", type=float, default=0.0)
+    parser.add_argument("--target-loss-mask", choices=["dataset", "all_planets"], default="dataset")
     parser.add_argument("--val-frac", type=float, default=0.12)
     parser.add_argument("--loader-workers", type=int, default=0)
     parser.add_argument("--hidden", type=int, default=64)
