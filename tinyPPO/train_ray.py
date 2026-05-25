@@ -38,6 +38,88 @@ def cpu_state_dict(model: torch.nn.Module) -> dict[str, torch.Tensor]:
     return {key: value.detach().cpu() for key, value in model.state_dict().items()}
 
 
+def _reset_optimizer(updater: PPOUpdater) -> None:
+    updater.optimizer = torch.optim.AdamW(updater.model.parameters(), lr=updater.cfg.learning_rate, eps=1e-5)
+
+
+def _metric_winrate(metrics: dict, key: str, default: float = -1.0) -> float:
+    data = metrics.get(key, {})
+    if not isinstance(data, dict):
+        return default
+    value = data.get("winrate", default)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _training_health_reasons(train_metrics: dict, args: argparse.Namespace) -> list[str]:
+    reasons: list[str] = []
+    clip_frac = float(train_metrics.get("clip_frac", 0.0))
+    approx_kl = float(train_metrics.get("approx_kl", 0.0))
+    entropy = float(train_metrics.get("entropy", 999.0))
+    loss = float(train_metrics.get("loss", 0.0))
+    policy_loss = float(train_metrics.get("policy_loss", 0.0))
+    skipped_steps = float(train_metrics.get("skipped_steps", 0.0))
+    update_steps = float(train_metrics.get("update_steps", 0.0))
+    if not np.isfinite(loss) or not np.isfinite(policy_loss) or not np.isfinite(approx_kl):
+        reasons.append("nonfinite_train_metric")
+    if args.health_max_clip_frac > 0 and clip_frac > args.health_max_clip_frac:
+        reasons.append(f"clip_frac {clip_frac:.4g} > {args.health_max_clip_frac:.4g}")
+    if args.health_max_approx_kl > 0 and approx_kl > args.health_max_approx_kl:
+        reasons.append(f"approx_kl {approx_kl:.4g} > {args.health_max_approx_kl:.4g}")
+    if args.health_min_entropy > 0 and entropy < args.health_min_entropy:
+        reasons.append(f"entropy {entropy:.4g} < {args.health_min_entropy:.4g}")
+    if update_steps <= 0:
+        reasons.append("no_update_steps")
+    elif args.health_max_skipped_frac >= 0 and skipped_steps / max(1.0, update_steps + skipped_steps) > args.health_max_skipped_frac:
+        reasons.append("too_many_skipped_steps")
+    return reasons
+
+
+def _eval_guard_reasons(metrics: dict, args: argparse.Namespace, prefix: str) -> list[str]:
+    checks = [
+        ("random", args.eval_guard_min_random_winrate),
+        ("nearest", args.eval_guard_min_nearest_winrate),
+        ("regular", args.eval_guard_min_regular_winrate),
+    ]
+    reasons: list[str] = []
+    for opponent, threshold in checks:
+        if threshold < 0:
+            continue
+        key = f"{prefix}_vs_{opponent}"
+        winrate = _metric_winrate(metrics, key)
+        if winrate < threshold:
+            reasons.append(f"{key} {winrate:.3f} < {threshold:.3f}")
+    return reasons
+
+
+def _promotion_guard_reasons(metrics: dict, args: argparse.Namespace) -> list[str]:
+    checks = [
+        ("eval_stochastic_vs_random", args.promote_min_random_winrate),
+        ("eval_stochastic_vs_nearest", args.promote_min_nearest_winrate),
+        ("eval_stochastic_vs_regular", args.promote_min_regular_winrate),
+    ]
+    reasons: list[str] = []
+    for key, threshold in checks:
+        if threshold < 0:
+            continue
+        winrate = _metric_winrate(metrics, key)
+        if winrate < threshold:
+            reasons.append(f"{key} {winrate:.3f} < {threshold:.3f}")
+    return reasons
+
+
+def _load_state_into_training(
+    model: TinyPolicyValueNet,
+    updater: PPOUpdater,
+    state: dict[str, torch.Tensor],
+    learner_device: torch.device,
+) -> None:
+    model.load_state_dict({key: value.to(learner_device) for key, value in state.items()})
+    _reset_optimizer(updater)
+
+
 def save_checkpoint_state(path: Path, state_dict: dict[str, torch.Tensor], model_cfg: dict, update: int, metrics: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
@@ -52,8 +134,8 @@ def save_checkpoint_state(path: Path, state_dict: dict[str, torch.Tensor], model
 
 
 def _eval_score(metrics: dict) -> tuple[float, float, float]:
-    nearest = metrics.get("eval_vs_nearest", {})
-    random_eval = metrics.get("eval_vs_random", {})
+    nearest = metrics.get("eval_stochastic_vs_nearest") or metrics.get("eval_vs_nearest", {})
+    random_eval = metrics.get("eval_stochastic_vs_random") or metrics.get("eval_vs_random", {})
     return (
         float(nearest.get("winrate", -1.0)),
         float(random_eval.get("winrate", -1.0)),
@@ -186,6 +268,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--freeze-latest-opponent", action="store_true", help="Do not refresh the latest opponent every update; update it only through promotion/manual checkpoint load.")
     parser.add_argument("--promote-opponent-on-eval", action="store_true", help="Promote the evaluated model to frozen opponent when the configured opponent eval metric passes threshold.")
     parser.add_argument("--promote-opponent-threshold", type=float, default=0.80)
+    parser.add_argument("--promote-min-random-winrate", type=float, default=-1.0, help="Extra stochastic random winrate gate for opponent promotion. Negative disables.")
+    parser.add_argument("--promote-min-nearest-winrate", type=float, default=-1.0, help="Extra stochastic nearest winrate gate for opponent promotion. Negative disables.")
+    parser.add_argument("--promote-min-regular-winrate", type=float, default=-1.0, help="Extra stochastic regular winrate gate for opponent promotion. Negative disables.")
     parser.add_argument(
         "--promote-opponent-metric",
         choices=["eval_stochastic_vs_opponent", "eval_vs_opponent"],
@@ -228,6 +313,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--stop-winrate", type=float, default=0.70)
     parser.add_argument("--top-k-checkpoints", type=int, default=5, help="Keep this many eval-ranked checkpoints under best_top/.")
+    parser.add_argument("--enable-health-rollback", action="store_true", help="Rollback to trainable.pt after repeated PPO/eval health failures.")
+    parser.add_argument("--health-bad-updates", type=int, default=3, help="Consecutive bad PPO updates before rollback. 0 disables PPO-health rollback.")
+    parser.add_argument("--health-max-clip-frac", type=float, default=0.35, help="Bad-update threshold for PPO clip fraction. <=0 disables.")
+    parser.add_argument("--health-max-approx-kl", type=float, default=1.0, help="Bad-update threshold for PPO approx KL. <=0 disables.")
+    parser.add_argument("--health-min-entropy", type=float, default=0.0, help="Bad-update threshold for policy entropy. <=0 disables.")
+    parser.add_argument("--health-max-skipped-frac", type=float, default=0.25, help="Bad-update threshold for skipped optimizer step fraction. Negative disables.")
+    parser.add_argument("--eval-guard-min-random-winrate", type=float, default=-1.0, help="Evaluated checkpoint is unstable below this stochastic random winrate. Negative disables.")
+    parser.add_argument("--eval-guard-min-nearest-winrate", type=float, default=-1.0, help="Evaluated checkpoint is unstable below this stochastic nearest winrate. Negative disables.")
+    parser.add_argument("--eval-guard-min-regular-winrate", type=float, default=-1.0, help="Evaluated checkpoint is unstable below this stochastic regular winrate. Negative disables.")
+    parser.add_argument("--stable-checkpoint-name", default="trainable.pt", help="Checkpoint name for the latest trainable/stable rollback point.")
     parser.add_argument("--hidden", type=int, default=64)
     parser.add_argument("--heads", type=int, default=4)
     parser.add_argument("--layers", type=int, default=1)
@@ -739,7 +834,13 @@ def main() -> None:
     if args.start_phase:
         phase = args.start_phase
     if isinstance(resume_metrics, dict):
-        best_winrate = max(best_winrate, float(resume_metrics.get("eval_vs_nearest", {}).get("winrate", -1.0)))
+        best_winrate = max(
+            best_winrate,
+            _metric_winrate(
+                resume_metrics,
+                "eval_stochastic_vs_nearest" if "eval_stochastic_vs_nearest" in resume_metrics else "eval_vs_nearest",
+            ),
+        )
         if not args.start_phase:
             phase = str(resume_metrics.get("phase", phase))
     latest_opponent_state = initial_opponent_state if initial_opponent_state is not None else cpu_state_dict(model)
@@ -752,6 +853,58 @@ def main() -> None:
     eval_completion_count = 0
     stop_metric_streak = 0
     stop_after_update: int | None = None
+    stable_checkpoint_path = out_dir / args.stable_checkpoint_name
+    stable_state = cpu_state_dict(model)
+    stable_update = start_update - 1
+    stable_metrics: dict = {"source": "initial_or_resume", "update": stable_update}
+    save_checkpoint_state(stable_checkpoint_path, stable_state, model_cfg, stable_update, stable_metrics)
+    bad_health_streak = 0
+    rollback_count = 0
+
+    def mark_trainable_checkpoint(state: dict[str, torch.Tensor], ckpt_update: int, metrics: dict, reason: str) -> None:
+        nonlocal stable_state, stable_update, stable_metrics
+        stable_state = {key: value.detach().cpu() for key, value in state.items()}
+        stable_update = int(ckpt_update)
+        stable_metrics = {"trainable_reason": reason, **metrics}
+        save_checkpoint_state(stable_checkpoint_path, stable_state, model_cfg, stable_update, stable_metrics)
+        print(
+            json.dumps(
+                {
+                    "event": "trainable_checkpoint_saved",
+                    "update": update,
+                    "checkpoint_update": stable_update,
+                    "reason": reason,
+                    "path": str(stable_checkpoint_path),
+                },
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
+
+    def rollback_to_trainable(reason: str, details: dict) -> None:
+        nonlocal latest_opponent_state, phase, bad_health_streak, rollback_count
+        if not args.enable_health_rollback:
+            return
+        rollback_count += 1
+        _load_state_into_training(model, updater, stable_state, learner_device)
+        latest_opponent_state = {key: value.detach().cpu() for key, value in stable_state.items()}
+        phase = "latest" if (args.freeze_latest_opponent or args.promote_opponent_on_eval or args.refresh_opponent_on_eval) else phase
+        bad_health_streak = 0
+        print(
+            json.dumps(
+                {
+                    "event": "rollback_to_trainable",
+                    "update": update,
+                    "stable_update": stable_update,
+                    "reason": reason,
+                    "rollback_count": rollback_count,
+                    **details,
+                },
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
+
     for update in range(start_update, args.updates + 1):
         ready_refs = []
         if pending_eval_refs:
@@ -778,12 +931,35 @@ def main() -> None:
                         ),
                         flush=True,
                     )
-                if merged_eval["eval_vs_nearest"]["winrate"] > best_winrate:
-                    best_winrate = merged_eval["eval_vs_nearest"]["winrate"]
+                best_candidate_winrate = _metric_winrate(
+                    merged_eval,
+                    "eval_stochastic_vs_nearest" if "eval_stochastic_vs_nearest" in merged_eval else "eval_vs_nearest",
+                )
+                if best_candidate_winrate > best_winrate:
+                    best_winrate = best_candidate_winrate
                     if best_state is not None:
                         save_checkpoint_state(out_dir / "best.pt", best_state, model_cfg, eval_update, best_metrics)
                     else:
                         save_checkpoint(out_dir / "best.pt", model, args, update, {"async_eval_update": eval_update, **merged_eval})
+                guard_prefix = "eval_stochastic" if "eval_stochastic_vs_random" in merged_eval else "eval"
+                eval_guard_reasons = _eval_guard_reasons(merged_eval, args, guard_prefix)
+                if eval_guard_reasons:
+                    print(
+                        json.dumps(
+                            {
+                                "event": "eval_guard_failed",
+                                "update": update,
+                                "eval_update": eval_update,
+                                "prefix": guard_prefix,
+                                "reasons": eval_guard_reasons,
+                            },
+                            ensure_ascii=False,
+                        ),
+                        flush=True,
+                    )
+                    rollback_to_trainable("eval_guard_failed", {"eval_update": eval_update, "reasons": eval_guard_reasons})
+                elif best_state is not None:
+                    mark_trainable_checkpoint(best_state, eval_update, best_metrics, "eval_guard_passed")
                 if (
                     args.curriculum
                     and not args.promote_opponent_on_eval
@@ -810,8 +986,9 @@ def main() -> None:
                     )
                 promote_metric = merged_eval.get(args.promote_opponent_metric, {})
                 promote_winrate = float(promote_metric.get("winrate", -1.0)) if isinstance(promote_metric, dict) else -1.0
+                promotion_guard_reasons = _promotion_guard_reasons(merged_eval, args)
                 refresh_due = args.refresh_opponent_on_eval and eval_completion_count % args.opponent_refresh_interval == 0
-                if refresh_due and best_state is not None:
+                if refresh_due and best_state is not None and not eval_guard_reasons:
                     latest_opponent_state = best_state
                     phase = "latest"
                     current_path, history_path = save_opponent_refresh(out_dir, latest_opponent_state, model_cfg, eval_update, best_metrics)
@@ -831,7 +1008,7 @@ def main() -> None:
                         flush=True,
                     )
                 elif args.promote_opponent_on_eval and best_state is not None:
-                    if promote_winrate >= args.promote_opponent_threshold:
+                    if promote_winrate >= args.promote_opponent_threshold and not eval_guard_reasons and not promotion_guard_reasons:
                         latest_opponent_state = best_state
                         phase = "latest"
                         current_path, history_path = save_opponent_refresh(
@@ -851,6 +1028,11 @@ def main() -> None:
                                     "metric": args.promote_opponent_metric,
                                     "winrate": promote_winrate,
                                     "threshold": args.promote_opponent_threshold,
+                                    "promotion_guards": {
+                                        "min_random": args.promote_min_random_winrate,
+                                        "min_nearest": args.promote_min_nearest_winrate,
+                                        "min_regular": args.promote_min_regular_winrate,
+                                    },
                                     "path": str(current_path),
                                     "history_path": str(history_path),
                                 },
@@ -868,6 +1050,7 @@ def main() -> None:
                                     "metric": args.promote_opponent_metric,
                                     "winrate": promote_winrate,
                                     "threshold": args.promote_opponent_threshold,
+                                    "reasons": eval_guard_reasons + promotion_guard_reasons,
                                 },
                                 ensure_ascii=False,
                             ),
@@ -1070,6 +1253,34 @@ def main() -> None:
 
         train_metrics = updater.update(buffer)
         print(json.dumps({"event": "update_done", "update": update, "samples": len(buffer), "train": train_metrics}, ensure_ascii=False), flush=True)
+        health_reasons = _training_health_reasons(train_metrics, args)
+        if health_reasons:
+            bad_health_streak += 1
+            print(
+                json.dumps(
+                    {
+                        "event": "training_health_bad",
+                        "update": update,
+                        "bad_health_streak": bad_health_streak,
+                        "threshold": args.health_bad_updates,
+                        "reasons": health_reasons,
+                    },
+                    ensure_ascii=False,
+                ),
+                flush=True,
+            )
+            if args.enable_health_rollback and args.health_bad_updates > 0 and bad_health_streak >= args.health_bad_updates:
+                rollback_to_trainable("training_health_bad", {"reasons": health_reasons})
+        else:
+            if bad_health_streak > 0:
+                print(
+                    json.dumps(
+                        {"event": "training_health_recovered", "update": update, "previous_bad_health_streak": bad_health_streak},
+                        ensure_ascii=False,
+                    ),
+                    flush=True,
+                )
+            bad_health_streak = 0
         summary = {
             "update": update,
             "workers": len(assignments),
@@ -1085,6 +1296,7 @@ def main() -> None:
             "latest_opponent_frac": float(np.mean([m["opponent_latest"] for m in worker_metrics])) if worker_metrics else 0.0,
             "phase": phase,
             "replay": replay_metrics,
+            "health": {"bad_streak": bad_health_streak, "reasons": health_reasons, "rollback_count": rollback_count},
         }
 
         should_eval = update % args.eval_interval == 0 or (args.eval_first and update == 1)
@@ -1128,13 +1340,37 @@ def main() -> None:
                 eval_completion_count += 1
                 summary.update(merged_eval)
                 top_manifest = update_top_checkpoints(out_dir, eval_state, model_cfg, update, {"async_eval_update": update, **merged_eval}, args.top_k_checkpoints)
-                if merged_eval["eval_vs_nearest"]["winrate"] > best_winrate:
-                    best_winrate = merged_eval["eval_vs_nearest"]["winrate"]
+                best_candidate_winrate = _metric_winrate(
+                    merged_eval,
+                    "eval_stochastic_vs_nearest" if "eval_stochastic_vs_nearest" in merged_eval else "eval_vs_nearest",
+                )
+                if best_candidate_winrate > best_winrate:
+                    best_winrate = best_candidate_winrate
                     save_checkpoint_state(out_dir / "best.pt", eval_state, model_cfg, update, {"async_eval_update": update, **merged_eval})
+                guard_prefix = "eval_stochastic" if "eval_stochastic_vs_random" in merged_eval else "eval"
+                eval_guard_reasons = _eval_guard_reasons(merged_eval, args, guard_prefix)
+                if eval_guard_reasons:
+                    print(
+                        json.dumps(
+                            {
+                                "event": "eval_guard_failed",
+                                "update": update,
+                                "eval_update": update,
+                                "prefix": guard_prefix,
+                                "reasons": eval_guard_reasons,
+                            },
+                            ensure_ascii=False,
+                        ),
+                        flush=True,
+                    )
+                    rollback_to_trainable("eval_guard_failed", {"eval_update": update, "reasons": eval_guard_reasons})
+                else:
+                    mark_trainable_checkpoint(eval_state, update, {"async_eval_update": update, **merged_eval}, "eval_guard_passed")
                 promote_metric = merged_eval.get(args.promote_opponent_metric, {})
                 promote_winrate = float(promote_metric.get("winrate", -1.0)) if isinstance(promote_metric, dict) else -1.0
+                promotion_guard_reasons = _promotion_guard_reasons(merged_eval, args)
                 refresh_due = args.refresh_opponent_on_eval and eval_completion_count % args.opponent_refresh_interval == 0
-                if refresh_due:
+                if refresh_due and not eval_guard_reasons:
                     latest_opponent_state = eval_state
                     phase = "latest"
                     current_path, history_path = save_opponent_refresh(
@@ -1160,7 +1396,7 @@ def main() -> None:
                         flush=True,
                     )
                 elif args.promote_opponent_on_eval:
-                    if promote_winrate >= args.promote_opponent_threshold:
+                    if promote_winrate >= args.promote_opponent_threshold and not eval_guard_reasons and not promotion_guard_reasons:
                         latest_opponent_state = eval_state
                         phase = "latest"
                         current_path, history_path = save_opponent_refresh(
@@ -1180,6 +1416,11 @@ def main() -> None:
                                     "metric": args.promote_opponent_metric,
                                     "winrate": promote_winrate,
                                     "threshold": args.promote_opponent_threshold,
+                                    "promotion_guards": {
+                                        "min_random": args.promote_min_random_winrate,
+                                        "min_nearest": args.promote_min_nearest_winrate,
+                                        "min_regular": args.promote_min_regular_winrate,
+                                    },
                                     "path": str(current_path),
                                     "history_path": str(history_path),
                                 },
@@ -1197,6 +1438,7 @@ def main() -> None:
                                     "metric": args.promote_opponent_metric,
                                     "winrate": promote_winrate,
                                     "threshold": args.promote_opponent_threshold,
+                                    "reasons": eval_guard_reasons + promotion_guard_reasons,
                                 },
                                 ensure_ascii=False,
                             ),
