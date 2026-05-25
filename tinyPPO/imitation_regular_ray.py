@@ -14,11 +14,12 @@ import ray
 import torch
 from torch.utils.data import DataLoader, TensorDataset, random_split
 
+from training2 import make_fast_orbit_wars
 from training2.rulebase_bridge import make_rulebase_agent
 
 from tinyPPO.agents import ACTION_SLOTS, SHIP_BUCKET_MULTIPLIERS, TinyPPOAgent
 from tinyPPO.eval import run_matchups
-from tinyPPO.imitation_regular import _collect_one_game, bc_loss, stack_rows, unpack
+from tinyPPO.imitation_regular import _collect_one_game, bc_loss, row_from_regular_action, stack_rows, unpack
 from tinyPPO.model import TinyPolicyValueNet
 
 
@@ -46,6 +47,95 @@ def collect_game_task(
     use_numba: bool,
 ) -> tuple[list[Any], dict[str, float]]:
     return _collect_one_game(seed, players, episode_steps, keep_noop_prob, sample_stride, rows_per_game, use_numba)
+
+
+@ray.remote
+class DaggerCollectActor:
+    def __init__(
+        self,
+        checkpoint: str,
+        device: str,
+        deterministic: bool,
+        launch_bias: float,
+        ship_bias: float,
+        launch_temperature: float,
+    ):
+        self.model_agent = TinyPPOAgent(
+            checkpoint,
+            device=device,
+            deterministic=deterministic,
+            launch_bias=launch_bias,
+            ship_bias=ship_bias,
+            launch_temperature=launch_temperature,
+        )
+        self.regular_agent = make_rulebase_agent("regular")
+
+    def collect_games(
+        self,
+        jobs: list[tuple[int, int, int]],
+        episode_steps: int,
+        keep_noop_prob: float,
+        sample_stride: int,
+        rows_per_game: int,
+        use_numba: bool,
+    ) -> tuple[list[Any], dict[str, float]]:
+        import random
+
+        rows: list[Any] = []
+        labelled_actions = 0
+        skipped_actions = 0
+        model_actions = 0
+        regular_label_actions = 0
+        for seed, players, model_seat in jobs:
+            raw_rows: list[tuple[dict[str, Any], int, list[list]]] = []
+            agents = []
+            for pid in range(players):
+                if pid == model_seat:
+                    def model_logged(obs: dict[str, Any], configuration=None, pid: int = pid) -> list[list]:
+                        del configuration
+                        action = self.model_agent(obs) or []
+                        label = self.regular_agent(obs) or []
+                        if label or random.random() < keep_noop_prob:
+                            raw_rows.append((obs, pid, label))
+                        return action
+
+                    agents.append(model_logged)
+                else:
+                    def regular_logged(obs: dict[str, Any], configuration=None, pid: int = pid) -> list[list]:
+                        del configuration
+                        action = self.regular_agent(obs) or []
+                        if action or random.random() < keep_noop_prob:
+                            raw_rows.append((obs, pid, action))
+                        return action
+
+                    agents.append(regular_logged)
+            env = make_fast_orbit_wars(
+                {"episodeSteps": episode_steps, "seed": seed},
+                keep_history=False,
+                use_numba=use_numba,
+            )
+            env.run(agents)
+            sampled = raw_rows[:: max(1, sample_stride)]
+            if rows_per_game > 0 and len(sampled) > rows_per_game:
+                sampled = random.sample(sampled, rows_per_game)
+            for obs, player, label_action in sampled:
+                row = row_from_regular_action(obs, player, label_action, players=players)
+                if row is None:
+                    continue
+                rows.append(row)
+                labelled_actions += int(getattr(row, "labelled", 0))
+                skipped_actions += int(getattr(row, "skipped", 0))
+                regular_label_actions += len(label_action)
+                if player == model_seat:
+                    model_actions += len(label_action)
+        return rows, {
+            "games": float(len(jobs)),
+            "samples": float(len(rows)),
+            "labelled_actions": float(labelled_actions),
+            "skipped_actions": float(skipped_actions),
+            "regular_label_actions": float(regular_label_actions),
+            "model_seat_label_actions": float(model_actions),
+        }
 
 
 def _cpu_state_dict(model: torch.nn.Module) -> dict[str, torch.Tensor]:
@@ -337,8 +427,20 @@ def collect_dataset(args: argparse.Namespace) -> tuple[list[Any], dict[str, floa
         metrics = dict(payload.get("metrics", {}))
         metrics["cache_loaded"] = 1.0
         metrics["cache_path"] = str(cache_path)
-        return rows, metrics
+    else:
+        rows, metrics = collect_regular_dataset(args, cache_path)
+    if args.dagger_checkpoint:
+        dagger_rows, dagger_metrics = collect_dagger_dataset(args)
+        rows.extend(dagger_rows)
+        metrics = {
+            **metrics,
+            "samples": float(len(rows)),
+            "dagger": dagger_metrics,
+        }
+    return rows, metrics
 
+
+def collect_regular_dataset(args: argparse.Namespace, cache_path: Path | None) -> tuple[list[Any], dict[str, float]]:
     players_values = _players_list(args.players_list)
     jobs = [
         (args.seed + players * 1_000_000 + game, players)
@@ -394,6 +496,93 @@ def collect_dataset(args: argparse.Namespace) -> tuple[list[Any], dict[str, floa
     return rows, metrics
 
 
+def collect_dagger_dataset(args: argparse.Namespace) -> tuple[list[Any], dict[str, float]]:
+    cache_path = Path(args.dagger_cache) if args.dagger_cache else None
+    if cache_path is not None and cache_path.exists() and not args.refresh_dataset:
+        with cache_path.open("rb") as fh:
+            payload = pickle.load(fh)
+        rows = payload["rows"]
+        metrics = dict(payload.get("metrics", {}))
+        metrics["cache_loaded"] = 1.0
+        metrics["cache_path"] = str(cache_path)
+        return rows, metrics
+
+    players_values = _players_list(args.players_list)
+    jobs = [
+        (args.seed + 20_000_000 + players * 1_000_000 + game, players, game % players)
+        for players in players_values
+        for game in range(args.dagger_games_per_players)
+    ]
+    if not jobs:
+        return [], {"games": 0.0, "samples": 0.0}
+    actor_count = max(1, min(args.dagger_actors, len(jobs)))
+    shards = [jobs[i::actor_count] for i in range(actor_count)]
+    actors = [
+        DaggerCollectActor.options(num_cpus=args.dagger_cpus_per_actor, num_gpus=args.dagger_gpus_per_actor).remote(
+            args.dagger_checkpoint,
+            args.dagger_device,
+            not args.dagger_stochastic,
+            args.launch_bias,
+            args.ship_bias,
+            args.launch_temperature,
+        )
+        for _ in range(actor_count)
+    ]
+    futures = [
+        actor.collect_games.remote(
+            shard,
+            args.episode_steps,
+            args.keep_noop_prob,
+            args.sample_stride,
+            args.rows_per_game,
+            not args.no_numba,
+        )
+        for actor, shard in zip(actors, shards, strict=True)
+        if shard
+    ]
+    rows: list[Any] = []
+    labelled = 0.0
+    skipped = 0.0
+    model_seat_label_actions = 0.0
+    regular_label_actions = 0.0
+    completed_games = 0.0
+    progress = tqdm(total=len(futures), desc="ray collect regular DAgger", dynamic_ncols=True) if tqdm is not None else None
+    pending = list(futures)
+    while pending:
+        done, pending = ray.wait(pending, num_returns=1)
+        for ref in done:
+            part_rows, part_metrics = ray.get(ref)
+            rows.extend(part_rows)
+            completed_games += float(part_metrics.get("games", 0.0))
+            labelled += float(part_metrics.get("labelled_actions", 0.0))
+            skipped += float(part_metrics.get("skipped_actions", 0.0))
+            model_seat_label_actions += float(part_metrics.get("model_seat_label_actions", 0.0))
+            regular_label_actions += float(part_metrics.get("regular_label_actions", 0.0))
+        if progress is not None:
+            progress.update(len(done))
+            progress.set_postfix(samples=len(rows), games=int(completed_games))
+    if progress is not None:
+        progress.close()
+    metrics = {
+        "games": completed_games,
+        "samples": float(len(rows)),
+        "labelled_actions": labelled,
+        "skipped_actions": skipped,
+        "model_seat_label_actions": model_seat_label_actions,
+        "regular_label_actions": regular_label_actions,
+        "actors": float(actor_count),
+    }
+    if cache_path is not None:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
+        with tmp_path.open("wb") as fh:
+            pickle.dump({"rows": rows, "metrics": metrics, "args": vars(args)}, fh, protocol=pickle.HIGHEST_PROTOCOL)
+        tmp_path.replace(cache_path)
+        metrics["cache_saved"] = 1.0
+        metrics["cache_path"] = str(cache_path)
+    return rows, metrics
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ray-address", default="auto")
@@ -405,6 +594,14 @@ def main() -> None:
     parser.add_argument("--games-per-players", type=int, default=2000)
     parser.add_argument("--dataset-cache", default="", help="Pickle cache for collected BC rows. Existing cache is reused unless --refresh-dataset is set.")
     parser.add_argument("--refresh-dataset", action="store_true")
+    parser.add_argument("--dagger-checkpoint", default="", help="Optional policy checkpoint used to generate on-policy states labelled by regular.")
+    parser.add_argument("--dagger-cache", default="", help="Pickle cache for DAgger rows. Existing cache is reused unless --refresh-dataset is set.")
+    parser.add_argument("--dagger-games-per-players", type=int, default=0)
+    parser.add_argument("--dagger-actors", type=int, default=8)
+    parser.add_argument("--dagger-cpus-per-actor", type=float, default=2.0)
+    parser.add_argument("--dagger-gpus-per-actor", type=float, default=0.0)
+    parser.add_argument("--dagger-device", default="cpu")
+    parser.add_argument("--dagger-stochastic", action="store_true")
     parser.add_argument("--rows-per-game", type=int, default=12)
     parser.add_argument("--episode-steps", type=int, default=500)
     parser.add_argument("--sample-stride", type=int, default=1)
