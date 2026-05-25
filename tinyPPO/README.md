@@ -16,6 +16,20 @@ Design choices:
 - The architecture is not a copy of the older Transformer policy. It is a small geometry-first actor critic: planet MLP, pairwise source-target edge MLP, per-source-slot launch head, per-source-slot target head, per-source-slot ship bucket head, and a pooled value head.
 - `nearest_planet_agent` is eval-only. It is not sampled during training.
 
+Phase split:
+
+- Phase 1 is regular behavior cloning only. The checkpoint should imitate the
+  regular rulebase on the same observed states: launch/source decisions, target
+  choices, and ship buckets. Do not use winrate against regular as the BC stop
+  condition, and do not use PPO reward or opponent promotion in this phase.
+- Phase 1 diagnostics should prioritize held-out regular-state imitation
+  (`source_f1`, `source_target_f1`, `action_f1`, action-count error, and target
+  legality). Online games against regular are only a sanity check because both
+  agents immediately change the state distribution after the first mismatch.
+- Phase 2 starts from the best Phase 1 checkpoint and runs PPO/self-play against
+  a frozen older checkpoint. That is where winning the old checkpoint, promotion
+  gates, and eventually beating regular belong.
+
 Quick smoke:
 
 ```bash
