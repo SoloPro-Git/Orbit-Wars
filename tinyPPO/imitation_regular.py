@@ -460,6 +460,13 @@ def train_bc(args: argparse.Namespace, dataset: TensorDataset) -> tuple[TinyPoli
         for param in model.target_head.parameters():
             param.requires_grad_(True)
         trainable_params = list(model.target_head.parameters())
+    elif args.trainable_modules == "source_head":
+        for param in model.parameters():
+            param.requires_grad_(False)
+        for param in model.source_head.parameters():
+            param.requires_grad_(True)
+        model.slot_embed.requires_grad_(True)
+        trainable_params = list(model.source_head.parameters()) + [model.slot_embed]
     elif args.trainable_modules != "all":
         raise ValueError(f"unsupported trainable_modules: {args.trainable_modules!r}")
     opt = torch.optim.AdamW(trainable_params, lr=args.lr, weight_decay=args.weight_decay)
@@ -554,7 +561,7 @@ def main() -> None:
     parser.add_argument("--ship-loss-weight", type=float, default=0.5)
     parser.add_argument("--critical-action-weight", type=float, default=0.0)
     parser.add_argument("--target-loss-mask", choices=["dataset", "all_planets"], default="dataset")
-    parser.add_argument("--trainable-modules", choices=["all", "target_head"], default="all")
+    parser.add_argument("--trainable-modules", choices=["all", "target_head", "source_head"], default="all")
     parser.add_argument("--val-frac", type=float, default=0.12)
     parser.add_argument("--loader-workers", type=int, default=0)
     parser.add_argument("--hidden", type=int, default=64)

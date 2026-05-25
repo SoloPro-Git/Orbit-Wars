@@ -200,30 +200,13 @@ def diagnose_policy_on_label(
     return result
 
 
-def evaluate(args: argparse.Namespace) -> dict[str, float]:
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    states = collect_regular_states(
-        players_list=_players_list(args.players_list),
-        games_per_players=args.games_per_players,
-        seed=args.seed,
-        episode_steps=args.episode_steps,
-        rows_per_game=args.rows_per_game,
-        keep_noop_prob=args.keep_noop_prob,
-        use_numba=not args.no_numba,
-        progress=args.progress,
-    )
-    if args.max_rows > 0 and len(states) > args.max_rows:
-        states = random.sample(states, args.max_rows)
-    if not states:
-        raise RuntimeError("no regular states collected")
-
+def evaluate_states(args: argparse.Namespace, states: list[RawDecision], launch_bias: float | None = None) -> dict[str, float]:
+    effective_launch_bias = args.launch_bias if launch_bias is None else float(launch_bias)
     agent = TinyPPOAgent(
         Path(args.checkpoint),
         device=args.device,
         deterministic=not args.stochastic,
-        launch_bias=args.launch_bias + args.aggression,
+        launch_bias=effective_launch_bias + args.aggression,
         ship_bias=args.ship_bias + args.aggression,
         launch_temperature=args.launch_temperature,
         target_top_k=args.target_top_k,
@@ -237,6 +220,12 @@ def evaluate(args: argparse.Namespace) -> dict[str, float]:
     count_abs = 0.0
     pred_count = 0.0
     true_count = 0.0
+    micro_pred_source: Counter = Counter()
+    micro_true_source: Counter = Counter()
+    micro_pred_target: Counter = Counter()
+    micro_true_target: Counter = Counter()
+    micro_pred_action: Counter = Counter()
+    micro_true_action: Counter = Counter()
     labelled_rows = 0
     skipped_rows = 0
     model_errors = 0
@@ -276,6 +265,13 @@ def evaluate(args: argparse.Namespace) -> dict[str, float]:
             model_action = []
         true_source, true_target, true_action = action_keys(row.obs, row.regular_action)
         pred_source, pred_target, pred_action = action_keys(row.obs, model_action)
+        row_key = labelled_rows
+        micro_pred_source.update({(row_key, key): value for key, value in pred_source.items()})
+        micro_true_source.update({(row_key, key): value for key, value in true_source.items()})
+        micro_pred_target.update({(row_key, key): value for key, value in pred_target.items()})
+        micro_true_target.update({(row_key, key): value for key, value in true_target.items()})
+        micro_pred_action.update({(row_key, key): value for key, value in pred_action.items()})
+        micro_true_action.update({(row_key, key): value for key, value in true_action.items()})
         sp, sr, sf = _prf(pred_source, true_source)
         tp, tr, tf = _prf(pred_target, true_target)
         ap, ar, af = _prf(pred_action, true_action)
@@ -295,6 +291,9 @@ def evaluate(args: argparse.Namespace) -> dict[str, float]:
         count_abs += abs(pc - tc)
 
     denom = max(1, labelled_rows)
+    micro_sp, micro_sr, micro_sf = _prf(micro_pred_source, micro_true_source)
+    micro_tp, micro_tr, micro_tf = _prf(micro_pred_target, micro_true_target)
+    micro_ap, micro_ar, micro_af = _prf(micro_pred_action, micro_true_action)
     result = {
         "states": float(len(states)),
         "labelled_rows": float(labelled_rows),
@@ -309,14 +308,62 @@ def evaluate(args: argparse.Namespace) -> dict[str, float]:
         "action_precision": action_p / denom,
         "action_recall": action_r / denom,
         "action_f1": action_f1 / denom,
+        "micro_source_precision": micro_sp,
+        "micro_source_recall": micro_sr,
+        "micro_source_f1": micro_sf,
+        "micro_source_target_precision": micro_tp,
+        "micro_source_target_recall": micro_tr,
+        "micro_source_target_f1": micro_tf,
+        "micro_action_precision": micro_ap,
+        "micro_action_recall": micro_ar,
+        "micro_action_f1": micro_af,
         "action_count_mae": count_abs / denom,
         "model_actions_per_state": pred_count / denom,
         "regular_actions_per_state": true_count / denom,
     }
+    result["launch_bias"] = float(effective_launch_bias)
     if args.diagnose_policy:
         for key, value in diag_sums.items():
             result[f"diag_{key}"] = value / denom
     return result
+
+
+def _float_list(raw: str) -> list[float]:
+    return [float(item.strip()) for item in raw.split(",") if item.strip()]
+
+
+def evaluate(args: argparse.Namespace) -> dict[str, Any]:
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    states = collect_regular_states(
+        players_list=_players_list(args.players_list),
+        games_per_players=args.games_per_players,
+        seed=args.seed,
+        episode_steps=args.episode_steps,
+        rows_per_game=args.rows_per_game,
+        keep_noop_prob=args.keep_noop_prob,
+        use_numba=not args.no_numba,
+        progress=args.progress,
+    )
+    if args.max_rows > 0 and len(states) > args.max_rows:
+        states = random.sample(states, args.max_rows)
+    if not states:
+        raise RuntimeError("no regular states collected")
+
+    if args.launch_bias_grid:
+        values = _float_list(args.launch_bias_grid)
+        sweep = [evaluate_states(args, states, launch_bias=value) for value in values]
+        best = max(
+            sweep,
+            key=lambda item: (
+                item["micro_action_f1"] - 0.05 * abs(item["model_actions_per_state"] - item["regular_actions_per_state"]),
+                item["micro_source_target_f1"],
+                -item["action_count_mae"],
+            ),
+        )
+        return {"states": float(len(states)), "best": best, "sweep": sweep}
+    return evaluate_states(args, states)
 
 
 def main() -> None:
@@ -332,6 +379,7 @@ def main() -> None:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--aggression", type=float, default=0.0)
     parser.add_argument("--launch-bias", type=float, default=0.0)
+    parser.add_argument("--launch-bias-grid", default="", help="Comma-separated launch-bias values to evaluate on one shared held-out state set.")
     parser.add_argument("--ship-bias", type=float, default=0.0)
     parser.add_argument("--launch-temperature", type=float, default=1.0)
     parser.add_argument("--target-top-k", type=int, default=6)

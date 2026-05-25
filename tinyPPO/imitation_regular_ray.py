@@ -183,6 +183,13 @@ class BCTrainEvalActor:
             for param in self.model.target_head.parameters():
                 param.requires_grad_(True)
             trainable_params = list(self.model.target_head.parameters())
+        elif trainable_modules == "source_head":
+            for param in self.model.parameters():
+                param.requires_grad_(False)
+            for param in self.model.source_head.parameters():
+                param.requires_grad_(True)
+            self.model.slot_embed.requires_grad_(True)
+            trainable_params = list(self.model.source_head.parameters()) + [self.model.slot_embed]
         elif trainable_modules != "all":
             raise ValueError(f"unsupported trainable_modules: {trainable_modules!r}")
         self.opt = torch.optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
@@ -637,7 +644,7 @@ def main() -> None:
     parser.add_argument("--ship-loss-weight", type=float, default=0.5)
     parser.add_argument("--critical-action-weight", type=float, default=0.0)
     parser.add_argument("--target-loss-mask", choices=["dataset", "all_planets"], default="dataset")
-    parser.add_argument("--trainable-modules", choices=["all", "target_head"], default="all")
+    parser.add_argument("--trainable-modules", choices=["all", "target_head", "source_head"], default="all")
     parser.add_argument("--val-frac", type=float, default=0.08)
     parser.add_argument("--hidden", type=int, default=64)
     parser.add_argument("--heads", type=int, default=4)
