@@ -70,7 +70,7 @@ class TinyPolicyValueNet(nn.Module):
         tgt = x[:, None, :, :].expand(-1, MAX_PLANETS, -1, -1)
         glob = g[:, None, None, :].expand(-1, MAX_PLANETS, MAX_PLANETS, -1)
         edge_hidden = self.edge(torch.cat([src, tgt, glob, pair_features], dim=-1))
-        source_policy_context = source_context
+        target_summary = None
         if self.source_target_summary:
             target_valid = planet_mask[:, None, :].expand(-1, MAX_PLANETS, -1)
             eye_sources = torch.eye(MAX_PLANETS, dtype=torch.bool, device=planets.device)[None, :, :]
@@ -78,9 +78,12 @@ class TinyPolicyValueNet(nn.Module):
             masked_edges = edge_hidden.masked_fill(~target_valid[..., None], -1e9)
             target_summary = masked_edges.max(dim=2).values
             target_summary = torch.where(torch.isfinite(target_summary), target_summary, torch.zeros_like(target_summary))
-            source_policy_context = torch.cat([source_context, target_summary], dim=-1)
         slot_context = source_context[:, :, None, :] + self.slot_embed[None, None, :, :]
-        source_slot_context = source_policy_context[:, :, None, :].expand(-1, -1, self.action_slots, -1)
+        if self.source_target_summary:
+            target_slot_context = target_summary[:, :, None, :].expand(-1, -1, self.action_slots, -1)
+            source_slot_context = torch.cat([slot_context, target_slot_context], dim=-1)
+        else:
+            source_slot_context = slot_context
         source_logits = self.source_head(source_slot_context)
 
         edge_by_slot = edge_hidden[:, :, None, :, :].expand(-1, -1, self.action_slots, -1, -1)
