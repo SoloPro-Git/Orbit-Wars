@@ -391,6 +391,7 @@ def main() -> None:
     parser.add_argument("--ray-address", default="auto")
     parser.add_argument("--out", default="tinyPPO/regular_bc_ray.pt")
     parser.add_argument("--best-out", default="tinyPPO/regular_bc.pt")
+    parser.add_argument("--resume", default="", help="Resume model weights from a regular BC checkpoint. Epoch numbering continues from checkpoint update.")
     parser.add_argument("--players-list", default="2")
     parser.add_argument("--games-per-players", type=int, default=2000)
     parser.add_argument("--dataset-cache", default="", help="Pickle cache for collected BC rows. Existing cache is reused unless --refresh-dataset is set.")
@@ -446,7 +447,24 @@ def main() -> None:
     _log_swanlab(swan, {"collect": collect_metrics}, 0)
 
     shards = [rows[i :: args.trainers] for i in range(args.trainers)]
-    model_cfg = {
+    resume_state: dict[str, torch.Tensor] | None = None
+    resume_update = 0
+    resume_model_cfg: dict[str, int] | None = None
+    if args.resume:
+        resume_payload = torch.load(args.resume, map_location="cpu", weights_only=False)
+        resume_state = {key: value.detach().cpu() for key, value in resume_payload["state_dict"].items()}
+        resume_update = int(resume_payload.get("update", 0))
+        if isinstance(resume_payload.get("model"), dict):
+            resume_model_cfg = {key: int(value) for key, value in resume_payload["model"].items()}
+        print(
+            json.dumps(
+                {"event": "resume_loaded", "path": args.resume, "resume_update": resume_update, "model": resume_model_cfg},
+                ensure_ascii=True,
+            ),
+            flush=True,
+        )
+
+    model_cfg = resume_model_cfg or {
         "hidden": args.hidden,
         "heads": args.heads,
         "layers": args.layers,
@@ -454,7 +472,7 @@ def main() -> None:
         "action_slots": ACTION_SLOTS,
     }
     init_model = TinyPolicyValueNet(**model_cfg)
-    state = _cpu_state_dict(init_model)
+    state = resume_state or _cpu_state_dict(init_model)
     actors = [
         BCTrainEvalActor.options(num_cpus=args.cpus_per_trainer, num_gpus=args.gpus_per_trainer).remote(
             shard,
@@ -533,7 +551,8 @@ def main() -> None:
             maybe_finish_eval(eval_epoch)
 
     eval_actor_cursor = 0
-    for epoch in range(1, args.epochs + 1):
+    start_epoch = resume_update + 1 if resume_update > 0 else 1
+    for epoch in range(start_epoch, args.epochs + 1):
         drain_ready_evals()
         if stop_after_epoch is not None:
             break
