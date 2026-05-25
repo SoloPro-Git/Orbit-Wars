@@ -2,9 +2,14 @@
 
 Date: 2026-05-25
 
-Goal: move tinyPPO toward roughly drawing the strongest local `regular`
-rulebase, instead of continuing to add pure BC epochs after the BC checkpoint
-plateaued.
+Goal: record a later bridge idea for controlled experiments after imitation
+pretraining. This is not the phase-1 BC objective.
+
+Phase-1 BC objective: make tinyPPO choose source/target/ship/action-count labels
+that match `regular` on the same observations. Online winrate against `regular`
+is diagnostic only in this phase; it should not be used to force destructive
+action filtering or checkpoint promotion. The bridge below belongs to a later
+controlled experiment, after a regular-like checkpoint exists.
 
 ## Strategy
 

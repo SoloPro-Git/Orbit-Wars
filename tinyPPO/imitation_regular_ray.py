@@ -629,6 +629,10 @@ def main() -> None:
     parser.add_argument("--eval-games", type=int, default=64)
     parser.add_argument("--max-pending-evals", type=int, default=2)
     parser.add_argument("--eval-min-launch-recall", type=float, default=0.0, help="Skip slow online eval until validation launch recall reaches this value.")
+    parser.add_argument("--target-imitation-score", type=float, default=0.0, help="Stop BC once validation imitation score reaches this value; <=0 disables.")
+    parser.add_argument("--imitation-patience", type=int, default=0, help="Stop BC after this many epochs without a validation imitation-score improvement; <=0 disables.")
+    parser.add_argument("--min-epochs", type=int, default=0, help="Minimum epochs before imitation-score early stopping can trigger.")
+    parser.add_argument("--enable-online-stop", action="store_true", help="Allow online vs-regular eval metrics to stop BC. Disabled by default because BC phase is imitation-only.")
     parser.add_argument("--target-nonloss", type=float, default=0.50)
     parser.add_argument("--target-winrate", type=float, default=0.20)
     parser.add_argument("--eval-stochastic", action="store_true")
@@ -703,6 +707,7 @@ def main() -> None:
     ]
     best_nonloss = -1.0
     best_imitation_score = -1e9
+    best_imitation_epoch = 0
     best_metrics: dict[str, Any] = {}
     pending_eval_refs: dict[Any, int] = {}
     pending_eval_states: dict[int, dict[str, torch.Tensor]] = {}
@@ -743,9 +748,9 @@ def main() -> None:
                     eval_epoch,
                     {"collect": collect_metrics, **summary, "best": True},
                 )
-        if eval_metrics["nonloss"] >= args.target_nonloss and eval_metrics["winrate"] >= args.target_winrate:
+        if args.enable_online_stop and eval_metrics["nonloss"] >= args.target_nonloss and eval_metrics["winrate"] >= args.target_winrate:
             stop_after_epoch = eval_epoch
-            print(json.dumps({"event": "target_reached", "epoch": eval_epoch, "metrics": eval_metrics}, ensure_ascii=True), flush=True)
+            print(json.dumps({"event": "online_target_reached", "epoch": eval_epoch, "metrics": eval_metrics}, ensure_ascii=True), flush=True)
 
     def drain_ready_evals() -> None:
         nonlocal best_nonloss, best_metrics, eval_completion_count, stop_after_epoch
@@ -772,6 +777,7 @@ def main() -> None:
         train_metrics["val_imitation_score"] = imitation_score
         if imitation_score > best_imitation_score:
             best_imitation_score = imitation_score
+            best_imitation_epoch = epoch
             save_checkpoint(
                 Path(args.best_out),
                 state,
@@ -787,6 +793,23 @@ def main() -> None:
                 {"collect": collect_metrics, "epoch": epoch, "train": train_metrics, "best_imitation": True},
             )
         summary: dict[str, Any] = {"epoch": epoch, "train": train_metrics}
+        if args.target_imitation_score > 0.0 and epoch >= args.min_epochs and imitation_score >= args.target_imitation_score:
+            stop_after_epoch = epoch
+            summary["imitation_stop"] = {
+                "reason": "target_imitation_score",
+                "score": float(imitation_score),
+                "target": float(args.target_imitation_score),
+                "best_epoch": float(best_imitation_epoch),
+            }
+        elif args.imitation_patience > 0 and epoch >= args.min_epochs and epoch - best_imitation_epoch >= args.imitation_patience:
+            stop_after_epoch = epoch
+            summary["imitation_stop"] = {
+                "reason": "patience",
+                "score": float(imitation_score),
+                "best_score": float(best_imitation_score),
+                "best_epoch": float(best_imitation_epoch),
+                "patience": float(args.imitation_patience),
+            }
 
         should_eval = (
             epoch % args.eval_interval == 0
