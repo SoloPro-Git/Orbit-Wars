@@ -2071,3 +2071,38 @@ collection/training is not blocked by eval.
   include early-collapse and midgame recovery states, and explicitly audit
   where source selection, launch amount, and target owner/rank diverge before
   another training spend.
+
+## 2026-05-27 broad model-seat DAgger all-heads result
+
+- Collected a broader model-seat DAgger cache from five earlier checkpoints
+  (`e0400/e0600/e0900/e1100/e1300`) to label states caused by model rollouts
+  with regular's action choices:
+  `tinyPPO/data/regular_bc_dagger_broad5ckpt_modelseat_2p_5120g_rows8_s4_20260527.pkl`.
+  It contains `5120` games, `40792` sampled rows, and `294941`
+  regular-labelled actions. Checkpoint coverage was balanced enough
+  (`7650`-`8300` rows per source checkpoint), and with
+  `dagger_loss_weight=0.4` the effective weighted DAgger share was about `25%`
+  against the original 10k regular cache.
+- Trained an all-heads continuation from sourcehead `e1300` for 80 epochs:
+  `tinyPPO/runs/regular_bc_dagger_broad5ckpt_modelseat_w04_allheads_e1300_e80_noeval_20260527`.
+  Checkpoints were saved at `e0020/e0040/e0060/e0080` plus
+  `regular_bc_ray_best_imitation.pt`. Train loss kept decreasing, but validation
+  imitation peaked earlier and was lower again by epoch 80, so this fixed-loader
+  view shows mild overfit rather than a clean late improvement.
+- Same-state Phase1 gate versus sourcehead `e1300` did not improve. Baseline
+  summary: `action_f1=0.269`, `source_target_f1=0.279`,
+  `source_f1=0.445`, `density_ratio=0.875`, `selected_score=0.215`.
+  The broad all-heads `best_imitation` checkpoint reached only
+  `action_f1=0.253`, `source_target_f1=0.265`, `source_f1=0.442`,
+  `density_ratio=0.837`, `selected_score=0.198`; `e0080` was lower at
+  `action_f1=0.244`, `source_target_f1=0.255`, `selected_score=0.193`.
+  Both failed due to action/source-target F1 and negative score delta versus
+  baseline.
+- Online sanity also had no sign of life: for `best_imitation`, 64 games each
+  at `launch_bias=-0.05`, `0.0`, and `0.15` all returned `0W/64L/0D`.
+- Decision: do not continue this all-heads broad DAgger line by simply adding
+  epochs. The larger rollout data did expose distribution-shift states, but
+  all-heads training on the current architecture/loss moved same-state imitation
+  backward. The next step should be diagnostic/modeling work around
+  source-target ranking and action construction, not more training time on this
+  exact recipe.
