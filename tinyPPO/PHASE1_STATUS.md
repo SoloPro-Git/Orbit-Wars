@@ -2202,3 +2202,48 @@ collection/training is not blocked by eval.
   level and consider changing the decoder representation or candidate/action
   factorization itself, while keeping the current source/launch baseline
   protected.
+
+## 2026-05-27 action-construction audit and data cleanup
+
+- Added `diagnose_dagger_action_errors.py` to compare model-decoded
+  source-target multisets against regular labels on regular-labelled DAgger
+  rows. This is deliberately action-level: target-rank loss alone was not
+  explaining why online play remained brittle.
+- On the broad 5-checkpoint model-seat DAgger cache, sourcehead `e1300` with
+  all-planet target decoding had weak action construction despite reasonable
+  source overlap: `source_f1=0.6758`, `source_target_f1=0.2808`,
+  `micro_source_target_f1=0.3161`, `regular_actions/state=7.12`,
+  `model_actions/state=8.45`, and `rows_pred_gt_true=0.553`. It also produced
+  many extra own-target actions, indicating unreliable unconstrained target
+  logits.
+- The hardcase pair-adapter best checkpoint was effectively unchanged on the
+  same audit (`source_target_f1=0.2810`,
+  `micro_source_target_f1=0.3168`), so the previous hardcase adapter did not
+  solve action construction.
+- Reusing the dataset/candidate target mask changed the picture sharply for
+  sourcehead `e1300`: `source_f1=0.7137`, `source_target_f1=0.6579`,
+  `micro_source_target_f1=0.8124`, `model_actions/state=7.69`, and extra
+  own-target actions disappeared. Lowering launch bias from `-0.05` to `-0.20`
+  under all-planet decoding only moved `micro_source_target_f1` to `0.3174`,
+  so the main lever is the target candidate/safety mask, not launch threshold.
+- Online candidate-mask evals still did not pass the DAgger-stage target:
+  sourcehead `e1300` reached `6/64` wins versus regular
+  (`nonloss=0.09375`), and the hardcase adapter reached `3/64`
+  (`nonloss=0.046875`). This is better than the stable 1/63 regime but still
+  below the desired multi-seed nonloss target of about `>0.15`. Candidate
+  masking should remain the online/deployment default, but it is not sufficient
+  by itself.
+- Cleaned regenerated/failed intermediate data caches from `tinyPPO/data`,
+  reducing it from about `157G` to `77G` and the whole project from about
+  `252G` to `172G`. Kept the two important sources for the current DAgger
+  phase: the 10k pure regular cache
+  `regular_bc_rulefeat_2p_10000g_rows16_20260526.pkl` and the current broad
+  model-seat regular-labelled cache
+  `regular_bc_dagger_broad5ckpt_modelseat_2p_5120g_rows8_s4_20260527.pkl`.
+- Next phase remains regular-labelled DAgger/offline expansion: roll out p0
+  with model checkpoints (`e400/e600/e900/e1100/e1300`) against regular p1,
+  record states from the model-induced distribution, relabel each p0
+  observation with `regularp0`, then train BC on a 70-80% pure-regular /
+  20-30% model-state regular-label mix. Do not use the model action as the
+  label, and do not switch to PPO/self-play until the model can approach
+  regular in online evals.
