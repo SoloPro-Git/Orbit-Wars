@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -88,6 +89,19 @@ def _eval_checkpoint(args: argparse.Namespace, checkpoint: str, seed: int, launc
     }
 
 
+def _eval_job(job: tuple[argparse.Namespace, str, int, str]) -> dict[str, Any]:
+    args, checkpoint, seed, launch_bias_grid = job
+    return _eval_checkpoint(args, checkpoint, seed, launch_bias_grid)
+
+
+def _eval_many(args: argparse.Namespace, jobs: list[tuple[argparse.Namespace, str, int, str]]) -> list[dict[str, Any]]:
+    workers = max(1, int(getattr(args, "workers", 1)))
+    if workers <= 1 or len(jobs) <= 1:
+        return [_eval_job(job) for job in jobs]
+    with ProcessPoolExecutor(max_workers=min(workers, len(jobs))) as pool:
+        return list(pool.map(_eval_job, jobs))
+
+
 def _aggregate(seed_results: list[dict[str, Any]]) -> dict[str, float]:
     keys = [
         "source_f1",
@@ -112,20 +126,16 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
     seeds = [int(seed) for seed in args.seeds.split(",") if seed.strip()]
     if not seeds:
         raise ValueError("--seeds must contain at least one seed")
-    candidate_results = [
-        _eval_checkpoint(args, args.checkpoint, seed, args.launch_bias_grid)
-        for seed in seeds
-    ]
+    candidate_jobs = [(args, args.checkpoint, seed, args.launch_bias_grid) for seed in seeds]
+    candidate_results = _eval_many(args, candidate_jobs)
     candidate_summary = _aggregate(candidate_results)
 
     baseline_results: list[dict[str, Any]] = []
     baseline_summary: dict[str, float] | None = None
     if args.baseline_checkpoint:
         baseline_grid = args.baseline_launch_bias_grid or args.launch_bias_grid
-        baseline_results = [
-            _eval_checkpoint(args, args.baseline_checkpoint, seed, baseline_grid)
-            for seed in seeds
-        ]
+        baseline_jobs = [(args, args.baseline_checkpoint, seed, baseline_grid) for seed in seeds]
+        baseline_results = _eval_many(args, baseline_jobs)
         baseline_summary = _aggregate(baseline_results)
 
     reasons: list[str] = []
@@ -206,6 +216,7 @@ def main() -> None:
     parser.add_argument("--diagnose-policy", action="store_true")
     parser.add_argument("--no-numba", action="store_true")
     parser.add_argument("--progress", action="store_true")
+    parser.add_argument("--workers", type=int, default=1, help="Parallel seed/checkpoint evaluations. Use CPU device for broad parallel gates.")
     parser.add_argument("--min-density-ratio", type=float, default=0.70)
     parser.add_argument("--max-density-ratio", type=float, default=1.35)
     parser.add_argument("--min-action-f1", type=float, default=0.30)

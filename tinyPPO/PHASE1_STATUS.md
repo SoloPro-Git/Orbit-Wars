@@ -2352,3 +2352,36 @@ collection/training is not blocked by eval.
   testing later, but the next aligned work should prioritize the action decoder:
   candidate-safe target factorization, action-count calibration, and ship
   amount/source-target coupling under the regular-labelled DAgger distribution.
+
+## 2026-05-27 safe-mask decoder check
+
+- Tested whether the online collapse was mainly caused by the runtime
+  `candidate` target mask excluding regular labels. On a shared 96-state
+  held-out regular sample using the layers=3 best-imitation checkpoint,
+  `candidate` mode covered only `0.174` of regular label targets
+  (`0.279` with friendly targets enabled), while the training safety mask hit
+  `0.921`. The broader `safe` runtime mask covered `0.784`; `all_planets`
+  covered `1.0` but still dropped actions later because unsafe argmax targets
+  fail the final path check.
+- Same sample, `launch_bias=-0.05`, target-pair weight `1.0`:
+  - `candidate`: `model_actions_per_state=1.177` versus regular `1.979`,
+    `source_target_f1=0.192`, `action_f1=0.183`.
+  - `candidate + friendly`: density improved to `1.802`, but
+    `source_target_f1=0.203`, `action_f1=0.193`; coverage alone was not enough.
+  - `safe`: density `1.781`, `source_target_f1=0.244`, `action_f1=0.237`,
+    and runtime label-target coverage `0.784`. This confirms the narrow
+    candidate set is a real same-state bottleneck, but target ranking remains
+    weak even when labels are mostly available.
+- Ran a 64-task Ray online check, `4` games per task (`256` games per variant),
+  versus regular using the layers=3 best-imitation checkpoint and `safe` mask:
+  - `launch_bias=-0.25`: `1W/255L/0D`, nonloss `0.0039`.
+  - `launch_bias=-0.05`: `4W/252L/0D`, nonloss `0.0156`.
+  - `launch_bias=0.15`: `1W/255L/0D`, nonloss `0.0039`.
+- Decision: do not promote `safe` decoding as the next baseline. It improves
+  same-state target availability, but online behavior is still in the stable
+  bad regime. The next model-side delta should train or decode target choice
+  against the runtime-safe candidate space directly, rather than relying on a
+  heuristic top-k candidate mask or only expanding the mask at inference time.
+- Tooling: `tinyPPO.phase1_gate` now accepts `--workers` to parallelize
+  seed/checkpoint evaluations. A CPU smoke check with `--workers 2` completed,
+  so broader same-state gates no longer need to run as one slow process.
