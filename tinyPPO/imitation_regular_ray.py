@@ -117,6 +117,8 @@ class DaggerCollectActor:
         launch_bias: float,
         ship_bias: float,
         launch_temperature: float,
+        target_mask_mode: str,
+        target_pair_weight: float,
         collect_model_seat_only: bool,
     ):
         resolved_device = _resolve_actor_device(device)
@@ -127,10 +129,13 @@ class DaggerCollectActor:
             launch_bias=launch_bias,
             ship_bias=ship_bias,
             launch_temperature=launch_temperature,
+            target_mask_mode=target_mask_mode,
+            target_pair_weight=target_pair_weight,
         )
-        self.regular_agent = make_rulebase_agent("regular")
         self.collect_model_seat_only = collect_model_seat_only
         self.checkpoint = checkpoint
+        self.target_mask_mode = target_mask_mode
+        self.target_pair_weight = float(target_pair_weight)
 
     def collect_games(
         self,
@@ -154,6 +159,8 @@ class DaggerCollectActor:
             np.random.seed(seed)
             raw_rows: list[dict[str, Any]] = []
             step_box = {"current": -1}
+            label_agent = make_rulebase_agent("regular")
+            regular_agents = [make_rulebase_agent("regular") for _ in range(players)]
             agents = []
             for pid in range(players):
                 if pid == model_seat:
@@ -163,7 +170,7 @@ class DaggerCollectActor:
                             step_box["current"] = int(obs["step"])
                         turn_index = int(obs.get("step", step_box["current"]))
                         action = self.model_agent(obs) or []
-                        label = self.regular_agent(obs) or []
+                        label = label_agent(obs) or []
                         if label or random.random() < keep_noop_prob:
                             raw_rows.append(
                                 {
@@ -184,12 +191,14 @@ class DaggerCollectActor:
 
                     agents.append(model_logged)
                 else:
-                    def regular_logged(obs: dict[str, Any], configuration=None, pid: int = pid) -> list[list]:
+                    regular_agent = regular_agents[pid]
+
+                    def regular_logged(obs: dict[str, Any], configuration=None, pid: int = pid, regular_agent=regular_agent) -> list[list]:
                         del configuration
                         if "step" in obs:
                             step_box["current"] = int(obs["step"])
                         turn_index = int(obs.get("step", step_box["current"]))
-                        action = self.regular_agent(obs) or []
+                        action = regular_agent(obs) or []
                         if not self.collect_model_seat_only and (action or random.random() < keep_noop_prob):
                             raw_rows.append(
                                 {
@@ -274,6 +283,8 @@ class DaggerCollectActor:
             "regular_label_actions": float(regular_label_actions),
             "model_seat_label_actions": float(model_actions),
             "row_target_mask_mode": target_mask_mode,
+            "model_target_mask_mode": self.target_mask_mode,
+            "model_target_pair_weight": float(self.target_pair_weight),
         }
 
 
@@ -929,6 +940,8 @@ def collect_dagger_dataset(args: argparse.Namespace) -> tuple[list[Any], dict[st
             args.launch_bias,
             args.ship_bias,
             args.launch_temperature,
+            args.dagger_model_target_mask_mode,
+            args.dagger_target_pair_weight,
             args.dagger_model_seat_only,
         )
         for i in range(actor_count)
@@ -1147,6 +1160,8 @@ def main() -> None:
     parser.add_argument("--dagger-device", default="cpu")
     parser.add_argument("--dagger-stochastic", action="store_true")
     parser.add_argument("--dagger-model-seat-only", action="store_true", help="Collect only the model-controlled seat states from DAgger rollouts; regular opponents still act but are not added as rows.")
+    parser.add_argument("--dagger-model-target-mask-mode", choices=["candidate", "safe", "all_planets"], default="candidate", help="Runtime target mask used by the model while generating DAgger states.")
+    parser.add_argument("--dagger-target-pair-weight", type=float, default=1.0, help="Runtime target-pair logit weight used by the model while generating DAgger states.")
     parser.add_argument("--rows-per-game", type=int, default=12)
     parser.add_argument("--episode-steps", type=int, default=500)
     parser.add_argument("--sample-stride", type=int, default=1)

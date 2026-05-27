@@ -54,6 +54,8 @@ def collect(args: argparse.Namespace) -> tuple[list[Any], dict[str, float]]:
             args.launch_bias,
             args.ship_bias,
             args.launch_temperature,
+            args.dagger_model_target_mask_mode,
+            args.dagger_target_pair_weight,
             args.dagger_model_seat_only,
         )
         for i in range(actor_count)
@@ -84,6 +86,8 @@ def collect(args: argparse.Namespace) -> tuple[list[Any], dict[str, float]]:
         "checkpoints": float(len(checkpoints)),
         "model_seat_only": float(bool(args.dagger_model_seat_only)),
         "row_target_mask_mode": args.row_target_mask_mode,
+        "model_target_mask_mode": args.dagger_model_target_mask_mode,
+        "model_target_pair_weight": float(args.dagger_target_pair_weight),
     }
     progress = tqdm(total=len(refs), desc="collect DAgger cache", dynamic_ncols=True) if tqdm is not None else None
     pending = list(refs)
@@ -130,6 +134,8 @@ def main() -> None:
     parser.add_argument("--dagger-device", default="cpu")
     parser.add_argument("--dagger-stochastic", action="store_true")
     parser.add_argument("--dagger-model-seat-only", action="store_true")
+    parser.add_argument("--dagger-model-target-mask-mode", choices=["candidate", "safe", "all_planets"], default="candidate")
+    parser.add_argument("--dagger-target-pair-weight", type=float, default=1.0)
     parser.add_argument("--rows-per-game", type=int, default=16)
     parser.add_argument("--episode-steps", type=int, default=500)
     parser.add_argument("--sample-stride", type=int, default=1)

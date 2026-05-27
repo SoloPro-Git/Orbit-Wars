@@ -108,6 +108,7 @@ class RolloutDiagnoseActor:
         launch_bias: float,
         ship_bias: float,
         launch_temperature: float,
+        target_mask_mode: str,
     ):
         if device.startswith("cuda:"):
             import os
@@ -121,9 +122,8 @@ class RolloutDiagnoseActor:
             launch_bias=launch_bias,
             ship_bias=ship_bias,
             launch_temperature=launch_temperature,
+            target_mask_mode=target_mask_mode,
         )
-        self.regular_agent = make_rulebase_agent("regular")
-
     def run_games(
         self,
         jobs: list[tuple[int, int]],
@@ -140,6 +140,8 @@ class RolloutDiagnoseActor:
 
         for seed, model_seat in jobs:
             step_records: list[tuple[dict[str, Any], int, int, int, int]] = []
+            label_agent = make_rulebase_agent("regular")
+            regular_agents = [make_rulebase_agent("regular") for _ in range(2)]
             agents = []
             for pid in range(2):
                 if pid == model_seat:
@@ -147,7 +149,7 @@ class RolloutDiagnoseActor:
                     def model_logged(obs: dict[str, Any], configuration=None, pid: int = pid) -> list[list]:
                         del configuration
                         model_action = self.model_agent(obs) or []
-                        regular_label = self.regular_agent(obs) or []
+                        regular_label = label_agent(obs) or []
                         step_records.append(
                             (
                                 obs,
@@ -162,9 +164,11 @@ class RolloutDiagnoseActor:
                     agents.append(model_logged)
                 else:
 
-                    def regular(obs: dict[str, Any], configuration=None) -> list[list]:
+                    regular_agent = regular_agents[pid]
+
+                    def regular(obs: dict[str, Any], configuration=None, regular_agent=regular_agent) -> list[list]:
                         del configuration
-                        return self.regular_agent(obs) or []
+                        return regular_agent(obs) or []
 
                     agents.append(regular)
 
@@ -249,6 +253,7 @@ def main() -> None:
     parser.add_argument("--launch-bias", type=float, default=0.0)
     parser.add_argument("--ship-bias", type=float, default=0.0)
     parser.add_argument("--launch-temperature", type=float, default=1.0)
+    parser.add_argument("--target-mask-mode", choices=["candidate", "safe", "all_planets"], default="candidate")
     parser.add_argument("--turn-bucket", type=int, default=50)
     parser.add_argument("--ray-address", default="auto")
     parser.add_argument("--no-numba", action="store_true")
@@ -292,6 +297,7 @@ def main() -> None:
                 float(args.launch_bias),
                 float(args.ship_bias),
                 float(args.launch_temperature),
+                str(args.target_mask_mode),
             )
             for i in range(actor_count)
         ]
