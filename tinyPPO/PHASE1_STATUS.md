@@ -2106,3 +2106,53 @@ collection/training is not blocked by eval.
   backward. The next step should be diagnostic/modeling work around
   source-target ranking and action construction, not more training time on this
   exact recipe.
+
+## 2026-05-27 broad hardcase target-pair adapter result
+
+- Ran broad-cache diagnostics before the next delta. On the full broad
+  model-seat cache, sourcehead `e1300` still has high regular-source recall
+  (`0.885` at threshold `0.5`), so source selection is not the main failure.
+  Target ranking is the clearer bottleneck: sourcehead `e1300` gets broad-cache
+  target `top1=0.3710`, `top3=0.6725`, `top5=0.8044`,
+  `mean_rank=3.7326`, and `mrr=0.5547`. The previous small hardcase-best is
+  only slightly better (`top1=0.3717`, `top3=0.6746`, `mean_rank=3.7102`),
+  while the broad all-heads run is worse (`top1=0.3678`,
+  `mean_rank=3.7817`).
+- Built a larger broad hardcase cache from sourcehead `e1300` target-rank
+  mistakes:
+  `tinyPPO/data/regular_bc_dagger_broad5ckpt_hardcase_sourcehead_e1300_rank3_margin0_60ka_w2_20260527.pkl`.
+  It selected `7251` rows and exactly `60000` regular-labelled actions from
+  the broad rollout cache, with row weight `2.0`. Mixed with the 10k regular
+  cache, the weighted DAgger action share is about `120000 / (352925+120000)`,
+  or `25.4%`, matching the intended 20-30% DAgger exposure.
+- Trained only the target-pair adapter from sourcehead `e1300` for 80 epochs:
+  `tinyPPO/runs/regular_bc_dagger_broad5ckpt_hardcase60ka_pairadapter_e1300_e80_noeval_20260527`.
+  This deliberately did not train source/launch/ship heads; their loader
+  metrics stayed fixed. The pair loss fit the training side
+  (`train_target_pair_softmax_loss` fell from about `1.270` to `1.221`), but
+  validation pair accuracy did not improve and drifted down by epoch 80
+  (`val_target_pair_acc` about `0.589`).
+- External broad-cache diagnostics confirmed no improvement:
+  - e0020 target rank: `top1=0.3653`, `top3=0.6664`,
+    `top5=0.8008`, `mean_rank=3.7756`, `mrr=0.5497`.
+  - e0080 target rank: `top1=0.3675`, `top3=0.6690`,
+    `top5=0.8025`, `mean_rank=3.7576`, `mrr=0.5517`.
+  - e0020 action: `action_f1=0.2563`, `source_target_f1=0.2776`,
+    `micro_action_f1=0.2844`.
+  - e0080 action: `action_f1=0.2567`, `source_target_f1=0.2780`,
+    `micro_action_f1=0.2862`.
+  These are below sourcehead `e1300` on the same broad cache
+  (`action_f1=0.2576`, `source_target_f1=0.2792`,
+  `micro_action_f1=0.2893`) and below the previous hardcase-best.
+- Same-state Phase1 gate for e0080 versus sourcehead `e1300` was effectively
+  flat, not a pass: candidate action F1 `0.2698` versus baseline `0.2687`,
+  source-target F1 `0.2806` versus `0.2795`, selected score `0.2156` versus
+  `0.2146`, and density ratio `0.875` for both. It failed configured Phase1
+  thresholds due to action/source-target F1 below `0.30` and score delta only
+  `+0.0011`, far below the required `+0.02`.
+- Decision: do not run online eval and do not promote this checkpoint. This
+  confirms that simply upweighting target-rank hardcases in the current
+  pair-adapter path mostly overfits the hardcase subset and does not improve
+  target ranking on the broader model-rollout distribution. The next aligned
+  work should change the representation/objective for target construction, not
+  only resample more hardcases.
