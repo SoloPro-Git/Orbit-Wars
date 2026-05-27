@@ -73,8 +73,9 @@ def collect_game_task(
     sample_stride: int,
     rows_per_game: int,
     use_numba: bool,
+    target_mask_mode: str,
 ) -> tuple[list[Any], dict[str, float]]:
-    return _collect_one_game(seed, players, episode_steps, keep_noop_prob, sample_stride, rows_per_game, use_numba)
+    return _collect_one_game(seed, players, episode_steps, keep_noop_prob, sample_stride, rows_per_game, use_numba, target_mask_mode)
 
 
 @ray.remote(num_cpus=1)
@@ -85,13 +86,14 @@ def collect_games_task(
     sample_stride: int,
     rows_per_game: int,
     use_numba: bool,
+    target_mask_mode: str,
 ) -> tuple[list[Any], dict[str, float]]:
     rows: list[Any] = []
     labelled_actions = 0.0
     skipped_actions = 0.0
     completed = 0
     for seed, players in jobs:
-        game_rows, metrics = _collect_one_game(seed, players, episode_steps, keep_noop_prob, sample_stride, rows_per_game, use_numba)
+        game_rows, metrics = _collect_one_game(seed, players, episode_steps, keep_noop_prob, sample_stride, rows_per_game, use_numba, target_mask_mode)
         rows.extend(game_rows)
         labelled_actions += float(metrics.get("labelled_actions", 0.0))
         skipped_actions += float(metrics.get("skipped_actions", 0.0))
@@ -101,6 +103,7 @@ def collect_games_task(
         "samples": float(len(rows)),
         "labelled_actions": labelled_actions,
         "skipped_actions": skipped_actions,
+        "row_target_mask_mode": target_mask_mode,
     }
 
 
@@ -137,6 +140,7 @@ class DaggerCollectActor:
         sample_stride: int,
         rows_per_game: int,
         use_numba: bool,
+        target_mask_mode: str,
     ) -> tuple[list[Any], dict[str, float]]:
         import random
 
@@ -224,7 +228,7 @@ class DaggerCollectActor:
                 obs = raw["obs"]
                 player = int(raw["player"])
                 label_action = raw["label_action"]
-                row = row_from_regular_action(obs, player, label_action, players=players)
+                row = row_from_regular_action(obs, player, label_action, players=players, target_mask_mode=target_mask_mode)
                 if row is None:
                     continue
                 row.dagger_checkpoint = raw["checkpoint"]  # type: ignore[attr-defined]
@@ -269,6 +273,7 @@ class DaggerCollectActor:
             "skipped_actions": float(skipped_actions),
             "regular_label_actions": float(regular_label_actions),
             "model_seat_label_actions": float(model_actions),
+            "row_target_mask_mode": target_mask_mode,
         }
 
 
@@ -785,6 +790,7 @@ def collect_regular_dataset(args: argparse.Namespace, cache_path: Path | None) -
             args.sample_stride,
             args.rows_per_game,
             not args.no_numba,
+            args.row_target_mask_mode,
         )
         for shard in job_shards
     ]
@@ -815,6 +821,7 @@ def collect_regular_dataset(args: argparse.Namespace, cache_path: Path | None) -
                 "labelled_actions": labelled,
                 "skipped_actions": skipped,
                 "players_modes": float(len(players_values)),
+                "row_target_mask_mode": args.row_target_mask_mode,
                 "partial": 1.0,
             }
             partial_path = cache_path.with_suffix(cache_path.suffix + f".partial_{completed:05d}")
@@ -834,6 +841,7 @@ def collect_regular_dataset(args: argparse.Namespace, cache_path: Path | None) -
         "skipped_actions": skipped,
         "players_modes": float(len(players_values)),
         "collect_games_per_task": float(games_per_task),
+        "row_target_mask_mode": args.row_target_mask_mode,
     }
     if cache_path is not None:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -933,6 +941,7 @@ def collect_dagger_dataset(args: argparse.Namespace) -> tuple[list[Any], dict[st
             args.sample_stride,
             args.rows_per_game,
             not args.no_numba,
+            args.row_target_mask_mode,
         )
         for actor, shard in zip(actors, shards, strict=True)
         if shard
@@ -970,6 +979,7 @@ def collect_dagger_dataset(args: argparse.Namespace) -> tuple[list[Any], dict[st
         "actors": float(actor_count),
         "checkpoints": float(len(checkpoints)),
         "model_seat_only": float(bool(args.dagger_model_seat_only)),
+        "row_target_mask_mode": args.row_target_mask_mode,
     }
     cache_path = cache_paths[0] if len(cache_paths) == 1 else None
     if cache_path is not None:
@@ -1141,6 +1151,12 @@ def main() -> None:
     parser.add_argument("--episode-steps", type=int, default=500)
     parser.add_argument("--sample-stride", type=int, default=1)
     parser.add_argument("--keep-noop-prob", type=float, default=0.15)
+    parser.add_argument(
+        "--row-target-mask-mode",
+        choices=["candidate", "safe", "all_planets"],
+        default="candidate",
+        help="Target mask stored in newly collected regular/DAgger BC rows. Loaded caches keep their saved mask.",
+    )
     parser.add_argument("--trainers", type=int, default=8)
     parser.add_argument("--cpus-per-trainer", type=float, default=2.0)
     parser.add_argument("--gpus-per-trainer", type=float, default=1.0)

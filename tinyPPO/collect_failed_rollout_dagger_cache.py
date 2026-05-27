@@ -114,6 +114,7 @@ class FailedRolloutDaggerActor:
         min_owned_ships: float,
         min_score_gap: float,
         use_numba: bool,
+        target_mask_mode: str,
     ) -> tuple[list[Any], dict[str, float], dict[str, dict[str, float]]]:
         rows: list[Any] = []
         metrics: dict[str, float] = {
@@ -220,7 +221,7 @@ class FailedRolloutDaggerActor:
                 continue
             metrics["kept_games"] += 1.0
             for sampled_index, raw in enumerate(filtered):
-                row = row_from_regular_action(raw["obs"], int(raw["player"]), raw["label_action"], players=players)
+                row = row_from_regular_action(raw["obs"], int(raw["player"]), raw["label_action"], players=players, target_mask_mode=target_mask_mode)
                 if row is None:
                     continue
                 action_gap = int(raw["regular_action_count"]) - int(raw["model_action_count"])
@@ -317,6 +318,7 @@ def collect(args: argparse.Namespace) -> tuple[list[Any], dict[str, Any]]:
             args.min_owned_ships,
             args.min_score_gap,
             not args.no_numba,
+            args.row_target_mask_mode,
         )
         for actor, shard in zip(actors, shards, strict=True)
         if shard
@@ -343,6 +345,7 @@ def collect(args: argparse.Namespace) -> tuple[list[Any], dict[str, Any]]:
         "min_owned_planets": float(args.min_owned_planets),
         "min_owned_ships": float(args.min_owned_ships),
         "min_score_gap": float(args.min_score_gap),
+        "row_target_mask_mode": args.row_target_mask_mode,
     }
     bucket_totals: dict[str, Counter] = {"turn": Counter(), "reward": Counter(), "action_gap": Counter()}
     progress = tqdm(total=len(refs), desc="collect failed rollout DAgger", dynamic_ncols=True) if tqdm is not None else None
@@ -402,6 +405,12 @@ def main() -> None:
     parser.add_argument("--rows-per-game", type=int, default=16)
     parser.add_argument("--sample-stride", type=int, default=1)
     parser.add_argument("--keep-noop-prob", type=float, default=0.05)
+    parser.add_argument(
+        "--row-target-mask-mode",
+        choices=["candidate", "safe", "all_planets"],
+        default="candidate",
+        help="Target mask stored in newly collected failed-rollout DAgger rows.",
+    )
     parser.add_argument("--max-final-reward", type=float, default=0.0)
     parser.add_argument("--keep-outcomes", default="", help="Comma list from loss,draw,win using the same score comparison as online eval. If set, overrides --max-final-reward filtering.")
     parser.add_argument("--min-turn", type=int, default=-1)

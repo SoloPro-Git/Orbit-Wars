@@ -2385,3 +2385,28 @@ collection/training is not blocked by eval.
 - Tooling: `tinyPPO.phase1_gate` now accepts `--workers` to parallelize
   seed/checkpoint evaluations. A CPU smoke check with `--workers 2` completed,
   so broader same-state gates no longer need to run as one slow process.
+
+## 2026-05-27 safe-mask data collection support
+
+- Added `--row-target-mask-mode {candidate,safe,all_planets}` to the regular BC
+  and DAgger collection paths. The default stays `candidate` for compatibility,
+  but new caches can now store the same broader `safe` target mask used by the
+  runtime decoder instead of only storing `candidate + forced label target`.
+- This is a data-construction delta, not a DAgger semantic change: model
+  rollouts still provide the visited states, and labels still come from
+  `regular` on the same observation/player perspective.
+- Smoke checks:
+  - local BC: `tinyPPO.imitation_regular` with `--row-target-mask-mode safe`,
+    `1` game, `4` rows, `1` CPU epoch completed and saved
+    `/tmp/orbit_safe_mask_smoke.pt`; collect metrics reported
+    `row_target_mask_mode=safe`.
+  - Ray DAgger: `tinyPPO.collect_dagger_cache` with `1` actor, `1` model-seat
+    game, checkpoint `regular_bc_ray_e0400.pt`, and
+    `--row-target-mask-mode safe` completed and saved
+    `/tmp/orbit_safe_dagger_smoke.pkl`; metrics reported `3` rows, `16`
+    labelled actions, and `row_target_mask_mode=safe`.
+- Next experiment should regenerate a safe-mask pure regular cache and a
+  safe-mask broad checkpoint DAgger cache, then repeat the intended 70-80% pure
+  / 20-30% DAgger BC mix. This directly tests whether training target ranking
+  against the runtime-safe negative set fixes the same-state/online gap that
+  inference-only `safe` decoding did not fix.

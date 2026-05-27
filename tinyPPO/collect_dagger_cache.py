@@ -66,6 +66,7 @@ def collect(args: argparse.Namespace) -> tuple[list[Any], dict[str, float]]:
             args.sample_stride,
             args.rows_per_game,
             not args.no_numba,
+            args.row_target_mask_mode,
         )
         for actor, shard in zip(actors, shards, strict=True)
         if shard
@@ -82,6 +83,7 @@ def collect(args: argparse.Namespace) -> tuple[list[Any], dict[str, float]]:
         "actors": float(actor_count),
         "checkpoints": float(len(checkpoints)),
         "model_seat_only": float(bool(args.dagger_model_seat_only)),
+        "row_target_mask_mode": args.row_target_mask_mode,
     }
     progress = tqdm(total=len(refs), desc="collect DAgger cache", dynamic_ncols=True) if tqdm is not None else None
     pending = list(refs)
@@ -132,6 +134,12 @@ def main() -> None:
     parser.add_argument("--episode-steps", type=int, default=500)
     parser.add_argument("--sample-stride", type=int, default=1)
     parser.add_argument("--keep-noop-prob", type=float, default=0.15)
+    parser.add_argument(
+        "--row-target-mask-mode",
+        choices=["candidate", "safe", "all_planets"],
+        default="candidate",
+        help="Target mask stored in newly collected DAgger BC rows.",
+    )
     parser.add_argument("--launch-bias", type=float, default=0.0)
     parser.add_argument("--ship-bias", type=float, default=0.0)
     parser.add_argument("--launch-temperature", type=float, default=1.0)

@@ -19,7 +19,14 @@ from training.expert.action_labeling import infer_target_planet_id
 from training2 import make_fast_orbit_wars
 from training2.rulebase_bridge import make_rulebase_agent
 
-from tinyPPO.agents import ACTION_SLOTS, SHIP_BUCKET_MULTIPLIERS, candidate_target_mask, required_ships
+from tinyPPO.agents import (
+    ACTION_SLOTS,
+    SHIP_BUCKET_MULTIPLIERS,
+    all_planets_target_mask,
+    candidate_target_mask,
+    required_ships,
+    safe_target_mask,
+)
 from tinyPPO.features import MAX_PLANETS, encode_obs
 from tinyPPO.model import TinyPolicyValueNet
 
@@ -59,7 +66,23 @@ def _bucket_for_action(obs: dict[str, Any], player: int, source: list, target: l
     return int(min(range(len(SHIP_BUCKET_MULTIPLIERS)), key=lambda i: abs(SHIP_BUCKET_MULTIPLIERS[i] - ratio)))
 
 
-def row_from_regular_action(obs: dict[str, Any], player: int, action: list[list], players: int) -> BCRow | None:
+def _row_target_mask(obs: dict[str, Any], player: int, mode: str) -> np.ndarray:
+    if mode == "candidate":
+        return candidate_target_mask(obs, player)
+    if mode == "safe":
+        return safe_target_mask(obs, player)
+    if mode == "all_planets":
+        return all_planets_target_mask(obs, player)
+    raise ValueError(f"unsupported row target mask mode: {mode!r}")
+
+
+def row_from_regular_action(
+    obs: dict[str, Any],
+    player: int,
+    action: list[list],
+    players: int,
+    target_mask_mode: str = "candidate",
+) -> BCRow | None:
     enc = encode_obs(obs, player, players=players)
     planets = list(obs.get("planets", []))[:MAX_PLANETS]
     id_to_idx = {int(p[0]): i for i, p in enumerate(planets)}
@@ -69,7 +92,7 @@ def row_from_regular_action(obs: dict[str, Any], player: int, action: list[list]
     ship_actions = np.zeros((MAX_PLANETS, ACTION_SLOTS), dtype=np.int64)
     launch_mask = np.zeros((MAX_PLANETS, ACTION_SLOTS), dtype=np.bool_)
     used_slots = np.zeros(MAX_PLANETS, dtype=np.int64)
-    target_mask = candidate_target_mask(obs, player)
+    target_mask = _row_target_mask(obs, player, target_mask_mode)
 
     labelled = 0
     skipped = 0
@@ -131,6 +154,7 @@ def _collect_one_game(
     sample_stride: int,
     rows_per_game: int,
     use_numba: bool,
+    target_mask_mode: str = "candidate",
 ) -> tuple[list[BCRow], dict[str, float]]:
     random.seed(seed)
     np.random.seed(seed)
@@ -150,7 +174,7 @@ def _collect_one_game(
     labelled_actions = 0
     skipped_actions = 0
     for obs, player, action in sampled:
-        row = row_from_regular_action(obs, player, action, players=players)
+        row = row_from_regular_action(obs, player, action, players=players, target_mask_mode=target_mask_mode)
         if row is None:
             continue
         rows.append(row)
@@ -161,6 +185,7 @@ def _collect_one_game(
         "samples": float(len(rows)),
         "labelled_actions": float(labelled_actions),
         "skipped_actions": float(skipped_actions),
+        "row_target_mask_mode": target_mask_mode,
     }
 
 
@@ -210,6 +235,7 @@ def collect_rows(args: argparse.Namespace) -> tuple[list[BCRow], dict[str, float
                 args.sample_stride,
                 args.rows_per_game,
                 not args.no_numba,
+                args.row_target_mask_mode,
             )
             completed_games += 1
             if add_result(game_rows, metrics):
@@ -220,6 +246,7 @@ def collect_rows(args: argparse.Namespace) -> tuple[list[BCRow], dict[str, float
             "labelled_actions": float(labelled_actions),
             "skipped_actions": float(skipped_actions),
             "players_modes": float(len(players_values)),
+            "row_target_mask_mode": args.row_target_mask_mode,
         }
 
     completed_games = 0
@@ -234,6 +261,7 @@ def collect_rows(args: argparse.Namespace) -> tuple[list[BCRow], dict[str, float
                 args.sample_stride,
                 args.rows_per_game,
                 not args.no_numba,
+                args.row_target_mask_mode,
             )
             for seed, players in jobs
         ]
@@ -255,6 +283,7 @@ def collect_rows(args: argparse.Namespace) -> tuple[list[BCRow], dict[str, float
         "labelled_actions": float(labelled_actions),
         "skipped_actions": float(skipped_actions),
         "players_modes": float(len(players_values)),
+        "row_target_mask_mode": args.row_target_mask_mode,
     }
 
 
@@ -940,6 +969,12 @@ def main() -> None:
     parser.add_argument("--episode-steps", type=int, default=500)
     parser.add_argument("--sample-stride", type=int, default=2)
     parser.add_argument("--keep-noop-prob", type=float, default=0.08)
+    parser.add_argument(
+        "--row-target-mask-mode",
+        choices=["candidate", "safe", "all_planets"],
+        default="candidate",
+        help="Target mask stored in collected BC rows. Existing caches keep their saved mask.",
+    )
     parser.add_argument("--seed", type=int, default=260525)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--batch-size", type=int, default=32)
