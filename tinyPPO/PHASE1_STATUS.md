@@ -2460,3 +2460,92 @@ collection/training is not blocked by eval.
   fixed and improve action coherence, especially source-target/ship/count
   coupling; do not spend more time merely extending epochs, since e40/e120
   online results beat the later best-imitation checkpoint behavior.
+
+## 2026-05-28 corrected safe DAgger iter2
+
+- Found and fixed a DAgger rollout/relabel semantic bug:
+  `regular` agents are stateful, but the previous collection/diagnostic actors
+  reused one regular instance across games and players. The DAgger rollout path
+  also did not pass the runtime model target-mask mode, so safe-decoder online
+  policies were generating DAgger states with the older `candidate` mask.
+- Commit: `6be94ea Fix DAgger regular relabel rollout semantics`.
+  The corrected collection now creates fresh regular agents per episode/player,
+  uses a separate fresh regular teacher for the model-seat observation, and
+  records `model_target_mask_mode` / `model_target_pair_weight` in metrics.
+- Collected corrected iter2 DAgger from the previous best safe online branch:
+  `tinyPPO/data/regular_bc_dagger_iter2_e0120_safedecode_m005_2p_0512g_rows8_safe_20260528_shard*.pkl`.
+  It used checkpoint `regular_bc_ray_e0120.pt`, model p0 vs fresh regular p1,
+  `--dagger-model-seat-only`, `--dagger-model-target-mask-mode safe`,
+  `--launch-bias -0.05`, `--row-target-mask-mode safe`, 64 actors, and manual
+  GPU IDs across 0-7. Total metrics:
+  - `4096` games.
+  - `32168` samples.
+  - `69261` regular-labelled actions.
+  - `70157` model-seat regular label actions before target-mask skips.
+  - All shards reported `row_target_mask_mode=safe`,
+    `model_target_mask_mode=safe`, `model_target_pair_weight=1.0`.
+- Trained:
+  `tinyPPO/runs/regular_bc_dagger_iter2_e0120_safedecode_m005_w1_allheads_e0120_e200_noeval_20260528`.
+  It resumed the previous safe online `e0120` checkpoint, mixed the safe pure
+  regular cache with only the corrected iter2 DAgger shards, used
+  `dagger_loss_weight=1.0`, all heads trainable, hidden `128`, layers `2`,
+  source-target summary, target-pair head, safe dataset target mask, 64 trainer
+  actors, and no in-loop online eval.
+- Offline result: training loss continued to decrease, but pure-regular
+  validation did not improve. Best imitation was only `0.53246`, below the
+  previous broad safe DAgger best `0.54904`. Later epochs showed the expected
+  pattern of train target/pair metrics rising while pure-regular validation
+  target metrics softened, so extending epochs alone is not promising.
+- Online safe 64-game sweep:
+  - `e0140`: best `14W/50L/0D`, nonloss `0.219`.
+  - `e0160`: best `15W/49L/0D`, nonloss `0.234`.
+  - `e0180`: best `launch_bias=-0.15`, `17W/47L/0D`, nonloss `0.266`.
+  - `e0200`: best `launch_bias=-0.25`, `17W/47L/0D`, nonloss `0.266`.
+- 256-game confirmation did not hold the apparent 64-game gain:
+  - `e0180`, `launch_bias=-0.15`: `54W/202L/0D`, nonloss `0.211`.
+  - `e0200`, `launch_bias=-0.25`: `48W/208L/0D`, nonloss `0.188`.
+  Both are below the previous `e0120`, `launch_bias=-0.05` result
+  `62W/194L/0D`, nonloss `0.242`.
+- Decision: the corrected DAgger semantics are required for future data, but
+  this iter2-only update did not become a better policy. The bottleneck now
+  looks less like seed/epoch count and more like action coherence under shifted
+  states: source-target-owner/ship/count coupling is still too weak. The next
+  experiment should keep the corrected safe DAgger data and training recipe
+  fixed, change exactly one model-structure delta, and validate by online
+  rollout rather than pure loss.
+
+## 2026-05-28 corrected iter2 capacity probe: layers 3
+
+- Tested the simplest model-complexity hypothesis as a single delta: resume the
+  same previous safe-online `e0120` checkpoint with `--resume-compatible`, keep
+  hidden `128`, heads `4`, all data/loss/decode settings fixed, and change only
+  Transformer context depth from layers `2` to layers `3`.
+- Run:
+  `tinyPPO/runs/regular_bc_dagger_iter2_e0120_safedecode_m005_w1_layers3_e0120_e220_noeval_20260528`.
+  It used the safe pure regular cache plus the corrected iter2 DAgger shards,
+  `dagger_loss_weight=1.0`, all heads trainable, source-target summary,
+  target-pair head, safe dataset target mask, 64 trainer actors, and no in-loop
+  online eval.
+- Offline result: best imitation was only `0.53012`, worse than the layers-2
+  corrected iter2 run (`0.53246`) and clearly below the previous broad safe
+  DAgger run (`0.54904`). During training, train target/pair metrics continued
+  improving (`train_target_acc` reached about `0.673`, `train_target_pair_acc`
+  about `0.618`), while pure-regular validation target/pair degraded
+  (`val_target_acc` about `0.609`, `val_target_pair_acc` about `0.553` at
+  `e0220`), so the added layer mostly increased fit to the mixed training data
+  rather than generalization.
+- Online safe 64-game probe:
+  - `e0020`: best `launch_bias=0.0`, `14W/50L/0D`, nonloss `0.219`.
+  - `e0040`: best observed `launch_bias=-0.15`, `16W/48L/0D`,
+    nonloss `0.25`.
+  The longer coarse sweep was stopped after `e0040` because later offline
+  checkpoints were already showing stronger overfit.
+- 256-game confirmation of the apparent best did not hold:
+  - `e0040`, `launch_bias=-0.15`: `55W/201L/0D`, nonloss `0.215`.
+  This is below the previous best safe online confirmation (`e0120`,
+  `launch_bias=-0.05`: `62W/194L/0D`, nonloss `0.242`).
+- Decision: simple extra depth is not the missing piece. Model capacity might
+  still matter, but the current evidence points away from "just make it bigger"
+  and toward better action factorization / hard-state data: the model is not
+  consistently binding source, target, ship amount, and action count under
+  model-induced states.
