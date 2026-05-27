@@ -2410,3 +2410,53 @@ collection/training is not blocked by eval.
   / 20-30% DAgger BC mix. This directly tests whether training target ranking
   against the runtime-safe negative set fixes the same-state/online gap that
   inference-only `safe` decoding did not fix.
+
+## 2026-05-28 safe-mask regular plus broad DAgger rerun
+
+- Collected a new pure regular safe-mask cache:
+  `tinyPPO/data/regular_bc_rulefeat_2p_10000g_rows16_safe_20260527.pkl`.
+  It used `10000` 2P games, `rows_per_game=16`, and
+  `--row-target-mask-mode safe`. The loader reported `200838` samples and
+  `352925` labelled actions.
+- Collected the model-seat DAgger data in 8 shards to avoid Ray object-store
+  OOMs:
+  `tinyPPO/data/regular_bc_dagger_broad5ckpt_modelseat_2p_0640g_rows8_safe_20260528_shard*.pkl`.
+  Total metrics were `5120` games, `40884` samples, `286907`
+  regular-labelled actions, and `300006` model-seat label actions. Rollouts
+  used checkpoints `e0400/e0600/e0900/e1100/e1300`, model p0 versus regular p1,
+  and labels came from running `regular` on the model-seat observation.
+- Trained:
+  `tinyPPO/runs/regular_bc_dagger_broad5ckpt_modelseat_safemask_w03_allheads_e1300_e160_noeval_20260528`.
+  It resumed sourcehead `e1300`, used `dagger_loss_weight=0.3`, trained all
+  heads for `160` epochs, and disabled online eval during training. Weighted
+  action mass was about `80.4%` pure regular / `19.6%` DAgger.
+- Offline training showed mild overfit after the early/mid epochs. Best
+  imitation score was `0.54904` at epoch `158`, but validation target/pair
+  accuracy mostly plateaued after about epoch `40` while train metrics kept
+  improving. Final epoch `160` had `val_imitation_score=0.54764`,
+  `val_target_acc=0.64282`, `val_target_pair_acc=0.55873`, and
+  `val_action_count_mae=1.7894`.
+- Same-state Phase1 gate with `safe` decoding versus sourcehead `e1300`
+  improved clearly for the checked epochs:
+  - `e0040`: `selected_score=0.2532`, `action_f1=0.3017`,
+    `source_target_f1=0.3102`, `density_ratio=0.984`, score delta `+0.0714`.
+  - `e0080`: `selected_score=0.2514`, `action_f1=0.3120`,
+    `source_target_f1=0.3242`, `density_ratio=0.877`, score delta `+0.0696`.
+  - `e0120`: `selected_score=0.2544`, `action_f1=0.3097`,
+    `source_target_f1=0.3216`, `density_ratio=0.909`, score delta `+0.0727`.
+  The remaining slow same-state sweep was stopped after these three passed; no
+  need to spend more CPU before online confirmation.
+- 64-game online safe-mask sweep versus regular:
+  - `e0040`: best `launch_bias=-0.25`, `20W/44L/0D`, nonloss `0.3125`.
+  - `e0080`: best `launch_bias=0.15`, `13W/51L/0D`, nonloss `0.2031`.
+  - `e0120`: best `launch_bias=-0.05`, `16W/48L/0D`, nonloss `0.25`.
+- 256-game confirmation of the two best variants:
+  - `e0040`, `launch_bias=-0.25`: `46W/210L/0D`, nonloss `0.1797`.
+  - `e0120`, `launch_bias=-0.05`: `62W/194L/0D`, nonloss `0.2422`.
+- Decision: this is the first model-side branch in this phase that escapes the
+  repeated `1/64` online-collapse regime, so the safe-mask data construction is
+  a real improvement. It is still far below regular and should not be promoted
+  as-is. The next single delta should keep this safe-mask data/decoder setup
+  fixed and improve action coherence, especially source-target/ship/count
+  coupling; do not spend more time merely extending epochs, since e40/e120
+  online results beat the later best-imitation checkpoint behavior.
