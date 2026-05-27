@@ -2284,3 +2284,40 @@ collection/training is not blocked by eval.
   amount, while preserving the candidate/safety mask that offline diagnostics
   showed to be essential. Continuing to train the same source-head-only setup is
   not expected to fix the distribution shift.
+
+## 2026-05-27 broad DAgger all-heads result
+
+- Ran the paired all-heads control:
+  `tinyPPO/runs/regular_bc_dagger_broad5ckpt_modelseat_w03_allheads_e1300_e160_noeval_20260527`.
+  It used the same pure regular cache, same broad model-seat regular-labelled
+  DAgger cache, same sourcehead `e1300` resume checkpoint, and the same
+  `dagger_loss_weight=0.3` mix as the source-head-only run. The only intended
+  delta was `--trainable-modules all`, so target/ship/count heads could move
+  together with source selection. The job trained the full `160` epochs with
+  `64` trainers across GPUs `0-7`.
+- Training did not show a late rescue from deeper optimization. Train loss kept
+  decreasing, but validation loss rose from about `1.81` early to `1.8508` at
+  epoch `160`. Best validation imitation score was `0.64267`, and the final
+  epoch had `val_imitation_score=0.63822`, `val_launch_f1=0.6675`,
+  `val_action_count_mae=1.6452`, and `val_target_pair_acc=0.5771`. This looks
+  like train-distribution fitting rather than improved deployable behavior.
+- Same-state Phase1 gate versus sourcehead `e1300` did not pass:
+  - all-planets decoding: candidate `selected_score=0.1756` versus baseline
+    `0.1805`, `density_ratio=0.727`, `action_f1=0.258`,
+    `source_target_f1=0.268`; failed score delta and F1 thresholds.
+  - candidate-mask decoding: candidate `selected_score=0.1354` versus baseline
+    `0.1295`, but `density_ratio=0.599`, `action_f1=0.241`, and
+    `source_target_f1=0.253`; failed density and F1 thresholds despite the
+    small score increase.
+- Online candidate-mask eval was again `1/64` versus regular
+  (`nonloss=0.0156`) at `launch_bias=-0.05`, `ship_bias=0.0`,
+  `target_pair_weight=1.0`, `target_top_k=6`.
+- Decision: do not promote this checkpoint. The failure mode is now replicated
+  with both source-head-only and all-heads DAgger at the intended 20% DAgger mix:
+  more epochs and simply unfreezing all heads do not lower distribution drift.
+  The next useful experiment should be a small, controlled capacity/decoder
+  check rather than another long replay of the same setup: for example compare
+  `hidden=256` or `layers=3` for a short run under the same data mix, and in
+  parallel work on action construction/factorization so candidate-safe target
+  choices, source choice, ship amount, and action count are decoded as a
+  coherent regular action set.
