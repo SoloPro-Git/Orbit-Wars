@@ -2156,3 +2156,49 @@ collection/training is not blocked by eval.
   target ranking on the broader model-rollout distribution. The next aligned
   work should change the representation/objective for target construction, not
   only resample more hardcases.
+
+## 2026-05-27 within-owner target-pair objective result
+
+- Added a new optional loss, `--target-pair-within-owner-loss-weight`, to both
+  BC trainers. For each active regular-labelled source-target pair, it masks the
+  target-pair logits to planets with the same owner class as the regular target
+  and applies weighted CE there. Default weight is `0.0`, so existing runs are
+  unchanged. The intent was to test the previous hypothesis that target
+  construction needs within-owner ranking structure, not only global target CE
+  or owner calibration.
+- Smoke-tested the Ray path on the broad DAgger smoke cache with a compatible
+  sourcehead `e1300` resume. The first attempt caught an active-action
+  broadcasting bug in the new mask; after fixing it, the smoke loaded all
+  `41` compatible tensors, copied adapter tensors from `edge.*`, produced
+  nonzero `train_target_pair_within_owner_loss`, and completed one epoch.
+- Ran the full broad model-seat DAgger setup from sourcehead `e1300`, training
+  only the target-pair adapter with pair softmax `0.25` plus within-owner CE
+  `1.0`:
+  `tinyPPO/runs/regular_bc_dagger_broad5ckpt_withinowner_pairadapter_e1300_e80_noeval_20260527`.
+  The run used the 10k pure regular cache plus the broad 5-checkpoint
+  model-seat DAgger cache at `dagger_loss_weight=0.4` (`117976` weighted DAgger
+  labelled actions versus `352925` pure-regular actions, about `25%` DAgger
+  exposure). It used `64` trainers across manual GPU ids `0-7`; GPU utilization
+  was near `99-100%`.
+- Stopped the run after epoch 49, with checkpoints saved at `e0020` and
+  `e0040`. This was not a shallow step-level stop: the large-cache run had
+  already trained deeply enough to show the trend. Training-side pair/within
+  owner losses kept decreasing, but validation pair metrics only oscillated:
+  `val_target_pair_acc` stayed around `0.578-0.581`, and
+  `val_target_pair_within_owner_acc` stayed around `0.720-0.721`.
+- External 10k-row broad-cache target-rank diagnostics showed the new objective
+  moved backward versus sourcehead `e1300` on the same sampled rows:
+  - sourcehead `e1300`: `top1=0.3694`, `top3=0.6739`,
+    `top5=0.8050`, `mean_rank=3.7427`, `mrr=0.5540`.
+  - within-owner `e0020`: `top1=0.3647`, `top3=0.6690`,
+    `top5=0.8027`, `mean_rank=3.7778`, `mrr=0.5500`.
+  - within-owner `e0040`: `top1=0.3646`, `top3=0.6696`,
+    `top5=0.8031`, `mean_rank=3.7751`, `mrr=0.5502`.
+- Decision: do not promote, do not run online eval, and do not continue this
+  exact objective to epoch 80. Within-owner CE can be optimized locally, but it
+  does not improve the broad rollout target ranking that matters for reducing
+  distribution shift. The next modeling step should move beyond additive losses
+  on the same logits: inspect action construction failures at the row/action
+  level and consider changing the decoder representation or candidate/action
+  factorization itself, while keeping the current source/launch baseline
+  protected.

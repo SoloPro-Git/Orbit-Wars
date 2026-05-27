@@ -443,6 +443,7 @@ def bc_loss(
     target_pair_softmax_loss_weight: float = 0.0,
     target_pair_margin_loss_weight: float = 0.0,
     target_pair_owner_loss_weight: float = 0.0,
+    target_pair_within_owner_loss_weight: float = 0.0,
     launch_count_loss_weight: float = 0.0,
     sample_weight_launch_scale: float = 1.0,
     sample_weight_target_scale: float = 1.0,
@@ -500,7 +501,9 @@ def bc_loss(
     target_pair_softmax_loss = torch.tensor(0.0, device=launch_logits.device)
     target_pair_margin_loss = torch.tensor(0.0, device=launch_logits.device)
     target_pair_owner_loss = torch.tensor(0.0, device=launch_logits.device)
+    target_pair_within_owner_loss = torch.tensor(0.0, device=launch_logits.device)
     target_pair_owner_acc = torch.tensor(0.0, device=launch_logits.device)
+    target_pair_within_owner_acc = torch.tensor(0.0, device=launch_logits.device)
     target_pair_acc = torch.tensor(0.0, device=launch_logits.device)
     if active.any():
         if target_loss_mask == "all_planets":
@@ -592,6 +595,13 @@ def bc_loss(
             owner_targets = _target_owner_labels(batch, pair_targets, b)
             target_pair_owner_loss = _weighted_cross_entropy(owner_logits[b, s], owner_targets, pair_active_weights)
             target_pair_owner_acc = (owner_logits[b, s].argmax(dim=-1) == owner_targets).float().mean()
+        if target_pair_within_owner_loss_weight > 0.0:
+            target_owner = batch["planets"][:, :, :3].argmax(dim=-1)
+            owner_targets = _target_owner_labels(batch, pair_targets, b)
+            same_owner = target_owner[b].eq(owner_targets[:, None])
+            active_same_owner_logits = masked_pair_logits[b, s].masked_fill(~same_owner, -1e9)
+            target_pair_within_owner_loss = _weighted_cross_entropy(active_same_owner_logits, pair_targets, pair_active_weights)
+            target_pair_within_owner_acc = (active_same_owner_logits.argmax(dim=-1) == pair_targets).float().mean()
         pair_pred = masked_pair_logits[b, s].argmax(dim=-1)
         target_pair_acc = (pair_pred == pair_targets).float().mean()
 
@@ -602,6 +612,7 @@ def bc_loss(
             + target_pair_softmax_loss_weight * target_pair_softmax_loss
             + target_pair_margin_loss_weight * target_pair_margin_loss
             + target_pair_owner_loss_weight * target_pair_owner_loss
+            + target_pair_within_owner_loss_weight * target_pair_within_owner_loss
             + launch_count_loss_weight * launch_count_loss
         )
         target_loss = set_parts["target_loss"]
@@ -618,6 +629,7 @@ def bc_loss(
             + target_pair_softmax_loss_weight * target_pair_softmax_loss
             + target_pair_margin_loss_weight * target_pair_margin_loss
             + target_pair_owner_loss_weight * target_pair_owner_loss
+            + target_pair_within_owner_loss_weight * target_pair_within_owner_loss
             + launch_count_loss_weight * launch_count_loss
         )
     launch_pred = out["source_logits"][own_slots].argmax(dim=-1)
@@ -646,6 +658,7 @@ def bc_loss(
         "target_pair_softmax_loss": float(target_pair_softmax_loss.detach().cpu()),
         "target_pair_margin_loss": float(target_pair_margin_loss.detach().cpu()),
         "target_pair_owner_loss": float(target_pair_owner_loss.detach().cpu()),
+        "target_pair_within_owner_loss": float(target_pair_within_owner_loss.detach().cpu()),
         "ship_loss": float(ship_loss.detach().cpu()),
         "launch_acc": float(launch_acc.detach().cpu()),
         "launch_precision": float(launch_precision.detach().cpu()),
@@ -658,6 +671,7 @@ def bc_loss(
         "target_acc": float(target_acc.detach().cpu()),
         "target_pair_acc": float(target_pair_acc.detach().cpu()),
         "target_pair_owner_acc": float(target_pair_owner_acc.detach().cpu()),
+        "target_pair_within_owner_acc": float(target_pair_within_owner_acc.detach().cpu()),
         "ship_acc": float(ship_acc.detach().cpu()),
         "action_weight_mean": float(action_weight_mean.detach().cpu()),
         "sample_weight_mean": float(row_weights.mean().detach().cpu()),
@@ -688,6 +702,7 @@ def evaluate_loader(
     target_pair_softmax_loss_weight: float = 0.0,
     target_pair_margin_loss_weight: float = 0.0,
     target_pair_owner_loss_weight: float = 0.0,
+    target_pair_within_owner_loss_weight: float = 0.0,
     launch_count_loss_weight: float = 0.0,
     sample_weight_launch_scale: float = 1.0,
     sample_weight_target_scale: float = 1.0,
@@ -716,6 +731,7 @@ def evaluate_loader(
             target_pair_softmax_loss_weight,
             target_pair_margin_loss_weight,
             target_pair_owner_loss_weight,
+            target_pair_within_owner_loss_weight,
             launch_count_loss_weight,
             sample_weight_launch_scale,
             sample_weight_target_scale,
@@ -835,6 +851,7 @@ def train_bc(args: argparse.Namespace, dataset: TensorDataset) -> tuple[TinyPoli
                 args.target_pair_softmax_loss_weight,
                 args.target_pair_margin_loss_weight,
                 args.target_pair_owner_loss_weight,
+                args.target_pair_within_owner_loss_weight,
                 args.launch_count_loss_weight,
                 args.sample_weight_launch_scale,
                 args.sample_weight_target_scale,
@@ -874,6 +891,7 @@ def train_bc(args: argparse.Namespace, dataset: TensorDataset) -> tuple[TinyPoli
                 args.target_pair_softmax_loss_weight,
                 args.target_pair_margin_loss_weight,
                 args.target_pair_owner_loss_weight,
+                args.target_pair_within_owner_loss_weight,
                 args.launch_count_loss_weight,
                 args.sample_weight_launch_scale,
                 args.sample_weight_target_scale,
@@ -943,6 +961,7 @@ def main() -> None:
     parser.add_argument("--target-pair-softmax-loss-weight", type=float, default=0.0, help="Auxiliary CE over each source's target-pair logits for regular targets.")
     parser.add_argument("--target-pair-margin-loss-weight", type=float, default=0.0, help="Auxiliary hard-negative margin loss over source-target pair logits for regular targets.")
     parser.add_argument("--target-pair-owner-loss-weight", type=float, default=0.0, help="Auxiliary CE over target owner groups aggregated from source-target pair logits.")
+    parser.add_argument("--target-pair-within-owner-loss-weight", type=float, default=0.0, help="Auxiliary CE over same-owner target candidates for each regular-labelled source-target pair.")
     parser.add_argument("--launch-count-loss-weight", type=float, default=0.0, help="Auxiliary SmoothL1 loss matching predicted launch-count probability sum to the regular action count per row.")
     parser.add_argument("--sample-weight-launch-scale", type=float, default=1.0, help="Scale how much per-row sample_weight amplifies launch/source loss. 1 keeps historical behavior.")
     parser.add_argument("--sample-weight-target-scale", type=float, default=1.0, help="Scale how much per-row sample_weight amplifies slot target loss. 0 makes weighted rows count like normal rows for this component.")

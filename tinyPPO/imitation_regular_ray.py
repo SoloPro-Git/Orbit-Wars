@@ -320,6 +320,7 @@ class BCTrainEvalActor:
         target_pair_softmax_loss_weight: float,
         target_pair_margin_loss_weight: float,
         target_pair_owner_loss_weight: float,
+        target_pair_within_owner_loss_weight: float,
         launch_count_loss_weight: float,
         sample_weight_launch_scale: float,
         sample_weight_target_scale: float,
@@ -406,6 +407,7 @@ class BCTrainEvalActor:
         self.target_pair_softmax_loss_weight = float(target_pair_softmax_loss_weight)
         self.target_pair_margin_loss_weight = float(target_pair_margin_loss_weight)
         self.target_pair_owner_loss_weight = float(target_pair_owner_loss_weight)
+        self.target_pair_within_owner_loss_weight = float(target_pair_within_owner_loss_weight)
         self.launch_count_loss_weight = float(launch_count_loss_weight)
         self.sample_weight_launch_scale = float(sample_weight_launch_scale)
         self.sample_weight_target_scale = float(sample_weight_target_scale)
@@ -448,6 +450,7 @@ class BCTrainEvalActor:
                 self.target_pair_softmax_loss_weight,
                 self.target_pair_margin_loss_weight,
                 self.target_pair_owner_loss_weight,
+                self.target_pair_within_owner_loss_weight,
                 self.launch_count_loss_weight,
                 self.sample_weight_launch_scale,
                 self.sample_weight_target_scale,
@@ -494,6 +497,7 @@ class BCTrainEvalActor:
                 self.target_pair_softmax_loss_weight,
                 self.target_pair_margin_loss_weight,
                 self.target_pair_owner_loss_weight,
+                self.target_pair_within_owner_loss_weight,
                 self.launch_count_loss_weight,
                 self.sample_weight_launch_scale,
                 self.sample_weight_target_scale,
@@ -1164,6 +1168,7 @@ def main() -> None:
     parser.add_argument("--target-pair-softmax-loss-weight", type=float, default=0.0)
     parser.add_argument("--target-pair-margin-loss-weight", type=float, default=0.0, help="Auxiliary hard-negative margin loss over source-target pair logits for regular targets.")
     parser.add_argument("--target-pair-owner-loss-weight", type=float, default=0.0, help="Auxiliary CE over target owner groups aggregated from source-target pair logits.")
+    parser.add_argument("--target-pair-within-owner-loss-weight", type=float, default=0.0, help="Auxiliary CE over same-owner target candidates for each regular-labelled source-target pair.")
     parser.add_argument("--launch-count-loss-weight", type=float, default=0.0, help="Auxiliary SmoothL1 loss matching predicted launch-count probability sum to the regular action count per row.")
     parser.add_argument("--sample-weight-launch-scale", type=float, default=1.0, help="Scale how much per-row sample_weight amplifies launch/source loss. 1 keeps historical behavior.")
     parser.add_argument("--sample-weight-target-scale", type=float, default=1.0, help="Scale how much per-row sample_weight amplifies slot target loss. 0 makes weighted rows count like normal rows for this component.")
@@ -1339,6 +1344,7 @@ def main() -> None:
             args.target_pair_softmax_loss_weight,
             args.target_pair_margin_loss_weight,
             args.target_pair_owner_loss_weight,
+            args.target_pair_within_owner_loss_weight,
             args.launch_count_loss_weight,
             args.sample_weight_launch_scale,
             args.sample_weight_target_scale,

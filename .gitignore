@@ -20,6 +20,7 @@ data/expert_demonstrations/*
 training/checkpoints/*
 training2/checkpoints/*
 data/*
+datasets/*
 rulebase/**/experiments/
 training2/.ray_temp/*
 kaggle_ipynb/
