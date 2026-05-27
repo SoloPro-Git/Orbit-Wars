@@ -2247,3 +2247,40 @@ collection/training is not blocked by eval.
   20-30% model-state regular-label mix. Do not use the model action as the
   label, and do not switch to PPO/self-play until the model can approach
   regular in online evals.
+
+## 2026-05-27 broad DAgger source-head-only result
+
+- Confirmed the existing broad cache is the intended DAgger form: model controls
+  the p0/model seat during rollout, regular controls p1, and each model-seat
+  observation is labelled by calling `regular` on the same p0 observation. The
+  cache covers the requested training-stage checkpoints
+  `e400/e600/e900/e1100/e1300`, has `5120` games, `40792` model-seat rows, and
+  `294941` labelled regular actions.
+- Ran a conservative single-delta training job:
+  `tinyPPO/runs/regular_bc_dagger_broad5ckpt_modelseat_w03_sourcehead_e1300_e160_noeval_20260527`.
+  It used the 10k pure regular cache plus the broad DAgger cache with
+  `dagger_loss_weight=0.3`, which gives about `88482 / (352925+88482) = 20.1%`
+  weighted DAgger labelled-action mass. It trained only `source_head` from
+  sourcehead `e1300` for the full `160` epochs using `64` trainers manually
+  spread across GPUs `0-7`; GPU utilization was about `99-100%`.
+- Training reached a plateau rather than a late improvement. Best validation
+  imitation score was `0.6449`; final epoch had
+  `val_imitation_score=0.6424`, `val_launch_f1=0.6704`, and
+  `val_action_count_mae=1.6192`.
+- Same-state Phase1 gate versus sourcehead `e1300` did not pass:
+  - all-planets decoding: candidate `selected_score=0.1765` versus baseline
+    `0.1805`, `density_ratio=0.703`, `action_f1=0.263`,
+    `source_target_f1=0.274`; failed score delta and F1 thresholds.
+  - candidate-mask decoding: candidate `selected_score=0.1280` versus baseline
+    `0.1295`, `density_ratio=0.591`, `action_f1=0.230`,
+    `source_target_f1=0.242`; failed density, score delta, and F1 thresholds.
+- Online candidate-mask eval also regressed: `1/64` versus regular
+  (`nonloss=0.0156`), worse than sourcehead `e1300` under the same
+  candidate-mask setting (`6/64` in the earlier audit).
+- Decision: do not promote this checkpoint. The DAgger data construction is
+  correct, but source/launch-only adaptation is not enough and can reduce action
+  density. The next aligned delta should address action construction as a
+  coupled decoder problem: target candidate/factorization plus ship/action
+  amount, while preserving the candidate/safety mask that offline diagnostics
+  showed to be essential. Continuing to train the same source-head-only setup is
+  not expected to fix the distribution shift.
