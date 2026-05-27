@@ -11,6 +11,7 @@ def make_orbit_wars_env(
     backend: str = "kaggle",
     debug: bool = True,
     keep_history: bool = True,
+    copy_observations: bool = True,
     use_numba: bool = False,
 ):
     backend = (backend or "kaggle").lower()
@@ -21,6 +22,7 @@ def make_orbit_wars_env(
             configuration,
             debug=debug,
             keep_history=keep_history,
+            copy_observations=copy_observations,
             use_numba=use_numba,
         )
     if backend in {"kaggle", "official"}:

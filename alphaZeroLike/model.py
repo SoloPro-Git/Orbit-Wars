@@ -45,6 +45,7 @@ class AlphaZeroLikeNet(nn.Module):
             nn.LayerNorm(d_model),
             nn.Linear(d_model, 1),
         )
+        self.candidate_bias = nn.Parameter(torch.zeros(64))
         self.proposal_send = nn.Sequential(nn.Linear(d_model * 2, d_model), nn.GELU(), nn.Linear(d_model, 1))
         self.proposal_target = nn.Sequential(nn.Linear(d_model * 2, d_model), nn.GELU(), nn.Linear(d_model, 64))
         self.proposal_ship = nn.Sequential(nn.Linear(d_model * 2, d_model), nn.GELU(), nn.Linear(d_model, 1))
@@ -148,6 +149,7 @@ class AlphaZeroLikeNet(nn.Module):
         )
         ctx_expanded = ctx.unsqueeze(1).expand(-1, action_emb.size(1), -1)
         logits = self.policy(torch.cat([ctx_expanded, action_emb], dim=-1)).squeeze(-1)
+        logits = logits + self.candidate_bias[: logits.size(1)].view(1, -1)
         logits = logits.masked_fill(candidate_mask <= 0.0, -1e9)
         value = self.value(ctx).squeeze(-1)
         return logits, value

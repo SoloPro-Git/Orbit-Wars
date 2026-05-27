@@ -9,7 +9,7 @@ import ray
 
 from tinyPPO.bridge_agents import parse_float_list, parse_int_list
 from tinyPPO.eval_bridge import _run_agent_pair
-from tinyPPO.bridge_agents import RegularSourceBridgeAgent
+from tinyPPO.bridge_agents import RegularSourceBridgeAgent, RegularSourceDropGateAgent
 from training2.rulebase_bridge import make_rulebase_agent
 
 
@@ -18,6 +18,14 @@ def _eval_part(config: dict[str, Any], games: int, seed: int) -> dict[str, float
     ckpt = Path(config["checkpoint"])
     if config["variant"] == "regular_anchor":
         agent_factory = lambda: make_rulebase_agent("regular")
+    elif config["variant"] == "regular_source_drop_gate":
+        agent_factory = lambda: RegularSourceDropGateAgent(
+            ckpt,
+            device=config["device"],
+            no_drop_bias=config["no_drop_bias"],
+            min_anchor_actions_to_filter=config["min_anchor_actions_to_filter"],
+            deterministic=config["drop_gate_deterministic"],
+        )
     else:
         agent_factory = lambda: RegularSourceBridgeAgent(
             ckpt,
@@ -50,6 +58,7 @@ def _eval_part(config: dict[str, Any], games: int, seed: int) -> dict[str, float
             "max_source_drops": config.get("max_source_drops"),
             "max_drop_frac": config.get("max_drop_frac"),
             "min_anchor_actions_to_filter": config.get("min_anchor_actions_to_filter"),
+            "no_drop_bias": config.get("no_drop_bias"),
         }
     )
     return result
@@ -98,6 +107,7 @@ def main() -> None:
     parser.add_argument("--gpus-per-worker", type=float, default=0.0)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=940000)
+    parser.add_argument("--variant-seed-stride", type=int, default=0, help="Seed offset between variants. Default 0 evaluates every variant on the same seeds.")
     parser.add_argument("--episode-steps", type=int, default=500)
     parser.add_argument("--thresholds", default="0.5,0.7,0.85")
     parser.add_argument("--apply-probs", default="1.0")
@@ -108,6 +118,9 @@ def main() -> None:
     parser.add_argument("--launch-bias", type=float, default=0.0)
     parser.add_argument("--launch-temperature", type=float, default=1.0)
     parser.add_argument("--reduce", choices=["noisy_or", "max", "mean"], default="max")
+    parser.add_argument("--include-drop-gate", action="store_true")
+    parser.add_argument("--drop-gate-biases", default="2.0")
+    parser.add_argument("--drop-gate-deterministic", action="store_true")
     parser.add_argument("--no-numba", action="store_true")
     args = parser.parse_args()
 
@@ -123,6 +136,7 @@ def main() -> None:
         "launch_bias": args.launch_bias,
         "launch_temperature": args.launch_temperature,
         "reduce": args.reduce,
+        "drop_gate_deterministic": args.drop_gate_deterministic,
     }
     configs: list[dict[str, Any]] = [{**base, "variant": "regular_anchor"}]
     for apply_prob in parse_float_list(args.apply_probs):
@@ -137,6 +151,17 @@ def main() -> None:
                         "max_source_drops": max_drops,
                     }
                 )
+    if args.include_drop_gate:
+        for bias in parse_float_list(args.drop_gate_biases):
+            configs.append(
+                {
+                    **base,
+                    "variant": "regular_source_drop_gate",
+                    "no_drop_bias": bias,
+                    "apply_prob": 1.0,
+                    "max_source_drops": 1,
+                }
+            )
 
     all_rows: list[dict[str, float | str | int | None]] = []
     for variant_index, config in enumerate(configs):
@@ -150,13 +175,13 @@ def main() -> None:
                 _eval_part.options(num_cpus=args.cpus_per_worker, num_gpus=args.gpus_per_worker).remote(
                     config,
                     part_games,
-                    args.seed + variant_index * 100000 + task_idx * args.games_per_task,
+                    args.seed + variant_index * args.variant_seed_stride + task_idx * args.games_per_task,
                 )
             )
             task_idx += 1
         parts: list[dict[str, float]] = []
         while refs:
-            ready, refs = ray.wait(refs, num_returns=min(args.workers, len(refs)))
+            ready, refs = ray.wait(refs, num_returns=1)
             for ref in ready:
                 part = ray.get(ref)
                 parts.append(part)
@@ -170,6 +195,7 @@ def main() -> None:
                 "max_source_drops": config.get("max_source_drops"),
                 "max_drop_frac": config.get("max_drop_frac"),
                 "min_anchor_actions_to_filter": config.get("min_anchor_actions_to_filter"),
+                "no_drop_bias": config.get("no_drop_bias"),
             }
         )
         all_rows.append(merged)
@@ -179,7 +205,7 @@ def main() -> None:
     print("\nTop variants:")
     for row in all_rows:
         print(
-            f"{row['variant']} p={row['apply_prob']} th={row['threshold']} drops={row['max_source_drops']} "
+            f"{row['variant']} p={row['apply_prob']} th={row['threshold']} drops={row['max_source_drops']} bias={row.get('no_drop_bias')} "
             f"W/L/D={int(row['wins'])}/{int(row['losses'])}/{int(row['draws'])} "
             f"wr={float(row['winrate']):.3f} nonloss={float(row['nonloss']):.3f} "
             f"kept={float(row.get('bridge_kept_frac', 1.0)):.3f} attempted={float(row.get('bridge_attempt_frac', 0.0)):.3f}"

@@ -1,0 +1,97 @@
+run:
+  stage: a1_depth4_stride4_parallel
+
+model:
+  d_model: 192
+  nhead: 6
+  layers: 4
+  dropout: 0.10
+
+swanlab:
+  project: orbit-wars
+  experiment: alphaZeroLike-a1-depth4-stride4-parallel-20260521
+  mode: cloud
+
+ray:
+  address: auto
+  temp_dir: alphaZeroLike/.ray_temp
+  working_dir: .
+  num_rollout_workers: 64
+  num_trainer_workers: 1
+  cpus_per_rollout: 1.0
+  cpus_per_trainer: 1.0
+  gpus_per_rollout: 0.0
+  gpus_per_trainer: 1.0
+  torch_threads_per_rollout: 1
+  runtime_env_vars: {}
+
+env:
+  players: 2
+  episode_steps: 180
+  use_numba: true
+  opponent_oracle: rl_informed_regular
+  search_stride: 4
+
+mcts:
+  simulations: 2
+  c_puct: 1.5
+  temperature: 1.0
+  dirichlet_alpha: 0.3
+  dirichlet_frac: 0.0
+  rollout_depth: 4
+  max_candidates: 32
+  max_moves: 8
+  value_mode: rank
+
+candidate:
+  max_candidates: 32
+  include_noop: true
+  include_heuristics: true
+  use_rulebase: true
+  oracle: rl_informed_regular
+
+proposal:
+  enabled: true
+  num_candidates: 16
+  num_full_actions: 8
+  num_sampled_actions: 8
+  raw_sampled_actions: 64
+  send_threshold: 0.30
+  min_ship_ratio: 0.08
+  ship_ratio_choices: [0.25, 0.40, 0.60, 0.85]
+  top_targets_per_source: 2
+  max_sources: 4
+  source_temperature: 1.0
+  target_temperature: 1.0
+  ship_noise_std: 0.10
+  sample_source_prob: 0.65
+
+opponents:
+  rulebase_weight: 1.0
+  checkpoint_weight: 0.0
+  device: cpu
+  checkpoints: []
+
+training:
+  init_from_training2:
+  resume_from: alphaZeroLike/checkpoints/latest.pt
+  output_dir: alphaZeroLike/checkpoints/a1_depth4_stride4_parallel_20260521
+  max_iterations: 2
+  games_per_iteration: 64
+  games_per_rollout_task: 1
+  updates_per_iteration: 20
+  batch_size: 128
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  value_loss_weight: 1.0
+  entropy_weight: 0.01
+  proposal_loss_weight: 0.0
+  freeze_proposal: true
+  replay_capacity: 50000
+  device: cuda
+  rollout_device: cpu
+  seed: 76000001
+  save_interval: 1
+
+stages:
+  a1_depth4_stride4_parallel: {}

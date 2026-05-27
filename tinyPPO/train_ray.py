@@ -341,6 +341,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--heads", type=int, default=4)
     parser.add_argument("--layers", type=int, default=1)
     parser.add_argument("--source-target-summary", action="store_true")
+    parser.add_argument("--target-pair-head", action="store_true", help="Keep the auxiliary BC source-target pair head in the PPO model config for checkpoint compatibility.")
     parser.add_argument("--action-slots", type=int, default=ACTION_SLOTS)
     parser.add_argument("--ship-buckets", type=int, default=0, help="0 uses legacy Beta ship fractions; >0 uses required-ships multiplier buckets.")
     parser.add_argument("--max-actions-per-source-safety", type=int, default=MAX_ACTIONS_PER_SOURCE_SAFETY)
@@ -765,6 +766,7 @@ def main() -> None:
         "ship_buckets": int(args.ship_buckets),
         "action_slots": args.action_slots,
         "source_target_summary": bool(args.source_target_summary),
+        "target_pair_head": bool(args.target_pair_head),
     }
     learner_device = torch.device(args.learner_device)
     model = TinyPolicyValueNet(**model_cfg).to(learner_device)
@@ -818,7 +820,11 @@ def main() -> None:
             flush=True,
         )
     workers = [RolloutWorker.remote(model_cfg, args.episode_steps, args.opponent_mode, not args.no_numba, args.target_mask_mode) for _ in range(num_workers)]
-    eval_actor_options = {"resources": {f"node:{eval_node_ip}": 0.001}}
+    eval_actor_options = {
+        "num_gpus": args.gpus_per_eval_worker,
+        "num_cpus": args.cpus_per_eval_worker,
+        "resources": {f"node:{eval_node_ip}": 0.001},
+    }
     eval_launch_bias = args.eval_launch_bias + args.eval_aggression
     eval_ship_bias = args.eval_ship_bias + args.eval_aggression
     eval_workers = [] if args.sync_eval else [

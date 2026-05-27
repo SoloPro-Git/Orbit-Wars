@@ -153,12 +153,16 @@ class AZRolloutActor:
         rows: list[dict] = []
         lengths: list[int] = []
         values: list[float] = []
+        player_counts: dict[int, int] = {}
         t0 = time.time()
         for game in range(games):
+            seed = seed_offset + self.worker_id * 1_000_003 + game
+            players = int(self.env_cfg.get("players", 2))
+            model_pid = int(seed_offset + game) % max(players, 1)
             game_rows = generate_game(
                 self.model,
-                seed=seed_offset + self.worker_id * 1_000_000 + game,
-                players=int(self.env_cfg.get("players", 2)),
+                seed=seed,
+                players=players,
                 episode_steps=int(self.env_cfg.get("episode_steps", 500)),
                 use_numba=bool(self.env_cfg.get("use_numba", True)),
                 opponent_oracle=str(self.env_cfg.get("opponent_oracle", "rl_informed_regular")),
@@ -173,7 +177,10 @@ class AZRolloutActor:
                 opponent_rulebase_weight=float(self.opponent_cfg.get("rulebase_weight", 1.0)),
                 opponent_checkpoint_weight=float(self.opponent_cfg.get("checkpoint_weight", 0.0)),
                 opponent_device=str(self.opponent_cfg.get("device", "cpu")),
+                model_pid=model_pid,
+                search_stride=int(self.env_cfg.get("search_stride", 1)),
             )
+            player_counts[model_pid] = player_counts.get(model_pid, 0) + len(game_rows)
             rows.extend(game_rows)
             lengths.append(len(game_rows))
             if game_rows:
@@ -184,6 +191,7 @@ class AZRolloutActor:
             "samples": len(rows),
             "avg_game_rows": float(np.mean(lengths)) if lengths else 0.0,
             "avg_value": float(np.mean(values)) if values else 0.0,
+            "player_counts": player_counts,
             "sec": time.time() - t0,
         }
 
@@ -208,8 +216,18 @@ class AZTrainerActor:
             self.init_report = load_training2_stage1_backbone(self.model, init_from_training2, map_location=device)
         else:
             self.init_report = {"scratch": True}
+        frozen: list[str] = []
+        if bool(train_cfg.get("freeze_proposal", False)):
+            for name, param in self.model.named_parameters():
+                if name.startswith("proposal_"):
+                    param.requires_grad_(False)
+                    frozen.append(name)
+        if frozen:
+            self.init_report = dict(self.init_report)
+            self.init_report["frozen_parameter_count"] = len(frozen)
+            self.init_report["freeze_proposal"] = True
         self.opt = torch.optim.AdamW(
-            self.model.parameters(),
+            (param for param in self.model.parameters() if param.requires_grad),
             lr=float(train_cfg.get("learning_rate", 2e-4)),
             weight_decay=float(train_cfg.get("weight_decay", 1e-4)),
         )
@@ -226,6 +244,7 @@ class AZTrainerActor:
         batch_size: int,
         value_weight: float,
         entropy_weight: float,
+        proposal_weight: float,
     ) -> dict[str, float]:
         if not self.replay:
             return {"train/replay_size": 0.0}
@@ -240,6 +259,7 @@ class AZTrainerActor:
                 device=self.device,
                 value_weight=value_weight,
                 entropy_weight=entropy_weight,
+                proposal_weight=proposal_weight,
             )
             for key, value in metrics.items():
                 accum[f"train/{key}"] = accum.get(f"train/{key}", 0.0) + float(value)
@@ -373,6 +393,7 @@ def main() -> None:
             cfg.get("proposal", {}),
             cfg.get("opponents", {}),
             str(train_cfg.get("rollout_device", "cpu")),
+            int(ray_cfg.get("torch_threads_per_rollout", 1)),
         )
         for i in range(rollout_workers)
     ]
@@ -401,6 +422,7 @@ def main() -> None:
     batch_size = int(train_cfg.get("batch_size", 128))
     value_weight = float(train_cfg.get("value_loss_weight", 1.0))
     entropy_weight = float(train_cfg.get("entropy_weight", 0.01))
+    proposal_weight = float(train_cfg.get("proposal_loss_weight", 0.25))
     seed_base = int(train_cfg.get("seed", 70_000_000))
     save_interval = max(1, int(train_cfg.get("save_interval", 1)))
 
@@ -425,7 +447,7 @@ def main() -> None:
             ref = rollouts[actor_idx].rollout.remote(
                 model_state,
                 games,
-                seed_base + iteration * 1_000_000 + task_id * 10_000,
+                seed_base + iteration * 1_000_003 + task_id * 10_007,
             )
             in_flight[ref] = actor_idx
 
@@ -441,11 +463,19 @@ def main() -> None:
         rollout_sec = time.time() - rollout_t0
 
         rows = [row for part in parts for row in part["rows"]]
+        player_counts: dict[int, int] = {}
+        for part in parts:
+            for raw_pid, count in dict(part.get("player_counts", {}) or {}).items():
+                pid = int(raw_pid)
+                player_counts[pid] = player_counts.get(pid, 0) + int(count)
         split = [rows[i::trainer_workers] for i in range(trainer_workers)]
         ray.get([trainer.add_rows.remote(split[i], replay_capacity) for i, trainer in enumerate(trainers)])
         train_t0 = time.time()
         train_parts = ray.get(
-            [trainer.update.remote(updates, batch_size, value_weight, entropy_weight) for trainer in trainers]
+            [
+                trainer.update.remote(updates, batch_size, value_weight, entropy_weight, proposal_weight)
+                for trainer in trainers
+            ]
         )
         train_sec = time.time() - train_t0
         states = ray.get([trainer.state_dict_cpu.remote() for trainer in trainers])
@@ -465,19 +495,42 @@ def main() -> None:
             "rollout/workers": rollout_workers,
             "train/workers": trainer_workers,
         }
+        for pid, count in sorted(player_counts.items()):
+            log[f"rollout/player_{pid}_rows"] = int(count)
         for part in train_parts:
             for key, value in part.items():
                 log[key] = float(log.get(key, 0.0)) + float(value) / max(len(train_parts), 1)
 
         print(json.dumps(log, ensure_ascii=False), flush=True)
         if swan is not None:
-            swan.log(log, step=iteration)
+            swan.log(
+                {
+                    key: value
+                    for key, value in log.items()
+                    if isinstance(value, (int, float)) and not isinstance(value, bool)
+                },
+                step=iteration,
+            )
         progress.set_postfix(loss=log.get("train/loss", 0.0), rows=log["rollout/samples"])
 
         if iteration % save_interval == 0 or iteration == iterations - 1:
-            ray.get([trainers[0].save.remote(str(output_dir / "latest.pt"), iteration, cfg)])
+            torch.save(
+                {
+                    "model_state_dict": model_state,
+                    "iteration": iteration,
+                    "config": cfg,
+                },
+                output_dir / "latest.pt",
+            )
 
-    ray.get([trainers[0].save.remote(str(output_dir / "latest.pt"), iterations - 1, cfg)])
+    torch.save(
+        {
+            "model_state_dict": model_state,
+            "iteration": iterations - 1,
+            "config": cfg,
+        },
+        output_dir / "latest.pt",
+    )
 
 
 if __name__ == "__main__":

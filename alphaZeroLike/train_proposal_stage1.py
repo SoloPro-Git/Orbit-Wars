@@ -124,6 +124,7 @@ def proposal_pretrain_batch(
     send_pos_weight: float = 1.0,
     target_loss_weight: float = 1.0,
     ship_loss_weight: float = 1.0,
+    count_loss_weight: float = 0.0,
     send_threshold: float = 0.5,
 ) -> dict[str, float]:
     planets = _pad_planets(rows, device)
@@ -161,7 +162,16 @@ def proposal_pretrain_batch(
     target_loss = (target_loss_flat * active).sum() / active_denom
     ship_pred = torch.sigmoid(proposal["ship_logits"])
     ship_loss = (F.smooth_l1_loss(ship_pred, prop_ship, reduction="none") * active).sum() / active_denom
-    loss = send_loss + float(target_loss_weight) * target_loss + float(ship_loss_weight) * ship_loss
+    send_prob = torch.sigmoid(proposal["send_logits"]) * prop_valid
+    true_count_per_row = active.sum(dim=1)
+    pred_count_per_row = send_prob.sum(dim=1)
+    count_loss = F.smooth_l1_loss(pred_count_per_row, true_count_per_row)
+    loss = (
+        send_loss
+        + float(target_loss_weight) * target_loss
+        + float(ship_loss_weight) * ship_loss
+        + float(count_loss_weight) * count_loss
+    )
 
     opt.zero_grad()
     loss.backward()
@@ -169,7 +179,7 @@ def proposal_pretrain_batch(
     opt.step()
 
     with torch.no_grad():
-        pred_send = ((proposal["send_logits"].sigmoid() >= float(send_threshold)).float() * prop_valid).clamp(max=1.0)
+        pred_send = ((send_prob >= float(send_threshold)).float() * prop_valid).clamp(max=1.0)
         send_acc = ((pred_send == prop_send).float() * prop_valid).sum() / valid_denom
         true_positive = (pred_send * prop_send * prop_valid).sum()
         pred_positive = (pred_send * prop_valid).sum()
@@ -179,6 +189,9 @@ def proposal_pretrain_batch(
         source_f1 = 2.0 * source_precision * source_recall / (source_precision + source_recall).clamp(min=1e-6)
         target_pred = proposal["target_logits"].argmax(dim=-1)
         target_acc = ((target_pred == prop_target).float() * active).sum() / active_denom
+        target_topk = torch.topk(proposal["target_logits"], k=min(5, n_entities), dim=-1).indices
+        target_top3 = ((target_topk[:, :, : min(3, target_topk.size(-1))] == prop_target.unsqueeze(-1)).any(dim=-1).float() * active).sum() / active_denom
+        target_top5 = ((target_topk == prop_target.unsqueeze(-1)).any(dim=-1).float() * active).sum() / active_denom
         ship_mae = ((ship_pred - prop_ship).abs() * active).sum() / active_denom
         pred_actions_per_row = pred_send.sum(dim=1).mean()
         true_actions_per_row = active.sum(dim=1).mean()
@@ -187,11 +200,14 @@ def proposal_pretrain_batch(
         "send_loss": float(send_loss.item()),
         "target_loss": float(target_loss.item()),
         "ship_loss": float(ship_loss.item()),
+        "count_loss": float(count_loss.item()),
         "send_acc": float(send_acc.item()),
         "source_precision": float(source_precision.item()),
         "source_recall": float(source_recall.item()),
         "source_f1": float(source_f1.item()),
         "target_acc": float(target_acc.item()),
+        "target_top3": float(target_top3.item()),
+        "target_top5": float(target_top5.item()),
         "ship_mae": float(ship_mae.item()),
         "pred_actions_per_row": float(pred_actions_per_row.item()),
         "true_actions_per_row": float(true_actions_per_row.item()),
@@ -249,6 +265,7 @@ def main() -> None:
     parser.add_argument("--send-pos-weight", type=float, default=1.0)
     parser.add_argument("--target-loss-weight", type=float, default=1.0)
     parser.add_argument("--ship-loss-weight", type=float, default=1.0)
+    parser.add_argument("--count-loss-weight", type=float, default=0.0)
     parser.add_argument("--send-threshold", type=float, default=0.5)
     parser.add_argument("--train-backbone", action="store_true")
     parser.add_argument("--shuffle-files", action="store_true", default=True)
@@ -301,6 +318,7 @@ def main() -> None:
             send_pos_weight=args.send_pos_weight,
             target_loss_weight=args.target_loss_weight,
             ship_loss_weight=args.ship_loss_weight,
+            count_loss_weight=args.count_loss_weight,
             send_threshold=args.send_threshold,
         )
         for key, value in metrics.items():

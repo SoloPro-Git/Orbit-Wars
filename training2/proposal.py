@@ -16,6 +16,7 @@ class ProposalConfig:
     num_candidates: int = 8
     send_threshold: float = 0.45
     max_angle_offset: float = 0.35
+    use_angle_offsets: bool = False
     min_ship_ratio: float = 0.08
     ship_ratio_choices: tuple[float, ...] = (0.35, 0.6, 0.9)
     top_targets_per_source: int = 2
@@ -155,7 +156,10 @@ def proposals_from_model(
     send_prob = torch.sigmoid(pred["send_logits"])[0].detach().cpu()
     target_logits = pred["target_logits"][0].detach().cpu()
     ship_ratio = torch.sigmoid(pred["ship_logits"])[0].detach().cpu()
-    angle_offset = pred["angle_offsets"][0].detach().cpu()
+    if cfg.use_angle_offsets:
+        angle_offset = pred["angle_offsets"][0].detach().cpu()
+    else:
+        angle_offset = torch.zeros_like(send_prob)
 
     source_indices = [
         i

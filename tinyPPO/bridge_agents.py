@@ -126,7 +126,7 @@ class RegularSourceBridgeAgent:
         return kept
 
 
-def aggregate_bridge_stats(agents: list[RegularSourceBridgeAgent]) -> dict[str, float]:
+def aggregate_bridge_stats(agents: list[Any]) -> dict[str, float]:
     totals: dict[str, float] = {}
     for agent in agents:
         for key, value in agent.stats.items():

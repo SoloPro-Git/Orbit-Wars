@@ -72,6 +72,8 @@ def generate_game(
     opponent_rulebase_weight: float = 1.0,
     opponent_checkpoint_weight: float = 0.0,
     opponent_device: str = "cpu",
+    model_pid: int | None = None,
+    search_stride: int = 1,
 ) -> list[dict]:
     env = make_fast_orbit_wars({"episodeSteps": episode_steps, "seed": seed}, keep_history=False, use_numba=use_numba)
     env.reset(players)
@@ -93,30 +95,35 @@ def generate_game(
     )
     opponents = {pid: opponent_pool.make_agent(rng) for pid in range(players)}
     pending: list[dict] = []
-    model_pid = seed % players
+    model_pid = int(seed % players if model_pid is None else model_pid) % players
+    search_stride = max(1, int(search_stride))
+    model_turn = 0
 
     for _ in range(episode_steps):
         actions = []
         for pid in range(players):
             obs = _raw_obs(env, pid)
             if pid == model_pid:
-                result = search.search(env, pid, add_noise=True, rng=rng)
+                do_search = model_turn % search_stride == 0
+                model_turn += 1
+                result = search.search(env, pid, add_noise=True, rng=rng) if do_search else search.policy_action(env, pid, rng=rng)
                 actions.append(result.actions[result.selected_index] if result.actions else [])
-                pending.append(
-                    {
-                        "obs": obs,
-                        "player": pid,
-                        "candidates": result.actions,
-                        "policy_target": result.policy_target.tolist(),
-                        "root_value": result.value,
-                        "max_moves": (mcts_cfg or MCTSConfig()).max_moves,
-                        **proposal_labels(
-                            obs,
-                            pid,
-                            result.actions[result.selected_index] if result.actions else [],
-                        ),
-                    }
-                )
+                if do_search:
+                    pending.append(
+                        {
+                            "obs": obs,
+                            "player": pid,
+                            "candidates": result.actions,
+                            "policy_target": result.policy_target.tolist(),
+                            "root_value": result.value,
+                            "max_moves": (mcts_cfg or MCTSConfig()).max_moves,
+                            **proposal_labels(
+                                obs,
+                                pid,
+                                result.actions[result.selected_index] if result.actions else [],
+                            ),
+                        }
+                    )
             else:
                 actions.append(opponents[pid](obs) or [])
         env.step(actions)
@@ -151,6 +158,7 @@ def main() -> None:
     parser.add_argument("--rollout-depth", type=int, default=4)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--search-stride", type=int, default=1)
     parser.add_argument("--no-rulebase-candidates", action="store_true")
     parser.add_argument("--no-heuristics", action="store_true")
     parser.add_argument("--proposal-num-candidates", type=int, default=16)
@@ -199,6 +207,7 @@ def main() -> None:
                 opponent_rulebase_weight=args.opponent_rulebase_weight,
                 opponent_checkpoint_weight=args.opponent_checkpoint_weight,
                 opponent_device=args.opponent_device,
+                search_stride=args.search_stride,
             )
             for row in rows:
                 f.write(json.dumps(row) + "\n")

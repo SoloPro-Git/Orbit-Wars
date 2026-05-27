@@ -11,7 +11,7 @@ CENTER = 50.0
 MAX_STEPS = 500.0
 MAX_PLANETS = 64
 PLANET_FEAT_DIM = 18
-PAIR_FEAT_DIM = 16
+PAIR_FEAT_DIM = 24
 GLOBAL_FEAT_DIM = 8
 
 
@@ -48,6 +48,27 @@ def fleet_speed(ships: float, max_speed: float = 6.0) -> float:
     return 1.0 + (max_speed - 1.0) * (ratio**1.5)
 
 
+def _required_ships_hint(
+    target: list,
+    player: int,
+    arrival: float,
+    incoming_friend: float,
+    incoming_enemy: float,
+) -> float:
+    base = max(1.0, float(target[5]) + 1.0 + incoming_enemy - incoming_friend)
+    if int(target[1]) not in (-1, player):
+        base += min(80.0, arrival + 2.0) * float(target[6])
+    return max(1.0, base)
+
+
+def _public_target_score(source: list, target: list, required: float, arrival: float) -> float:
+    dist = math.hypot(float(target[2]) - float(source[2]), float(target[3]) - float(source[3]))
+    enemy_produced = arrival * float(target[6]) if int(target[1]) != -1 else 0.0
+    enemy_bonus = float(target[6]) if int(target[1]) != -1 else 0.0
+    total_ships = required + enemy_produced
+    return 100.0 - dist + 15.0 * float(target[6]) + 10.0 * enemy_bonus - 0.7 * total_ships - 2.0 * arrival
+
+
 def _segment_distance_sq(px: float, py: float, ax: float, ay: float, bx: float, by: float) -> float:
     abx = bx - ax
     aby = by - ay
@@ -69,6 +90,7 @@ def encode_obs(obs: dict[str, Any], player: int, players: int = 2) -> EncodedObs
     raw_fleets = list(obs.get("fleets", []))
     comet_ids = set(obs.get("comet_planet_ids", []) or [])
     step = float(obs.get("step", 0))
+    remaining = max(0.0, MAX_STEPS - step)
 
     planets = np.zeros((MAX_PLANETS, PLANET_FEAT_DIM), dtype=np.float32)
     pair_features = np.zeros((MAX_PLANETS, MAX_PLANETS, PAIR_FEAT_DIM), dtype=np.float32)
@@ -137,6 +159,16 @@ def encode_obs(obs: dict[str, Any], player: int, players: int = 2) -> EncodedObs
 
     own_planets = [p for p in raw_planets if int(p[1]) == player]
     enemy_planets = [p for p in raw_planets if int(p[1]) not in (-1, player)]
+    own_prod = sum(float(p[6]) for p in own_planets)
+    enemy_prod = sum(float(p[6]) for p in enemy_planets)
+    comet_life_by_id: dict[int, float] = {}
+    for group in obs.get("comets", []) or []:
+        planet_ids = group.get("planet_ids", []) if isinstance(group, dict) else []
+        paths = group.get("paths", []) if isinstance(group, dict) else []
+        path_index = int(group.get("path_index", 0)) if isinstance(group, dict) else 0
+        for idx, planet_id in enumerate(planet_ids):
+            if idx < len(paths):
+                comet_life_by_id[int(planet_id)] = float(max(0, len(paths[idx]) - path_index))
     global_features = np.array(
         [
             step / MAX_STEPS,
@@ -161,14 +193,29 @@ def encode_obs(obs: dict[str, Any], player: int, players: int = 2) -> EncodedObs
             dist = math.hypot(dx, dy)
             ships_hint = max(1.0, min(src_ships, max(1.0, float(tgt[5]) + 1.0)))
             speed = fleet_speed(ships_hint)
+            arrival = dist / max(speed, 1e-6)
             sun_hit = _segment_distance_sq(CENTER, CENTER, sx, sy, tx, ty) <= 10.0 * 10.0
             target_owner = int(tgt[1])
+            friend_in = incoming_friend.get(int(tgt[0]), 0.0)
+            enemy_in = incoming_enemy.get(int(tgt[0]), 0.0)
+            required = _required_ships_hint(tgt, player, arrival, friend_in, enemy_in)
+            public_score = _public_target_score(src, tgt, required, arrival)
+            comet_life = comet_life_by_id.get(int(tgt[0]))
+            useful_turns = max(0.0, remaining - arrival)
+            if comet_life is not None:
+                useful_turns = min(useful_turns, max(0.0, comet_life - arrival))
+            econ_value = float(tgt[6]) * useful_turns
+            owner_bonus = 1.8 if target_owner not in (-1, player) else 1.25 if step < 40 else 1.0
+            behind_bonus = 1.15 if own_prod < enemy_prod else 1.0
+            contested_penalty = max(0.0, enemy_in - friend_in) * 1.2
+            cost = required + arrival * 0.6 + max(0.0, enemy_in - friend_in) + contested_penalty + 1.0
+            strategic_score = public_score + 1.5 * econ_value * owner_bonus * behind_bonus / max(cost, 1.0) - 0.2 * contested_penalty
             pair_features[i, j, 0] = dx / BOARD_SIZE
             pair_features[i, j, 1] = dy / BOARD_SIZE
             pair_features[i, j, 2] = dist / (BOARD_SIZE * 1.4143)
             pair_features[i, j, 3] = math.cos(math.atan2(dy, dx)) if dist > 1e-6 else 0.0
             pair_features[i, j, 4] = math.sin(math.atan2(dy, dx)) if dist > 1e-6 else 0.0
-            pair_features[i, j, 5] = (dist / max(speed, 1e-6)) / 100.0
+            pair_features[i, j, 5] = arrival / 100.0
             pair_features[i, j, 6] = float(src_ships > float(tgt[5]) + 1.0)
             pair_features[i, j, 7] = (src_ships - float(tgt[5])) / 500.0
             pair_features[i, j, 8] = float(tgt[6]) / 5.0
@@ -176,8 +223,16 @@ def encode_obs(obs: dict[str, Any], player: int, players: int = 2) -> EncodedObs
             pair_features[i, j, 10] = float(target_owner >= 0 and target_owner != player)
             pair_features[i, j, 11] = float(target_owner == player)
             pair_features[i, j, 12] = float(sun_hit)
-            pair_features[i, j, 13] = incoming_friend.get(int(tgt[0]), 0.0) / 500.0
-            pair_features[i, j, 14] = incoming_enemy.get(int(tgt[0]), 0.0) / 500.0
+            pair_features[i, j, 13] = friend_in / 500.0
+            pair_features[i, j, 14] = enemy_in / 500.0
             pair_features[i, j, 15] = float(i == j)
+            pair_features[i, j, 16] = min(3.0, required / max(1.0, src_ships)) / 3.0
+            pair_features[i, j, 17] = math.log1p(required) / math.log(1000.0)
+            pair_features[i, j, 18] = max(-2.0, min(2.0, public_score / 100.0))
+            pair_features[i, j, 19] = min(3.0, econ_value / 500.0)
+            pair_features[i, j, 20] = float(arrival <= max(5.0, remaining - 5.0))
+            pair_features[i, j, 21] = 0.0 if comet_life is None else min(2.0, comet_life / 100.0)
+            pair_features[i, j, 22] = float(own_prod < enemy_prod)
+            pair_features[i, j, 23] = max(-2.0, min(2.0, strategic_score / 100.0))
 
     return EncodedObs(planets, pair_features, global_features, planet_mask, own_mask, source_xy, planet_ids)

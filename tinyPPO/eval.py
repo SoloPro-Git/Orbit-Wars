@@ -80,6 +80,7 @@ def main() -> None:
     parser.add_argument("--target-top-k", type=int, default=6, help="Candidate targets per source for required-bucket policies.")
     parser.add_argument("--include-friendly-targets", action="store_true", help="Allow candidate targets owned by the acting player.")
     parser.add_argument("--target-mask-mode", choices=["candidate", "safe", "all_planets"], default="candidate")
+    parser.add_argument("--target-pair-weight", type=float, default=1.0)
     parser.add_argument("--stochastic", action="store_true", help="Sample actions instead of deterministic argmax/mean.")
     parser.add_argument("--no-numba", action="store_true")
     args = parser.parse_args()
@@ -103,6 +104,7 @@ def main() -> None:
             target_top_k=args.target_top_k,
             include_friendly_targets=args.include_friendly_targets,
             target_mask_mode=args.target_mask_mode,
+            target_pair_weight=args.target_pair_weight,
         ),
         opponent_factory,
         games=args.games,

@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import random
+import itertools
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -257,7 +258,7 @@ def collect_rows(args: argparse.Namespace) -> tuple[list[BCRow], dict[str, float
     }
 
 
-def stack_rows(rows: list[BCRow]) -> TensorDataset:
+def stack_rows(rows: list[BCRow], sample_weights: list[float] | None = None) -> TensorDataset:
     arrays = {
         "planets": np.stack([r.planets for r in rows]),
         "pair_features": np.stack([r.pair_features for r in rows]),
@@ -286,6 +287,10 @@ def stack_rows(rows: list[BCRow]) -> TensorDataset:
         arr = arrays[key]
         dtype = torch.float32 if arr.dtype.kind == "f" else torch.bool if arr.dtype == np.bool_ else torch.long
         tensors.append(torch.tensor(arr, dtype=dtype))
+    if sample_weights is not None:
+        if len(sample_weights) != len(rows):
+            raise ValueError(f"sample_weights length {len(sample_weights)} does not match rows length {len(rows)}")
+        tensors.append(torch.tensor(sample_weights, dtype=torch.float32))
     return TensorDataset(*tensors)
 
 
@@ -302,12 +307,123 @@ def unpack(batch: tuple[torch.Tensor, ...], device: torch.device) -> dict[str, t
         "ship_actions",
         "launch_mask",
     )
-    return {k: v.to(device, non_blocking=True) for k, v in zip(keys, batch, strict=True)}
+    if len(batch) == len(keys):
+        return {k: v.to(device, non_blocking=True) for k, v in zip(keys, batch, strict=True)}
+    if len(batch) == len(keys) + 1:
+        out = {k: v.to(device, non_blocking=True) for k, v in zip(keys, batch[: len(keys)], strict=True)}
+        out["sample_weight"] = batch[-1].to(device, non_blocking=True).float()
+        return out
+    raise ValueError(f"unexpected BC batch width {len(batch)}")
 
 
 def _weighted_cross_entropy(logits: torch.Tensor, targets: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
     losses = F.cross_entropy(logits, targets, reduction="none")
     return (losses * weights).sum() / weights.sum().clamp_min(1.0)
+
+
+def _slot_set_bc_loss(
+    out: dict[str, torch.Tensor],
+    batch: dict[str, torch.Tensor],
+    launch_pos_weight: float,
+    target_loss_weight: float,
+    ship_loss_weight: float,
+    target_loss_mask: str,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Permutation-invariant loss for the unordered action slots of each source."""
+    source_logits = out["source_logits"]
+    bsz, sources, slots, _classes = source_logits.shape
+    own_slots = batch["own_mask"][:, :, None].expand_as(batch["launch_actions"])
+    if target_loss_mask == "all_planets":
+        target_mask = batch["planet_mask"][:, None, :].expand(-1, batch["target_safety_mask"].shape[1], -1).clone()
+        eye = torch.eye(target_mask.shape[1], dtype=torch.bool, device=target_mask.device)[None, :, :]
+        target_mask = target_mask & ~eye
+    elif target_loss_mask == "dataset":
+        target_mask = batch["target_safety_mask"]
+    else:
+        raise ValueError(f"unsupported target_loss_mask: {target_loss_mask!r}")
+    target_logits = out["target_logits"].masked_fill(~target_mask[:, :, None, :], -1e9)
+    perms = torch.tensor(list(itertools.permutations(range(slots))), dtype=torch.long, device=source_logits.device)
+    per_perm_total: list[torch.Tensor] = []
+    per_perm_launch: list[torch.Tensor] = []
+    per_perm_target: list[torch.Tensor] = []
+    per_perm_ship: list[torch.Tensor] = []
+    for perm in perms:
+        launch_labels = batch["launch_actions"][:, :, perm]
+        active = (launch_labels == 1) & own_slots
+        launch_part = F.cross_entropy(
+            source_logits.reshape(-1, 2),
+            launch_labels.reshape(-1),
+            reduction="none",
+            weight=torch.tensor([1.0, launch_pos_weight], dtype=torch.float32, device=source_logits.device),
+        ).reshape(bsz, sources, slots)
+        target_labels = batch["target_actions"][:, :, perm]
+        target_part = F.cross_entropy(
+            target_logits.reshape(-1, target_logits.shape[-1]),
+            target_labels.reshape(-1),
+            reduction="none",
+        ).reshape(bsz, sources, slots).masked_fill(~active, 0.0)
+        ship_part = torch.zeros_like(target_part)
+        if "ship_logits" in out:
+            ship_logits_all = out["ship_logits"]
+            b_idx = torch.arange(bsz, device=source_logits.device)[:, None, None].expand(bsz, sources, slots)
+            s_idx = torch.arange(sources, device=source_logits.device)[None, :, None].expand(bsz, sources, slots)
+            slot_idx = torch.arange(slots, device=source_logits.device)[None, None, :].expand(bsz, sources, slots)
+            target_idx = target_labels.clamp(0, target_logits.shape[-1] - 1)
+            ship_logits = ship_logits_all[b_idx, s_idx, slot_idx, target_idx]
+            ship_labels = batch["ship_actions"][:, :, perm]
+            ship_part = F.cross_entropy(
+                ship_logits.reshape(-1, ship_logits.shape[-1]),
+                ship_labels.reshape(-1),
+                reduction="none",
+            ).reshape(bsz, sources, slots).masked_fill(~active, 0.0)
+        launch_sum = launch_part.masked_fill(~own_slots, 0.0).sum(dim=-1)
+        target_sum = target_part.sum(dim=-1)
+        ship_sum = ship_part.sum(dim=-1)
+        per_perm_launch.append(launch_sum)
+        per_perm_target.append(target_sum)
+        per_perm_ship.append(ship_sum)
+        per_perm_total.append(launch_sum + target_loss_weight * target_sum + ship_loss_weight * ship_sum)
+
+    totals = torch.stack(per_perm_total, dim=0)
+    best_idx = totals.argmin(dim=0)
+    selector = F.one_hot(best_idx, num_classes=perms.shape[0]).permute(2, 0, 1).float()
+    own_sources = batch["own_mask"]
+    launch_sum = (torch.stack(per_perm_launch, dim=0) * selector).sum(dim=0).masked_select(own_sources).sum()
+    target_sum = (torch.stack(per_perm_target, dim=0) * selector).sum(dim=0).masked_select(own_sources).sum()
+    ship_sum = (torch.stack(per_perm_ship, dim=0) * selector).sum(dim=0).masked_select(own_sources).sum()
+    own_slot_count = own_slots.float().sum().clamp_min(1.0)
+    active_count = (batch["launch_actions"].bool() & own_slots).float().sum().clamp_min(1.0)
+    launch_loss = launch_sum / own_slot_count
+    target_loss = target_sum / active_count
+    ship_loss = ship_sum / active_count
+    loss = launch_loss + target_loss_weight * target_loss + ship_loss_weight * ship_loss
+    return loss, {
+        "launch_loss": launch_loss,
+        "target_loss": target_loss,
+        "ship_loss": ship_loss,
+        "target_margin_loss": torch.tensor(0.0, device=source_logits.device),
+        "action_weight_mean": torch.tensor(1.0, device=source_logits.device),
+    }
+
+
+def _valid_pair_mask(batch: dict[str, torch.Tensor]) -> torch.Tensor:
+    pair_valid = batch["own_mask"][:, :, None] & batch["planet_mask"][:, None, :]
+    eye = torch.eye(pair_valid.shape[1], dtype=torch.bool, device=pair_valid.device)[None, :, :]
+    return pair_valid & ~eye
+
+
+def _target_owner_labels(batch: dict[str, torch.Tensor], target_indices: torch.Tensor, b_idx: torch.Tensor) -> torch.Tensor:
+    owner_feats = batch["planets"][b_idx, target_indices, :3]
+    return owner_feats.argmax(dim=-1)
+
+
+def _owner_group_logits(pair_logits: torch.Tensor, batch: dict[str, torch.Tensor], pair_valid: torch.Tensor) -> torch.Tensor:
+    target_owner = batch["planets"][:, :, :3].argmax(dim=-1)
+    groups: list[torch.Tensor] = []
+    for owner_idx in range(3):
+        owner_mask = target_owner[:, None, :].eq(owner_idx) & pair_valid
+        groups.append(pair_logits.masked_fill(~owner_mask, -1e9).logsumexp(dim=-1))
+    return torch.stack(groups, dim=-1)
 
 
 def bc_loss(
@@ -318,23 +434,74 @@ def bc_loss(
     ship_loss_weight: float = 0.5,
     critical_action_weight: float = 0.0,
     target_loss_mask: str = "dataset",
+    target_margin_loss_weight: float = 0.0,
+    target_margin: float = 0.5,
+    target_margin_top_k: int = 8,
+    slot_set_loss: bool = False,
+    target_binary_loss_weight: float = 0.0,
+    target_binary_pos_weight: float = 12.0,
+    target_pair_softmax_loss_weight: float = 0.0,
+    target_pair_margin_loss_weight: float = 0.0,
+    target_pair_owner_loss_weight: float = 0.0,
+    launch_count_loss_weight: float = 0.0,
+    sample_weight_launch_scale: float = 1.0,
+    sample_weight_target_scale: float = 1.0,
+    sample_weight_ship_scale: float = 1.0,
+    sample_weight_pair_scale: float = 1.0,
+    sample_weight_count_scale: float = 1.0,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     out = model(batch["planets"], batch["pair_features"], batch["global_features"], batch["planet_mask"], batch["own_mask"])
     own_slots = batch["own_mask"][:, :, None].expand_as(batch["launch_actions"])
+    row_weights = batch.get("sample_weight")
+    if row_weights is None:
+        row_weights = torch.ones(batch["launch_actions"].shape[0], dtype=torch.float32, device=batch["launch_actions"].device)
+    row_weights = row_weights.float().clamp_min(0.0)
+    def _component_row_weights(scale: float) -> torch.Tensor:
+        return (1.0 + (row_weights - 1.0) * float(scale)).clamp_min(0.0)
+
+    launch_row_weights = _component_row_weights(sample_weight_launch_scale)
+    target_row_weights = _component_row_weights(sample_weight_target_scale)
+    ship_row_weights = _component_row_weights(sample_weight_ship_scale)
+    pair_row_weights = _component_row_weights(sample_weight_pair_scale)
+    count_row_weights = _component_row_weights(sample_weight_count_scale)
+    row_slot_weights = launch_row_weights[:, None, None].expand_as(batch["launch_actions"])
+    if slot_set_loss and out["source_logits"].shape[2] > 1:
+        set_loss, set_parts = _slot_set_bc_loss(out, batch, launch_pos_weight, target_loss_weight, ship_loss_weight, target_loss_mask)
+    else:
+        set_loss = None
+        set_parts = {}
     launch_logits = out["source_logits"][own_slots]
     launch_targets = batch["launch_actions"][own_slots]
-    launch_loss = F.cross_entropy(
-        launch_logits,
-        launch_targets,
+    launch_prob = F.softmax(out["source_logits"], dim=-1)[..., 1].masked_fill(~own_slots, 0.0)
+    true_count_soft_target = batch["launch_actions"].masked_fill(~own_slots, 0).sum(dim=(1, 2)).float()
+    pred_count_soft = launch_prob.sum(dim=(1, 2))
+    launch_count_parts = F.smooth_l1_loss(pred_count_soft, true_count_soft_target, reduction="none")
+    launch_count_loss = (launch_count_parts * count_row_weights).sum() / count_row_weights.sum().clamp_min(1.0)
+    launch_parts = F.cross_entropy(
+        out["source_logits"].reshape(-1, 2),
+        batch["launch_actions"].reshape(-1),
+        reduction="none",
         weight=torch.tensor([1.0, launch_pos_weight], dtype=torch.float32, device=launch_logits.device),
+    ).reshape_as(batch["launch_actions"])
+    launch_weights = row_slot_weights.masked_fill(~own_slots, 0.0)
+    launch_loss = set_parts.get(
+        "launch_loss",
+        (launch_parts * launch_weights).sum() / launch_weights.sum().clamp_min(1.0),
     )
 
     active = batch["launch_mask"] & own_slots
     target_loss = torch.tensor(0.0, device=launch_logits.device)
     ship_loss = torch.tensor(0.0, device=launch_logits.device)
     target_acc = torch.tensor(0.0, device=launch_logits.device)
+    target_margin_loss = torch.tensor(0.0, device=launch_logits.device)
     ship_acc = torch.tensor(0.0, device=launch_logits.device)
     action_weight_mean = torch.tensor(0.0, device=launch_logits.device)
+    target_binary_loss = torch.tensor(0.0, device=launch_logits.device)
+    target_pair_softmax_loss = torch.tensor(0.0, device=launch_logits.device)
+    target_pair_margin_loss = torch.tensor(0.0, device=launch_logits.device)
+    target_pair_owner_loss = torch.tensor(0.0, device=launch_logits.device)
+    target_pair_owner_acc = torch.tensor(0.0, device=launch_logits.device)
+    target_pair_acc = torch.tensor(0.0, device=launch_logits.device)
     if active.any():
         if target_loss_mask == "all_planets":
             target_mask = batch["planet_mask"][:, None, :].expand(-1, batch["target_safety_mask"].shape[1], -1).clone()
@@ -345,7 +512,9 @@ def bc_loss(
         else:
             raise ValueError(f"unsupported target_loss_mask: {target_loss_mask!r}")
         target_logits = out["target_logits"].masked_fill(~target_mask[:, :, None, :], -1e9)
-        active_weights = torch.ones_like(batch["target_actions"][active], dtype=torch.float32, device=launch_logits.device)
+        target_active_weights = target_row_weights[:, None, None].expand_as(batch["target_actions"])[active].float()
+        ship_active_weights = ship_row_weights[:, None, None].expand_as(batch["target_actions"])[active].float()
+        pair_active_weights = pair_row_weights[:, None, None].expand_as(batch["target_actions"])[active].float()
         if critical_action_weight > 0.0:
             b, s, slot = torch.where(active)
             del slot
@@ -357,20 +526,100 @@ def bc_loss(
             target_neutral = batch["pair_features"][b, s, t, 9].clamp(0.0, 1.0)
             incoming_enemy = batch["planets"][b, t, 14].clamp(0.0, 2.0)
             importance = 0.35 * source_ship + 0.25 * source_prod + 0.35 * target_prod + 0.35 * target_enemy + 0.15 * target_neutral + 0.30 * incoming_enemy
-            active_weights = active_weights + critical_action_weight * importance.clamp(0.0, 2.0)
-        action_weight_mean = active_weights.mean()
-        target_loss = _weighted_cross_entropy(target_logits[active], batch["target_actions"][active], active_weights)
+            target_active_weights = target_active_weights + critical_action_weight * importance.clamp(0.0, 2.0)
+        action_weight_mean = target_active_weights.mean()
+        target_loss = _weighted_cross_entropy(target_logits[active], batch["target_actions"][active], target_active_weights)
         target_pred = target_logits[active].argmax(dim=-1)
         target_acc = (target_pred == batch["target_actions"][active]).float().mean()
+        if target_margin_loss_weight > 0.0:
+            active_logits = target_logits[active]
+            active_targets = batch["target_actions"][active]
+            positive_logits = active_logits.gather(1, active_targets[:, None]).squeeze(1)
+            negative_logits = active_logits.clone()
+            negative_logits.scatter_(1, active_targets[:, None], -1e9)
+            top_k = min(max(1, int(target_margin_top_k)), max(1, negative_logits.shape[1] - 1))
+            hard_negatives = negative_logits.topk(top_k, dim=1).values
+            margin_terms = torch.relu(float(target_margin) + hard_negatives - positive_logits[:, None])
+            target_margin_loss = (margin_terms.mean(dim=1) * target_active_weights).sum() / target_active_weights.sum().clamp_min(1.0)
         if "ship_logits" in out:
             ship_logits_all = out["ship_logits"]
             b, s, slot = torch.where(active)
             t = batch["target_actions"][active]
             ship_logits = ship_logits_all[b, s, slot, t]
-            ship_loss = _weighted_cross_entropy(ship_logits, batch["ship_actions"][active], active_weights)
+            ship_loss = _weighted_cross_entropy(ship_logits, batch["ship_actions"][active], ship_active_weights)
             ship_acc = (ship_logits.argmax(dim=-1) == batch["ship_actions"][active]).float().mean()
 
-    loss = launch_loss + target_loss_weight * target_loss + ship_loss_weight * ship_loss
+    if target_binary_loss_weight > 0.0:
+        pair_valid = _valid_pair_mask(batch)
+        pair_labels = torch.zeros_like(pair_valid, dtype=torch.float32)
+        b, s, _slot = torch.where(active)
+        if b.numel() > 0:
+            t = batch["target_actions"][active].clamp(0, pair_valid.shape[-1] - 1)
+            pair_labels[b, s, t] = 1.0
+        pair_logits = out.get("target_pair_logits")
+        if pair_logits is None:
+            pair_logits = out["target_logits"].max(dim=2).values
+        binary_losses = F.binary_cross_entropy_with_logits(
+            pair_logits,
+            pair_labels,
+            reduction="none",
+            pos_weight=torch.tensor(float(target_binary_pos_weight), dtype=torch.float32, device=launch_logits.device),
+        )
+        pair_weights = pair_row_weights[:, None, None].expand_as(pair_valid).float()
+        target_binary_loss = (binary_losses * pair_weights).masked_select(pair_valid).sum() / pair_weights.masked_select(pair_valid).sum().clamp_min(1.0)
+
+    pair_logits_for_metric = out.get("target_pair_logits")
+    if pair_logits_for_metric is None:
+        pair_logits_for_metric = out["target_logits"].max(dim=2).values
+    if active.any():
+        pair_valid = _valid_pair_mask(batch)
+        masked_pair_logits = pair_logits_for_metric.masked_fill(~pair_valid, -1e9)
+        b, s, _slot = torch.where(active)
+        pair_targets = batch["target_actions"][active].clamp(0, masked_pair_logits.shape[-1] - 1)
+        if target_pair_softmax_loss_weight > 0.0:
+            target_pair_softmax_loss = _weighted_cross_entropy(masked_pair_logits[b, s], pair_targets, pair_active_weights)
+        if target_pair_margin_loss_weight > 0.0:
+            active_pair_logits = masked_pair_logits[b, s]
+            positive_logits = active_pair_logits.gather(1, pair_targets[:, None]).squeeze(1)
+            negative_logits = active_pair_logits.clone()
+            negative_logits.scatter_(1, pair_targets[:, None], -1e9)
+            top_k = min(max(1, int(target_margin_top_k)), max(1, negative_logits.shape[1] - 1))
+            hard_negatives = negative_logits.topk(top_k, dim=1).values
+            margin_terms = torch.relu(float(target_margin) + hard_negatives - positive_logits[:, None])
+            target_pair_margin_loss = (margin_terms.mean(dim=1) * pair_active_weights).sum() / pair_active_weights.sum().clamp_min(1.0)
+        if target_pair_owner_loss_weight > 0.0:
+            owner_logits = _owner_group_logits(pair_logits_for_metric, batch, pair_valid)
+            owner_targets = _target_owner_labels(batch, pair_targets, b)
+            target_pair_owner_loss = _weighted_cross_entropy(owner_logits[b, s], owner_targets, pair_active_weights)
+            target_pair_owner_acc = (owner_logits[b, s].argmax(dim=-1) == owner_targets).float().mean()
+        pair_pred = masked_pair_logits[b, s].argmax(dim=-1)
+        target_pair_acc = (pair_pred == pair_targets).float().mean()
+
+    if set_loss is not None:
+        loss = (
+            set_loss
+            + target_binary_loss_weight * target_binary_loss
+            + target_pair_softmax_loss_weight * target_pair_softmax_loss
+            + target_pair_margin_loss_weight * target_pair_margin_loss
+            + target_pair_owner_loss_weight * target_pair_owner_loss
+            + launch_count_loss_weight * launch_count_loss
+        )
+        target_loss = set_parts["target_loss"]
+        ship_loss = set_parts["ship_loss"]
+        target_margin_loss = set_parts["target_margin_loss"]
+        action_weight_mean = set_parts["action_weight_mean"]
+    else:
+        loss = (
+            launch_loss
+            + target_loss_weight * target_loss
+            + ship_loss_weight * ship_loss
+            + target_margin_loss_weight * target_margin_loss
+            + target_binary_loss_weight * target_binary_loss
+            + target_pair_softmax_loss_weight * target_pair_softmax_loss
+            + target_pair_margin_loss_weight * target_pair_margin_loss
+            + target_pair_owner_loss_weight * target_pair_owner_loss
+            + launch_count_loss_weight * launch_count_loss
+        )
     launch_pred = out["source_logits"][own_slots].argmax(dim=-1)
     launch_acc = (launch_pred == launch_targets).float().mean()
     pos = launch_targets == 1
@@ -386,10 +635,17 @@ def bc_loss(
     launch_pred_rate = pred_pos.float().mean()
     launch_true_rate = pos.float().mean()
     action_count_mae = (pred_count - true_count).abs().mean()
+    soft_action_count_mae = (pred_count_soft - true_count_soft_target).abs().mean()
     return loss, {
         "loss": float(loss.detach().cpu()),
         "launch_loss": float(launch_loss.detach().cpu()),
+        "launch_count_loss": float(launch_count_loss.detach().cpu()),
         "target_loss": float(target_loss.detach().cpu()),
+        "target_margin_loss": float(target_margin_loss.detach().cpu()),
+        "target_binary_loss": float(target_binary_loss.detach().cpu()),
+        "target_pair_softmax_loss": float(target_pair_softmax_loss.detach().cpu()),
+        "target_pair_margin_loss": float(target_pair_margin_loss.detach().cpu()),
+        "target_pair_owner_loss": float(target_pair_owner_loss.detach().cpu()),
         "ship_loss": float(ship_loss.detach().cpu()),
         "launch_acc": float(launch_acc.detach().cpu()),
         "launch_precision": float(launch_precision.detach().cpu()),
@@ -398,9 +654,18 @@ def bc_loss(
         "launch_pred_rate": float(launch_pred_rate.detach().cpu()),
         "launch_true_rate": float(launch_true_rate.detach().cpu()),
         "action_count_mae": float(action_count_mae.detach().cpu()),
+        "soft_action_count_mae": float(soft_action_count_mae.detach().cpu()),
         "target_acc": float(target_acc.detach().cpu()),
+        "target_pair_acc": float(target_pair_acc.detach().cpu()),
+        "target_pair_owner_acc": float(target_pair_owner_acc.detach().cpu()),
         "ship_acc": float(ship_acc.detach().cpu()),
         "action_weight_mean": float(action_weight_mean.detach().cpu()),
+        "sample_weight_mean": float(row_weights.mean().detach().cpu()),
+        "launch_sample_weight_mean": float(launch_row_weights.mean().detach().cpu()),
+        "target_sample_weight_mean": float(target_row_weights.mean().detach().cpu()),
+        "ship_sample_weight_mean": float(ship_row_weights.mean().detach().cpu()),
+        "pair_sample_weight_mean": float(pair_row_weights.mean().detach().cpu()),
+        "count_sample_weight_mean": float(count_row_weights.mean().detach().cpu()),
     }
 
 
@@ -414,6 +679,21 @@ def evaluate_loader(
     ship_loss_weight: float = 0.5,
     critical_action_weight: float = 0.0,
     target_loss_mask: str = "dataset",
+    target_margin_loss_weight: float = 0.0,
+    target_margin: float = 0.5,
+    target_margin_top_k: int = 8,
+    slot_set_loss: bool = False,
+    target_binary_loss_weight: float = 0.0,
+    target_binary_pos_weight: float = 12.0,
+    target_pair_softmax_loss_weight: float = 0.0,
+    target_pair_margin_loss_weight: float = 0.0,
+    target_pair_owner_loss_weight: float = 0.0,
+    launch_count_loss_weight: float = 0.0,
+    sample_weight_launch_scale: float = 1.0,
+    sample_weight_target_scale: float = 1.0,
+    sample_weight_ship_scale: float = 1.0,
+    sample_weight_pair_scale: float = 1.0,
+    sample_weight_count_scale: float = 1.0,
 ) -> dict[str, float]:
     model.eval()
     sums: dict[str, float] = {}
@@ -427,6 +707,21 @@ def evaluate_loader(
             ship_loss_weight,
             critical_action_weight,
             target_loss_mask,
+            target_margin_loss_weight,
+            target_margin,
+            target_margin_top_k,
+            slot_set_loss,
+            target_binary_loss_weight,
+            target_binary_pos_weight,
+            target_pair_softmax_loss_weight,
+            target_pair_margin_loss_weight,
+            target_pair_owner_loss_weight,
+            launch_count_loss_weight,
+            sample_weight_launch_scale,
+            sample_weight_target_scale,
+            sample_weight_ship_scale,
+            sample_weight_pair_scale,
+            sample_weight_count_scale,
         )
         n = int(batch[0].shape[0])
         for key, value in metrics.items():
@@ -451,6 +746,9 @@ def train_bc(args: argparse.Namespace, dataset: TensorDataset) -> tuple[TinyPoli
         "ship_buckets": len(SHIP_BUCKET_MULTIPLIERS),
         "action_slots": ACTION_SLOTS,
         "source_target_summary": bool(args.source_target_summary),
+        "target_pair_head": bool(args.target_pair_head),
+        "target_pair_adapter": bool(args.target_pair_adapter),
+        "target_pair_owner_head": bool(args.target_pair_owner_head),
     }
     model = TinyPolicyValueNet(**model_cfg).to(device)
     trainable_params = list(model.parameters())
@@ -467,6 +765,46 @@ def train_bc(args: argparse.Namespace, dataset: TensorDataset) -> tuple[TinyPoli
             param.requires_grad_(True)
         model.slot_embed.requires_grad_(True)
         trainable_params = list(model.source_head.parameters()) + [model.slot_embed]
+    elif args.trainable_modules == "target_pair_head":
+        if model.target_pair_head is None:
+            raise ValueError("--trainable-modules target_pair_head requires --target-pair-head")
+        for param in model.parameters():
+            param.requires_grad_(False)
+        for param in model.target_pair_head.parameters():
+            param.requires_grad_(True)
+        trainable_params = list(model.target_pair_head.parameters())
+        if model.target_pair_owner_head is not None:
+            for param in model.target_pair_owner_head.parameters():
+                param.requires_grad_(True)
+            trainable_params += list(model.target_pair_owner_head.parameters())
+    elif args.trainable_modules == "target_ranking":
+        if model.target_pair_head is None:
+            raise ValueError("--trainable-modules target_ranking requires --target-pair-head")
+        for param in model.parameters():
+            param.requires_grad_(False)
+        for param in model.edge.parameters():
+            param.requires_grad_(True)
+        for param in model.target_pair_head.parameters():
+            param.requires_grad_(True)
+        trainable_params = list(model.edge.parameters()) + list(model.target_pair_head.parameters())
+        if model.target_pair_owner_head is not None:
+            for param in model.target_pair_owner_head.parameters():
+                param.requires_grad_(True)
+            trainable_params += list(model.target_pair_owner_head.parameters())
+    elif args.trainable_modules == "target_pair_adapter":
+        if model.target_pair_head is None or model.target_pair_edge is None:
+            raise ValueError("--trainable-modules target_pair_adapter requires --target-pair-head --target-pair-adapter")
+        for param in model.parameters():
+            param.requires_grad_(False)
+        for param in model.target_pair_edge.parameters():
+            param.requires_grad_(True)
+        for param in model.target_pair_head.parameters():
+            param.requires_grad_(True)
+        trainable_params = list(model.target_pair_edge.parameters()) + list(model.target_pair_head.parameters())
+        if model.target_pair_owner_head is not None:
+            for param in model.target_pair_owner_head.parameters():
+                param.requires_grad_(True)
+            trainable_params += list(model.target_pair_owner_head.parameters())
     elif args.trainable_modules != "all":
         raise ValueError(f"unsupported trainable_modules: {args.trainable_modules!r}")
     opt = torch.optim.AdamW(trainable_params, lr=args.lr, weight_decay=args.weight_decay)
@@ -477,6 +815,7 @@ def train_bc(args: argparse.Namespace, dataset: TensorDataset) -> tuple[TinyPoli
         model.train()
         train_sums: dict[str, float] = {}
         train_count = 0
+        skipped_no_grad = 0
         for batch in train_loader:
             opt.zero_grad(set_to_none=True)
             loss, metrics = bc_loss(
@@ -487,15 +826,34 @@ def train_bc(args: argparse.Namespace, dataset: TensorDataset) -> tuple[TinyPoli
                 args.ship_loss_weight,
                 args.critical_action_weight,
                 args.target_loss_mask,
+                args.target_margin_loss_weight,
+                args.target_margin,
+                args.target_margin_top_k,
+                args.slot_set_loss,
+                args.target_binary_loss_weight,
+                args.target_binary_pos_weight,
+                args.target_pair_softmax_loss_weight,
+                args.target_pair_margin_loss_weight,
+                args.target_pair_owner_loss_weight,
+                args.launch_count_loss_weight,
+                args.sample_weight_launch_scale,
+                args.sample_weight_target_scale,
+                args.sample_weight_ship_scale,
+                args.sample_weight_pair_scale,
+                args.sample_weight_count_scale,
             )
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
-            opt.step()
             n = int(batch[0].shape[0])
             for key, value in metrics.items():
                 train_sums[key] = train_sums.get(key, 0.0) + value * n
             train_count += n
+            if not loss.requires_grad:
+                skipped_no_grad += n
+                continue
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+            opt.step()
         train_metrics = {f"train_{key}": value / max(1, train_count) for key, value in train_sums.items()}
+        train_metrics["train_skipped_no_grad_samples"] = float(skipped_no_grad)
         val_metrics = {
             f"val_{key}": value
             for key, value in evaluate_loader(
@@ -507,6 +865,21 @@ def train_bc(args: argparse.Namespace, dataset: TensorDataset) -> tuple[TinyPoli
                 args.ship_loss_weight,
                 args.critical_action_weight,
                 args.target_loss_mask,
+                args.target_margin_loss_weight,
+                args.target_margin,
+                args.target_margin_top_k,
+                args.slot_set_loss,
+                args.target_binary_loss_weight,
+                args.target_binary_pos_weight,
+                args.target_pair_softmax_loss_weight,
+                args.target_pair_margin_loss_weight,
+                args.target_pair_owner_loss_weight,
+                args.launch_count_loss_weight,
+                args.sample_weight_launch_scale,
+                args.sample_weight_target_scale,
+                args.sample_weight_ship_scale,
+                args.sample_weight_pair_scale,
+                args.sample_weight_count_scale,
             ).items()
         }
         merged = {"epoch": float(epoch), **train_metrics, **val_metrics}
@@ -561,13 +934,31 @@ def main() -> None:
     parser.add_argument("--ship-loss-weight", type=float, default=0.5)
     parser.add_argument("--critical-action-weight", type=float, default=0.0)
     parser.add_argument("--target-loss-mask", choices=["dataset", "all_planets"], default="dataset")
-    parser.add_argument("--trainable-modules", choices=["all", "target_head", "source_head"], default="all")
+    parser.add_argument("--target-margin-loss-weight", type=float, default=0.0)
+    parser.add_argument("--target-margin", type=float, default=0.5)
+    parser.add_argument("--target-margin-top-k", type=int, default=8)
+    parser.add_argument("--slot-set-loss", action="store_true", help="Treat same-source action slots as an unordered set during BC loss.")
+    parser.add_argument("--target-binary-loss-weight", type=float, default=0.0, help="Auxiliary BCE over source-target edges labelled by regular actions.")
+    parser.add_argument("--target-binary-pos-weight", type=float, default=12.0)
+    parser.add_argument("--target-pair-softmax-loss-weight", type=float, default=0.0, help="Auxiliary CE over each source's target-pair logits for regular targets.")
+    parser.add_argument("--target-pair-margin-loss-weight", type=float, default=0.0, help="Auxiliary hard-negative margin loss over source-target pair logits for regular targets.")
+    parser.add_argument("--target-pair-owner-loss-weight", type=float, default=0.0, help="Auxiliary CE over target owner groups aggregated from source-target pair logits.")
+    parser.add_argument("--launch-count-loss-weight", type=float, default=0.0, help="Auxiliary SmoothL1 loss matching predicted launch-count probability sum to the regular action count per row.")
+    parser.add_argument("--sample-weight-launch-scale", type=float, default=1.0, help="Scale how much per-row sample_weight amplifies launch/source loss. 1 keeps historical behavior.")
+    parser.add_argument("--sample-weight-target-scale", type=float, default=1.0, help="Scale how much per-row sample_weight amplifies slot target loss. 0 makes weighted rows count like normal rows for this component.")
+    parser.add_argument("--sample-weight-ship-scale", type=float, default=1.0, help="Scale how much per-row sample_weight amplifies ship bucket loss.")
+    parser.add_argument("--sample-weight-pair-scale", type=float, default=1.0, help="Scale how much per-row sample_weight amplifies target-pair auxiliary losses.")
+    parser.add_argument("--sample-weight-count-scale", type=float, default=1.0, help="Scale how much per-row sample_weight amplifies launch-count loss.")
+    parser.add_argument("--trainable-modules", choices=["all", "target_head", "source_head", "target_pair_head", "target_ranking", "target_pair_adapter"], default="all")
     parser.add_argument("--val-frac", type=float, default=0.12)
     parser.add_argument("--loader-workers", type=int, default=0)
     parser.add_argument("--hidden", type=int, default=64)
     parser.add_argument("--heads", type=int, default=4)
     parser.add_argument("--layers", type=int, default=1)
     parser.add_argument("--source-target-summary", action="store_true", help="Let the launch/source head see a pooled summary of source-target edge features.")
+    parser.add_argument("--target-pair-head", action="store_true", help="Add an auxiliary source-target edge head for regular target selection.")
+    parser.add_argument("--target-pair-adapter", action="store_true", help="Use a separate edge MLP for target-pair logits so target-ranking updates do not perturb source/ship heads.")
+    parser.add_argument("--target-pair-owner-head", action="store_true", help="Add a zero-initialized target-owner bias head on target-pair logits.")
     parser.add_argument("--no-numba", action="store_true")
     parser.add_argument("--progress", action="store_true")
     args = parser.parse_args()

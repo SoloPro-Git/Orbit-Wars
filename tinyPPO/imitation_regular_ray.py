@@ -5,6 +5,7 @@ import json
 import math
 import os
 import pickle
+import random
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,33 @@ def _players_list(raw: str) -> list[int]:
     return values
 
 
+def _int_list(raw: str) -> list[int]:
+    if not raw.strip():
+        return []
+    return [int(item.strip()) for item in raw.split(",") if item.strip()]
+
+
+def _path_list(raw: str) -> list[Path]:
+    return [Path(item.strip()) for item in raw.split(",") if item.strip()]
+
+
+def _partial_cache_paths(cache_path: Path) -> list[Path]:
+    prefix = cache_path.name + ".partial_"
+    return sorted(cache_path.parent.glob(prefix + "*"), key=lambda path: path.name)
+
+
+def _prune_partial_caches(cache_path: Path, keep: int) -> None:
+    keep = max(0, keep)
+    paths = _partial_cache_paths(cache_path)
+    if keep:
+        paths = paths[:-keep]
+    for path in paths:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+
 @ray.remote(num_cpus=1)
 def collect_game_task(
     seed: int,
@@ -49,6 +77,33 @@ def collect_game_task(
     return _collect_one_game(seed, players, episode_steps, keep_noop_prob, sample_stride, rows_per_game, use_numba)
 
 
+@ray.remote(num_cpus=1)
+def collect_games_task(
+    jobs: list[tuple[int, int]],
+    episode_steps: int,
+    keep_noop_prob: float,
+    sample_stride: int,
+    rows_per_game: int,
+    use_numba: bool,
+) -> tuple[list[Any], dict[str, float]]:
+    rows: list[Any] = []
+    labelled_actions = 0.0
+    skipped_actions = 0.0
+    completed = 0
+    for seed, players in jobs:
+        game_rows, metrics = _collect_one_game(seed, players, episode_steps, keep_noop_prob, sample_stride, rows_per_game, use_numba)
+        rows.extend(game_rows)
+        labelled_actions += float(metrics.get("labelled_actions", 0.0))
+        skipped_actions += float(metrics.get("skipped_actions", 0.0))
+        completed += 1
+    return rows, {
+        "games": float(completed),
+        "samples": float(len(rows)),
+        "labelled_actions": labelled_actions,
+        "skipped_actions": skipped_actions,
+    }
+
+
 @ray.remote
 class DaggerCollectActor:
     def __init__(
@@ -59,16 +114,20 @@ class DaggerCollectActor:
         launch_bias: float,
         ship_bias: float,
         launch_temperature: float,
+        collect_model_seat_only: bool,
     ):
+        resolved_device = _resolve_actor_device(device)
         self.model_agent = TinyPPOAgent(
             checkpoint,
-            device=device,
+            device=str(resolved_device),
             deterministic=deterministic,
             launch_bias=launch_bias,
             ship_bias=ship_bias,
             launch_temperature=launch_temperature,
         )
         self.regular_agent = make_rulebase_agent("regular")
+        self.collect_model_seat_only = collect_model_seat_only
+        self.checkpoint = checkpoint
 
     def collect_games(
         self,
@@ -86,26 +145,63 @@ class DaggerCollectActor:
         skipped_actions = 0
         model_actions = 0
         regular_label_actions = 0
-        for seed, players, model_seat in jobs:
-            raw_rows: list[tuple[dict[str, Any], int, list[list]]] = []
+        for job_index, (seed, players, model_seat) in enumerate(jobs, start=1):
+            random.seed(seed)
+            np.random.seed(seed)
+            raw_rows: list[dict[str, Any]] = []
+            step_box = {"current": -1}
             agents = []
             for pid in range(players):
                 if pid == model_seat:
                     def model_logged(obs: dict[str, Any], configuration=None, pid: int = pid) -> list[list]:
                         del configuration
+                        if "step" in obs:
+                            step_box["current"] = int(obs["step"])
+                        turn_index = int(obs.get("step", step_box["current"]))
                         action = self.model_agent(obs) or []
                         label = self.regular_agent(obs) or []
                         if label or random.random() < keep_noop_prob:
-                            raw_rows.append((obs, pid, label))
+                            raw_rows.append(
+                                {
+                                    "obs": obs,
+                                    "player": pid,
+                                    "label_action": label,
+                                    "model_action_count": len(action),
+                                    "label_action_count": len(label),
+                                    "model_seat": model_seat,
+                                    "seed": seed,
+                                    "players": players,
+                                    "checkpoint": self.checkpoint,
+                                    "raw_index": len(raw_rows),
+                                    "turn_index": turn_index,
+                                }
+                            )
                         return action
 
                     agents.append(model_logged)
                 else:
                     def regular_logged(obs: dict[str, Any], configuration=None, pid: int = pid) -> list[list]:
                         del configuration
+                        if "step" in obs:
+                            step_box["current"] = int(obs["step"])
+                        turn_index = int(obs.get("step", step_box["current"]))
                         action = self.regular_agent(obs) or []
-                        if action or random.random() < keep_noop_prob:
-                            raw_rows.append((obs, pid, action))
+                        if not self.collect_model_seat_only and (action or random.random() < keep_noop_prob):
+                            raw_rows.append(
+                                {
+                                    "obs": obs,
+                                    "player": pid,
+                                    "label_action": action,
+                                    "model_action_count": 0,
+                                    "label_action_count": len(action),
+                                    "model_seat": model_seat,
+                                    "seed": seed,
+                                    "players": players,
+                                    "checkpoint": self.checkpoint,
+                                    "raw_index": len(raw_rows),
+                                    "turn_index": turn_index,
+                                }
+                            )
                         return action
 
                     agents.append(regular_logged)
@@ -115,19 +211,57 @@ class DaggerCollectActor:
                 use_numba=use_numba,
             )
             env.run(agents)
+            final_frame = env.steps[-1] if env.steps else []
+            game_length = int(getattr(env, "_step", 0))
+            if game_length <= 0 and raw_rows:
+                game_length = max(int(raw["turn_index"]) for raw in raw_rows) + 1
+            final_reward = float(final_frame[model_seat].get("reward", 0.0)) if final_frame else 0.0
+            final_status = str(final_frame[model_seat].get("status", "")) if final_frame else ""
             sampled = raw_rows[:: max(1, sample_stride)]
             if rows_per_game > 0 and len(sampled) > rows_per_game:
                 sampled = random.sample(sampled, rows_per_game)
-            for obs, player, label_action in sampled:
+            for sampled_index, raw in enumerate(sampled):
+                obs = raw["obs"]
+                player = int(raw["player"])
+                label_action = raw["label_action"]
                 row = row_from_regular_action(obs, player, label_action, players=players)
                 if row is None:
                     continue
+                row.dagger_checkpoint = raw["checkpoint"]  # type: ignore[attr-defined]
+                row.dagger_seed = int(raw["seed"])  # type: ignore[attr-defined]
+                row.dagger_players = int(raw["players"])  # type: ignore[attr-defined]
+                row.dagger_model_seat = int(raw["model_seat"])  # type: ignore[attr-defined]
+                row.dagger_player = player  # type: ignore[attr-defined]
+                row.dagger_raw_index = int(raw["raw_index"])  # type: ignore[attr-defined]
+                row.dagger_sampled_index = int(sampled_index)  # type: ignore[attr-defined]
+                row.dagger_turn_index = int(raw["turn_index"])  # type: ignore[attr-defined]
+                row.dagger_obs_step = int(raw["turn_index"])  # type: ignore[attr-defined]
+                row.dagger_model_action_count = int(raw["model_action_count"])  # type: ignore[attr-defined]
+                row.dagger_regular_label_action_count = int(raw["label_action_count"])  # type: ignore[attr-defined]
+                row.dagger_game_length = int(game_length)  # type: ignore[attr-defined]
+                row.dagger_model_final_reward = float(final_reward)  # type: ignore[attr-defined]
+                row.dagger_model_final_status = final_status  # type: ignore[attr-defined]
                 rows.append(row)
                 labelled_actions += int(getattr(row, "labelled", 0))
                 skipped_actions += int(getattr(row, "skipped", 0))
                 regular_label_actions += len(label_action)
                 if player == model_seat:
                     model_actions += len(label_action)
+            if job_index % 10 == 0 or job_index == len(jobs):
+                print(
+                    json.dumps(
+                        {
+                            "event": "dagger_actor_progress",
+                            "pid": os.getpid(),
+                            "done": job_index,
+                            "total": len(jobs),
+                            "rows": len(rows),
+                            "labelled_actions": labelled_actions,
+                        },
+                        ensure_ascii=True,
+                    ),
+                    flush=True,
+                )
         return rows, {
             "games": float(len(jobs)),
             "samples": float(len(rows)),
@@ -153,11 +287,19 @@ def _average_states(states: list[dict[str, torch.Tensor]]) -> dict[str, torch.Te
     return out
 
 
+def _resolve_actor_device(device_override: str) -> torch.device:
+    if device_override.startswith("cuda:"):
+        os.environ["CUDA_VISIBLE_DEVICES"] = device_override.split(":", 1)[1]
+        return torch.device("cuda:0")
+    return torch.device(device_override if device_override else ("cuda" if torch.cuda.is_available() else "cpu"))
+
+
 @ray.remote
 class BCTrainEvalActor:
     def __init__(
         self,
         rows: list[Any],
+        sample_weights: list[float] | None,
         model_cfg: dict[str, int],
         batch_size: int,
         val_frac: float,
@@ -169,11 +311,27 @@ class BCTrainEvalActor:
         ship_loss_weight: float,
         critical_action_weight: float,
         target_loss_mask: str,
+        target_margin_loss_weight: float,
+        target_margin: float,
+        target_margin_top_k: int,
+        slot_set_loss: bool,
+        target_binary_loss_weight: float,
+        target_binary_pos_weight: float,
+        target_pair_softmax_loss_weight: float,
+        target_pair_margin_loss_weight: float,
+        target_pair_owner_loss_weight: float,
+        launch_count_loss_weight: float,
+        sample_weight_launch_scale: float,
+        sample_weight_target_scale: float,
+        sample_weight_ship_scale: float,
+        sample_weight_pair_scale: float,
+        sample_weight_count_scale: float,
         trainable_modules: str,
         seed: int,
+        device_override: str = "",
     ):
         torch.set_num_threads(1)
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = _resolve_actor_device(device_override)
         self.model_cfg = dict(model_cfg)
         self.model = TinyPolicyValueNet(**self.model_cfg).to(self.device)
         trainable_params = list(self.model.parameters())
@@ -190,6 +348,46 @@ class BCTrainEvalActor:
                 param.requires_grad_(True)
             self.model.slot_embed.requires_grad_(True)
             trainable_params = list(self.model.source_head.parameters()) + [self.model.slot_embed]
+        elif trainable_modules == "target_pair_head":
+            if self.model.target_pair_head is None:
+                raise ValueError("--trainable-modules target_pair_head requires --target-pair-head")
+            for param in self.model.parameters():
+                param.requires_grad_(False)
+            for param in self.model.target_pair_head.parameters():
+                param.requires_grad_(True)
+            trainable_params = list(self.model.target_pair_head.parameters())
+            if self.model.target_pair_owner_head is not None:
+                for param in self.model.target_pair_owner_head.parameters():
+                    param.requires_grad_(True)
+                trainable_params += list(self.model.target_pair_owner_head.parameters())
+        elif trainable_modules == "target_ranking":
+            if self.model.target_pair_head is None:
+                raise ValueError("--trainable-modules target_ranking requires --target-pair-head")
+            for param in self.model.parameters():
+                param.requires_grad_(False)
+            for param in self.model.edge.parameters():
+                param.requires_grad_(True)
+            for param in self.model.target_pair_head.parameters():
+                param.requires_grad_(True)
+            trainable_params = list(self.model.edge.parameters()) + list(self.model.target_pair_head.parameters())
+            if self.model.target_pair_owner_head is not None:
+                for param in self.model.target_pair_owner_head.parameters():
+                    param.requires_grad_(True)
+                trainable_params += list(self.model.target_pair_owner_head.parameters())
+        elif trainable_modules == "target_pair_adapter":
+            if self.model.target_pair_head is None or self.model.target_pair_edge is None:
+                raise ValueError("--trainable-modules target_pair_adapter requires --target-pair-head --target-pair-adapter")
+            for param in self.model.parameters():
+                param.requires_grad_(False)
+            for param in self.model.target_pair_edge.parameters():
+                param.requires_grad_(True)
+            for param in self.model.target_pair_head.parameters():
+                param.requires_grad_(True)
+            trainable_params = list(self.model.target_pair_edge.parameters()) + list(self.model.target_pair_head.parameters())
+            if self.model.target_pair_owner_head is not None:
+                for param in self.model.target_pair_owner_head.parameters():
+                    param.requires_grad_(True)
+                trainable_params += list(self.model.target_pair_owner_head.parameters())
         elif trainable_modules != "all":
             raise ValueError(f"unsupported trainable_modules: {trainable_modules!r}")
         self.opt = torch.optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
@@ -199,7 +397,22 @@ class BCTrainEvalActor:
         self.ship_loss_weight = float(ship_loss_weight)
         self.critical_action_weight = float(critical_action_weight)
         self.target_loss_mask = str(target_loss_mask)
-        dataset = stack_rows(rows)
+        self.target_margin_loss_weight = float(target_margin_loss_weight)
+        self.target_margin = float(target_margin)
+        self.target_margin_top_k = int(target_margin_top_k)
+        self.slot_set_loss = bool(slot_set_loss)
+        self.target_binary_loss_weight = float(target_binary_loss_weight)
+        self.target_binary_pos_weight = float(target_binary_pos_weight)
+        self.target_pair_softmax_loss_weight = float(target_pair_softmax_loss_weight)
+        self.target_pair_margin_loss_weight = float(target_pair_margin_loss_weight)
+        self.target_pair_owner_loss_weight = float(target_pair_owner_loss_weight)
+        self.launch_count_loss_weight = float(launch_count_loss_weight)
+        self.sample_weight_launch_scale = float(sample_weight_launch_scale)
+        self.sample_weight_target_scale = float(sample_weight_target_scale)
+        self.sample_weight_ship_scale = float(sample_weight_ship_scale)
+        self.sample_weight_pair_scale = float(sample_weight_pair_scale)
+        self.sample_weight_count_scale = float(sample_weight_count_scale)
+        dataset = stack_rows(rows, sample_weights)
         generator = torch.Generator().manual_seed(seed)
         val_size = max(1, int(len(dataset) * val_frac))
         train_size = max(1, len(dataset) - val_size)
@@ -215,6 +428,7 @@ class BCTrainEvalActor:
         self.model.train()
         sums: dict[str, float] = {}
         count = 0
+        skipped_no_grad = 0
         for batch in self.train_loader:
             self.opt.zero_grad(set_to_none=True)
             loss, metrics = bc_loss(
@@ -225,16 +439,35 @@ class BCTrainEvalActor:
                 self.ship_loss_weight,
                 self.critical_action_weight,
                 self.target_loss_mask,
+                self.target_margin_loss_weight,
+                self.target_margin,
+                self.target_margin_top_k,
+                self.slot_set_loss,
+                self.target_binary_loss_weight,
+                self.target_binary_pos_weight,
+                self.target_pair_softmax_loss_weight,
+                self.target_pair_margin_loss_weight,
+                self.target_pair_owner_loss_weight,
+                self.launch_count_loss_weight,
+                self.sample_weight_launch_scale,
+                self.sample_weight_target_scale,
+                self.sample_weight_ship_scale,
+                self.sample_weight_pair_scale,
+                self.sample_weight_count_scale,
             )
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
-            self.opt.step()
             n = int(batch[0].shape[0])
             for key, value in metrics.items():
                 sums[key] = sums.get(key, 0.0) + float(value) * n
             count += n
+            if not loss.requires_grad:
+                skipped_no_grad += n
+                continue
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+            self.opt.step()
         metrics = {f"train_{key}": value / max(1, count) for key, value in sums.items()}
         metrics["samples"] = float(self.samples)
+        metrics["train_skipped_no_grad_samples"] = float(skipped_no_grad)
         metrics.update({f"val_{key}": value for key, value in self._eval_loader().items()})
         return _cpu_state_dict(self.model), metrics
 
@@ -252,6 +485,21 @@ class BCTrainEvalActor:
                 self.ship_loss_weight,
                 self.critical_action_weight,
                 self.target_loss_mask,
+                self.target_margin_loss_weight,
+                self.target_margin,
+                self.target_margin_top_k,
+                self.slot_set_loss,
+                self.target_binary_loss_weight,
+                self.target_binary_pos_weight,
+                self.target_pair_softmax_loss_weight,
+                self.target_pair_margin_loss_weight,
+                self.target_pair_owner_loss_weight,
+                self.launch_count_loss_weight,
+                self.sample_weight_launch_scale,
+                self.sample_weight_target_scale,
+                self.sample_weight_ship_scale,
+                self.sample_weight_pair_scale,
+                self.sample_weight_count_scale,
             )
             n = int(batch[0].shape[0])
             for key, value in metrics.items():
@@ -299,9 +547,9 @@ class BCTrainEvalActor:
 
 @ray.remote
 class BCEvalActor:
-    def __init__(self, model_cfg: dict[str, int]):
+    def __init__(self, model_cfg: dict[str, int], device_override: str = ""):
         torch.set_num_threads(1)
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = _resolve_actor_device(device_override)
         self.model_cfg = dict(model_cfg)
         self.model = TinyPolicyValueNet(**self.model_cfg).to(self.device)
 
@@ -376,9 +624,25 @@ def _merge_eval(parts: list[dict[str, float]]) -> dict[str, float]:
 def _imitation_score(metrics: dict[str, float]) -> float:
     launch_f1 = float(metrics.get("val_launch_f1", 0.0))
     target_acc = float(metrics.get("val_target_acc", 0.0))
+    target_pair_acc = float(metrics.get("val_target_pair_acc", 0.0))
+    target_quality = max(target_acc, target_pair_acc)
     ship_acc = float(metrics.get("val_ship_acc", 0.0))
     count_mae = min(3.0, float(metrics.get("val_action_count_mae", 3.0)))
-    return 0.45 * launch_f1 + 0.35 * target_acc + 0.20 * ship_acc - 0.05 * count_mae
+    pred_rate = max(1e-6, float(metrics.get("val_launch_pred_rate", 0.0)))
+    true_rate = max(1e-6, float(metrics.get("val_launch_true_rate", 0.0)))
+    density_penalty = min(3.0, abs(math.log(pred_rate / true_rate)))
+    density_alignment = max(0.0, 1.0 - density_penalty / 3.0)
+    metrics["val_launch_density_penalty"] = density_penalty
+    metrics["val_launch_density_alignment"] = density_alignment
+    metrics["val_target_quality"] = target_quality
+    return (
+        0.45 * launch_f1
+        + 0.20 * target_quality
+        + 0.10 * ship_acc
+        + 0.20 * density_alignment
+        - 0.08 * count_mae
+        - 0.04 * density_penalty
+    )
 
 
 def save_checkpoint(path: Path, state: dict[str, torch.Tensor], model_cfg: dict[str, int], epoch: int, metrics: dict[str, Any]) -> None:
@@ -439,7 +703,7 @@ def _log_swanlab(swan: Any | None, payload: dict[str, Any], step: int) -> None:
         print(json.dumps({"event": "swanlab_log_failed", "step": step, "error": str(exc)}, ensure_ascii=True), flush=True)
 
 
-def collect_dataset(args: argparse.Namespace) -> tuple[list[Any], dict[str, float]]:
+def collect_dataset(args: argparse.Namespace) -> tuple[list[Any], dict[str, float], list[float] | None]:
     cache_path = Path(args.dataset_cache) if args.dataset_cache else None
     if cache_path is not None and cache_path.exists() and not args.refresh_dataset:
         with cache_path.open("rb") as fh:
@@ -450,15 +714,54 @@ def collect_dataset(args: argparse.Namespace) -> tuple[list[Any], dict[str, floa
         metrics["cache_path"] = str(cache_path)
     else:
         rows, metrics = collect_regular_dataset(args, cache_path)
-    if args.dagger_checkpoint:
+    sample_weights: list[float] | None = None
+    if args.dagger_checkpoint or args.dagger_checkpoints or args.dagger_cache:
+        regular_count = len(rows)
         dagger_rows, dagger_metrics = collect_dagger_dataset(args)
         rows.extend(dagger_rows)
+        dagger_weights, dagger_weight_metrics = _dagger_sample_weights(dagger_rows, args)
+        if dagger_weights is not None:
+            sample_weights = [1.0] * regular_count + dagger_weights
         metrics = {
             **metrics,
             "samples": float(len(rows)),
-            "dagger": dagger_metrics,
+            "dagger": {**dagger_metrics, **dagger_weight_metrics},
         }
-    return rows, metrics
+    return rows, metrics, sample_weights
+
+
+def _dagger_sample_weights(rows: list[Any], args: argparse.Namespace) -> tuple[list[float] | None, dict[str, float]]:
+    base_weight = float(args.dagger_loss_weight)
+    action_cap = float(getattr(args, "dagger_action_weight_cap", 0.0))
+    has_row_overrides = any(
+        abs(float(getattr(row, "dagger_loss_weight_override", getattr(row, "sample_weight", 1.0))) - 1.0) > 1e-9
+        for row in rows
+    )
+    use_weights = abs(base_weight - 1.0) > 1e-9 or action_cap > 0.0 or has_row_overrides
+    if not use_weights:
+        return None, {"dagger_loss_weight": 1.0, "dagger_action_weight_cap": 0.0}
+
+    weights: list[float] = []
+    raw_actions = 0.0
+    weighted_actions = 0.0
+    for row in rows:
+        action_count = _row_action_count(row)
+        raw_actions += float(action_count)
+        row_weight = base_weight * float(getattr(row, "dagger_loss_weight_override", getattr(row, "sample_weight", 1.0)))
+        if action_cap > 0.0 and action_count > action_cap:
+            row_weight *= action_cap / float(action_count)
+        weights.append(float(row_weight))
+        weighted_actions += float(action_count) * float(row_weight)
+
+    return weights, {
+        "dagger_loss_weight": base_weight,
+        "dagger_action_weight_cap": action_cap,
+        "dagger_weight_mean": float(sum(weights) / len(weights)) if weights else 0.0,
+        "dagger_weight_min": float(min(weights)) if weights else 0.0,
+        "dagger_weight_max": float(max(weights)) if weights else 0.0,
+        "dagger_unweighted_labelled_actions": raw_actions,
+        "dagger_weighted_labelled_actions": weighted_actions,
+    }
 
 
 def collect_regular_dataset(args: argparse.Namespace, cache_path: Path | None) -> tuple[list[Any], dict[str, float]]:
@@ -468,23 +771,25 @@ def collect_regular_dataset(args: argparse.Namespace, cache_path: Path | None) -
         for players in players_values
         for game in range(args.games_per_players)
     ]
+    games_per_task = max(1, int(args.collect_games_per_task))
+    job_shards = [jobs[i : i + games_per_task] for i in range(0, len(jobs), games_per_task)]
     futures = [
-        collect_game_task.remote(
-            seed,
-            players,
+        collect_games_task.remote(
+            shard,
             args.episode_steps,
             args.keep_noop_prob,
             args.sample_stride,
             args.rows_per_game,
             not args.no_numba,
         )
-        for seed, players in jobs
+        for shard in job_shards
     ]
     rows: list[Any] = []
     labelled = 0.0
     skipped = 0.0
     completed = 0
-    progress = tqdm(total=len(futures), desc="ray collect regular BC", dynamic_ncols=True) if tqdm is not None else None
+    next_partial_save = args.partial_cache_interval if args.partial_cache_interval > 0 else 0
+    progress = tqdm(total=len(jobs), desc="ray collect regular BC", dynamic_ncols=True) if tqdm is not None else None
     pending = list(futures)
     while pending:
         done, pending = ray.wait(pending, num_returns=min(64, len(pending)))
@@ -493,10 +798,29 @@ def collect_regular_dataset(args: argparse.Namespace, cache_path: Path | None) -
             rows.extend(game_rows)
             labelled += float(metrics.get("labelled_actions", 0.0))
             skipped += float(metrics.get("skipped_actions", 0.0))
-            completed += 1
+            completed += int(metrics.get("games", 0.0))
         if progress is not None:
-            progress.update(len(done))
+            progress.n = completed
+            progress.refresh()
             progress.set_postfix(samples=len(rows), labelled=int(labelled))
+        if cache_path is not None and next_partial_save > 0 and completed >= next_partial_save:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            partial_metrics = {
+                "games": float(completed),
+                "samples": float(len(rows)),
+                "labelled_actions": labelled,
+                "skipped_actions": skipped,
+                "players_modes": float(len(players_values)),
+                "partial": 1.0,
+            }
+            partial_path = cache_path.with_suffix(cache_path.suffix + f".partial_{completed:05d}")
+            tmp_partial_path = partial_path.with_suffix(partial_path.suffix + ".tmp")
+            with tmp_partial_path.open("wb") as fh:
+                pickle.dump({"rows": rows, "metrics": partial_metrics, "args": vars(args)}, fh, protocol=pickle.HIGHEST_PROTOCOL)
+            tmp_partial_path.replace(partial_path)
+            _prune_partial_caches(cache_path, args.partial_cache_keep)
+            while next_partial_save <= completed:
+                next_partial_save += args.partial_cache_interval
     if progress is not None:
         progress.close()
     metrics = {
@@ -505,9 +829,11 @@ def collect_regular_dataset(args: argparse.Namespace, cache_path: Path | None) -
         "labelled_actions": labelled,
         "skipped_actions": skipped,
         "players_modes": float(len(players_values)),
+        "collect_games_per_task": float(games_per_task),
     }
     if cache_path is not None:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
+        _prune_partial_caches(cache_path, 0)
         tmp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
         with tmp_path.open("wb") as fh:
             pickle.dump({"rows": rows, "metrics": metrics, "args": vars(args)}, fh, protocol=pickle.HIGHEST_PROTOCOL)
@@ -518,15 +844,43 @@ def collect_regular_dataset(args: argparse.Namespace, cache_path: Path | None) -
 
 
 def collect_dagger_dataset(args: argparse.Namespace) -> tuple[list[Any], dict[str, float]]:
-    cache_path = Path(args.dagger_cache) if args.dagger_cache else None
-    if cache_path is not None and cache_path.exists() and not args.refresh_dataset:
-        with cache_path.open("rb") as fh:
-            payload = pickle.load(fh)
-        rows = payload["rows"]
-        metrics = dict(payload.get("metrics", {}))
-        metrics["cache_loaded"] = 1.0
-        metrics["cache_path"] = str(cache_path)
+    cache_paths = _path_list(args.dagger_cache) if args.dagger_cache else []
+    if cache_paths and not args.refresh_dataset:
+        missing = [str(path) for path in cache_paths if not path.exists()]
+        if missing:
+            raise FileNotFoundError(f"missing DAgger caches: {missing}")
+        rows: list[Any] = []
+        metrics: dict[str, float] = {
+            "cache_loaded": 1.0,
+            "cache_count": float(len(cache_paths)),
+        }
+        loaded_paths: list[str] = []
+        for cache_path in cache_paths:
+            with cache_path.open("rb") as fh:
+                payload = pickle.load(fh)
+            part_rows = list(payload["rows"])
+            part_metrics = dict(payload.get("metrics", {}))
+            rows.extend(part_rows)
+            loaded_paths.append(str(cache_path))
+            for key, value in part_metrics.items():
+                if isinstance(value, (int, float)) and key not in {"cache_loaded", "cache_saved"}:
+                    metrics[key] = float(metrics.get(key, 0.0)) + float(value)
+        metrics["samples"] = float(len(rows))
+        metrics["cache_paths_count"] = float(len(loaded_paths))
+        rows, metrics = _filter_dagger_rows(rows, metrics, args)
+        metrics["cache_paths"] = ",".join(loaded_paths)  # type: ignore[assignment]
+        rows, metrics = _subsample_dagger_rows(rows, metrics, args)
         return rows, metrics
+
+    checkpoints = [item.strip() for item in args.dagger_checkpoints.split(",") if item.strip()]
+    if args.dagger_checkpoint:
+        checkpoints.insert(0, args.dagger_checkpoint)
+    checkpoints = list(dict.fromkeys(checkpoints))
+    if not checkpoints:
+        return [], {"games": 0.0, "samples": 0.0, "checkpoints": 0.0}
+    missing = [checkpoint for checkpoint in checkpoints if not Path(checkpoint).exists()]
+    if missing:
+        raise FileNotFoundError(f"missing DAgger checkpoints: {missing}")
 
     players_values = _players_list(args.players_list)
     jobs = [
@@ -538,16 +892,34 @@ def collect_dagger_dataset(args: argparse.Namespace) -> tuple[list[Any], dict[st
         return [], {"games": 0.0, "samples": 0.0}
     actor_count = max(1, min(args.dagger_actors, len(jobs)))
     shards = [jobs[i::actor_count] for i in range(actor_count)]
+    dagger_gpu_ids = _int_list(args.dagger_gpu_ids_manual)
+    if dagger_gpu_ids:
+        print(
+            json.dumps(
+                {
+                    "event": "dagger_manual_gpu_ids",
+                    "dagger_gpu_ids": dagger_gpu_ids,
+                    "actors": actor_count,
+                    "checkpoints": checkpoints,
+                },
+                ensure_ascii=True,
+            ),
+            flush=True,
+        )
     actors = [
-        DaggerCollectActor.options(num_cpus=args.dagger_cpus_per_actor, num_gpus=args.dagger_gpus_per_actor).remote(
-            args.dagger_checkpoint,
-            args.dagger_device,
+        DaggerCollectActor.options(
+            num_cpus=args.dagger_cpus_per_actor,
+            num_gpus=0.0 if dagger_gpu_ids else args.dagger_gpus_per_actor,
+        ).remote(
+            checkpoints[i % len(checkpoints)],
+            f"cuda:{dagger_gpu_ids[i % len(dagger_gpu_ids)]}" if dagger_gpu_ids else args.dagger_device,
             not args.dagger_stochastic,
             args.launch_bias,
             args.ship_bias,
             args.launch_temperature,
+            args.dagger_model_seat_only,
         )
-        for _ in range(actor_count)
+        for i in range(actor_count)
     ]
     futures = [
         actor.collect_games.remote(
@@ -592,7 +964,10 @@ def collect_dagger_dataset(args: argparse.Namespace) -> tuple[list[Any], dict[st
         "model_seat_label_actions": model_seat_label_actions,
         "regular_label_actions": regular_label_actions,
         "actors": float(actor_count),
+        "checkpoints": float(len(checkpoints)),
+        "model_seat_only": float(bool(args.dagger_model_seat_only)),
     }
+    cache_path = cache_paths[0] if len(cache_paths) == 1 else None
     if cache_path is not None:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
@@ -601,7 +976,124 @@ def collect_dagger_dataset(args: argparse.Namespace) -> tuple[list[Any], dict[st
         tmp_path.replace(cache_path)
         metrics["cache_saved"] = 1.0
         metrics["cache_path"] = str(cache_path)
+    rows, metrics = _filter_dagger_rows(rows, metrics, args)
+    rows, metrics = _subsample_dagger_rows(rows, metrics, args)
     return rows, metrics
+
+
+def _row_action_count(row: Any) -> int:
+    return int(np.asarray(row.launch_mask).sum())
+
+
+def _filter_dagger_rows(rows: list[Any], metrics: dict[str, float], args: argparse.Namespace) -> tuple[list[Any], dict[str, float]]:
+    min_actions = int(getattr(args, "dagger_min_actions_per_row", -1))
+    max_actions = int(getattr(args, "dagger_max_actions_per_row", -1))
+    min_turn = int(getattr(args, "dagger_min_turn", -1))
+    max_turn = int(getattr(args, "dagger_max_turn", -1))
+    min_final_reward = float(getattr(args, "dagger_min_final_reward", -999.0))
+    max_final_reward = float(getattr(args, "dagger_max_final_reward", 999.0))
+    min_abs_action_gap = int(getattr(args, "dagger_min_abs_action_gap", -1))
+    keep_outcomes = {item.strip() for item in str(getattr(args, "dagger_keep_outcomes", "")).split(",") if item.strip()}
+    if (
+        min_actions < 0
+        and max_actions < 0
+        and min_turn < 0
+        and max_turn < 0
+        and min_final_reward <= -999.0
+        and max_final_reward >= 999.0
+        and min_abs_action_gap < 0
+        and not keep_outcomes
+    ):
+        return rows, metrics
+
+    filtered: list[Any] = []
+    kept_actions = 0
+    before_actions = 0
+    missing_turn = 0
+    missing_final_reward = 0
+    missing_action_gap = 0
+    missing_outcome = 0
+    for row in rows:
+        action_count = _row_action_count(row)
+        before_actions += action_count
+        if keep_outcomes:
+            outcome = getattr(row, "dagger_model_outcome", None)
+            if outcome is None:
+                missing_outcome += 1
+                continue
+            if str(outcome) not in keep_outcomes:
+                continue
+        if min_actions >= 0 and action_count < min_actions:
+            continue
+        if max_actions >= 0 and action_count > max_actions:
+            continue
+        if min_turn >= 0 or max_turn >= 0:
+            turn = getattr(row, "dagger_turn_index", getattr(row, "dagger_obs_step", None))
+            if turn is None:
+                missing_turn += 1
+                continue
+            turn = int(turn)
+            if min_turn >= 0 and turn < min_turn:
+                continue
+            if max_turn >= 0 and turn > max_turn:
+                continue
+        if min_final_reward > -999.0 or max_final_reward < 999.0:
+            final_reward = getattr(row, "dagger_model_final_reward", None)
+            if final_reward is None:
+                missing_final_reward += 1
+                continue
+            final_reward = float(final_reward)
+            if final_reward < min_final_reward or final_reward > max_final_reward:
+                continue
+        if min_abs_action_gap >= 0:
+            model_count = getattr(row, "dagger_model_action_count", None)
+            label_count = getattr(row, "dagger_regular_label_action_count", None)
+            if model_count is None or label_count is None:
+                missing_action_gap += 1
+                continue
+            if abs(int(label_count) - int(model_count)) < min_abs_action_gap:
+                continue
+        filtered.append(row)
+        kept_actions += action_count
+
+    filtered_metrics = dict(metrics)
+    filtered_metrics["samples_before_filter"] = float(len(rows))
+    filtered_metrics["samples"] = float(len(filtered))
+    filtered_metrics["labelled_actions_before_filter"] = float(before_actions)
+    filtered_metrics["labelled_actions"] = float(kept_actions)
+    filtered_metrics["action_filter_min"] = float(min_actions)
+    filtered_metrics["action_filter_max"] = float(max_actions)
+    filtered_metrics["turn_filter_min"] = float(min_turn)
+    filtered_metrics["turn_filter_max"] = float(max_turn)
+    filtered_metrics["final_reward_filter_min"] = float(min_final_reward)
+    filtered_metrics["final_reward_filter_max"] = float(max_final_reward)
+    filtered_metrics["abs_action_gap_filter_min"] = float(min_abs_action_gap)
+    filtered_metrics["outcome_filter_enabled"] = float(bool(keep_outcomes))
+    filtered_metrics["missing_outcome_for_filter"] = float(missing_outcome)
+    filtered_metrics["missing_turn_for_filter"] = float(missing_turn)
+    filtered_metrics["missing_final_reward_for_filter"] = float(missing_final_reward)
+    filtered_metrics["missing_action_gap_for_filter"] = float(missing_action_gap)
+    filtered_metrics["dagger_filtered"] = 1.0
+    if rows:
+        filtered_metrics["filter_keep_frac"] = float(len(filtered) / len(rows))
+    if filtered:
+        filtered_metrics["filter_mean_actions"] = float(kept_actions / len(filtered))
+    return filtered, filtered_metrics
+
+
+def _subsample_dagger_rows(rows: list[Any], metrics: dict[str, float], args: argparse.Namespace) -> tuple[list[Any], dict[str, float]]:
+    max_rows = int(getattr(args, "dagger_max_rows", 0))
+    if max_rows <= 0 or len(rows) <= max_rows:
+        return rows, metrics
+    rng = random.Random(int(args.seed) + 31_415_927)
+    indices = sorted(rng.sample(range(len(rows)), max_rows))
+    sampled_rows = [rows[index] for index in indices]
+    sampled_metrics = dict(metrics)
+    sampled_metrics["samples_before_subsample"] = float(len(rows))
+    sampled_metrics["samples"] = float(len(sampled_rows))
+    sampled_metrics["subsampled"] = 1.0
+    sampled_metrics["max_rows"] = float(max_rows)
+    return sampled_rows, sampled_metrics
 
 
 def main() -> None:
@@ -616,14 +1108,31 @@ def main() -> None:
     parser.add_argument("--games-per-players", type=int, default=2000)
     parser.add_argument("--dataset-cache", default="", help="Pickle cache for collected BC rows. Existing cache is reused unless --refresh-dataset is set.")
     parser.add_argument("--refresh-dataset", action="store_true")
+    parser.add_argument("--partial-cache-interval", type=int, default=0, help="Save partial regular BC dataset caches every N completed games.")
+    parser.add_argument("--partial-cache-keep", type=int, default=1, help="Keep only the newest N partial regular BC caches. Final cache save removes all partials first.")
+    parser.add_argument("--collect-games-per-task", type=int, default=1, help="Batch this many regular games into one Ray collection task.")
     parser.add_argument("--dagger-checkpoint", default="", help="Optional policy checkpoint used to generate on-policy states labelled by regular.")
+    parser.add_argument("--dagger-checkpoints", default="", help="Comma list of policy checkpoints used round-robin to generate on-policy states labelled by regular.")
     parser.add_argument("--dagger-cache", default="", help="Pickle cache for DAgger rows. Existing cache is reused unless --refresh-dataset is set.")
     parser.add_argument("--dagger-games-per-players", type=int, default=0)
+    parser.add_argument("--dagger-max-rows", type=int, default=0, help="Deterministically subsample DAgger rows for training after cache load/collection. 0 keeps all DAgger rows.")
+    parser.add_argument("--dagger-min-actions-per-row", type=int, default=-1, help="Keep only DAgger rows with at least this many regular-labelled launch actions. <0 disables the lower bound.")
+    parser.add_argument("--dagger-max-actions-per-row", type=int, default=-1, help="Keep only DAgger rows with at most this many regular-labelled launch actions. <0 disables the upper bound.")
+    parser.add_argument("--dagger-min-turn", type=int, default=-1, help="Keep only metadata DAgger rows at or after this turn. <0 disables.")
+    parser.add_argument("--dagger-max-turn", type=int, default=-1, help="Keep only metadata DAgger rows at or before this turn. <0 disables.")
+    parser.add_argument("--dagger-min-final-reward", type=float, default=-999.0, help="Keep only metadata DAgger rows whose model rollout final reward is at least this value.")
+    parser.add_argument("--dagger-max-final-reward", type=float, default=999.0, help="Keep only metadata DAgger rows whose model rollout final reward is at most this value. Use 0 or -1 to focus losing rollouts.")
+    parser.add_argument("--dagger-keep-outcomes", default="", help="Comma list of score-based DAgger outcomes to keep, e.g. loss,draw. Requires rows with dagger_model_outcome metadata.")
+    parser.add_argument("--dagger-min-abs-action-gap", type=int, default=-1, help="Keep only metadata DAgger rows where abs(regular_label_actions - model_actions) is at least this value.")
+    parser.add_argument("--dagger-loss-weight", type=float, default=1.0, help="Per-row loss weight for DAgger rows. Use <1 to expose model-rollout states while keeping original regular cadence dominant.")
+    parser.add_argument("--dagger-action-weight-cap", type=float, default=0.0, help="If >0, scale DAgger rows with more labelled actions than this by cap/action_count. Keeps high-action states while capping their active-action loss mass.")
     parser.add_argument("--dagger-actors", type=int, default=8)
     parser.add_argument("--dagger-cpus-per-actor", type=float, default=2.0)
     parser.add_argument("--dagger-gpus-per-actor", type=float, default=0.0)
+    parser.add_argument("--dagger-gpu-ids-manual", default="", help="Comma list of physical CUDA ids for DAgger actors. If set, Ray GPU resources are not reserved for DAgger actors.")
     parser.add_argument("--dagger-device", default="cpu")
     parser.add_argument("--dagger-stochastic", action="store_true")
+    parser.add_argument("--dagger-model-seat-only", action="store_true", help="Collect only the model-controlled seat states from DAgger rollouts; regular opponents still act but are not added as rows.")
     parser.add_argument("--rows-per-game", type=int, default=12)
     parser.add_argument("--episode-steps", type=int, default=500)
     parser.add_argument("--sample-stride", type=int, default=1)
@@ -631,9 +1140,11 @@ def main() -> None:
     parser.add_argument("--trainers", type=int, default=8)
     parser.add_argument("--cpus-per-trainer", type=float, default=2.0)
     parser.add_argument("--gpus-per-trainer", type=float, default=1.0)
+    parser.add_argument("--trainer-gpu-ids", default="", help="Comma list of physical CUDA ids for trainer actors. If set, Ray GPU resources are not reserved for trainers.")
     parser.add_argument("--eval-actors", type=int, default=1)
     parser.add_argument("--eval-cpus-per-actor", type=float, default=4.0)
     parser.add_argument("--gpus-per-eval-actor", type=float, default=1.0)
+    parser.add_argument("--eval-gpu-ids-manual", default="", help="Comma list of physical CUDA ids for eval actors. If set, Ray GPU resources are not reserved for eval actors.")
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=3e-4)
@@ -644,14 +1155,39 @@ def main() -> None:
     parser.add_argument("--ship-loss-weight", type=float, default=0.5)
     parser.add_argument("--critical-action-weight", type=float, default=0.0)
     parser.add_argument("--target-loss-mask", choices=["dataset", "all_planets"], default="dataset")
-    parser.add_argument("--trainable-modules", choices=["all", "target_head", "source_head"], default="all")
+    parser.add_argument("--target-margin-loss-weight", type=float, default=0.0)
+    parser.add_argument("--target-margin", type=float, default=0.20)
+    parser.add_argument("--target-margin-top-k", type=int, default=3)
+    parser.add_argument("--slot-set-loss", action="store_true")
+    parser.add_argument("--target-binary-loss-weight", type=float, default=0.0)
+    parser.add_argument("--target-binary-pos-weight", type=float, default=1.0)
+    parser.add_argument("--target-pair-softmax-loss-weight", type=float, default=0.0)
+    parser.add_argument("--target-pair-margin-loss-weight", type=float, default=0.0, help="Auxiliary hard-negative margin loss over source-target pair logits for regular targets.")
+    parser.add_argument("--target-pair-owner-loss-weight", type=float, default=0.0, help="Auxiliary CE over target owner groups aggregated from source-target pair logits.")
+    parser.add_argument("--launch-count-loss-weight", type=float, default=0.0, help="Auxiliary SmoothL1 loss matching predicted launch-count probability sum to the regular action count per row.")
+    parser.add_argument("--sample-weight-launch-scale", type=float, default=1.0, help="Scale how much per-row sample_weight amplifies launch/source loss. 1 keeps historical behavior.")
+    parser.add_argument("--sample-weight-target-scale", type=float, default=1.0, help="Scale how much per-row sample_weight amplifies slot target loss. 0 makes weighted rows count like normal rows for this component.")
+    parser.add_argument("--sample-weight-ship-scale", type=float, default=1.0, help="Scale how much per-row sample_weight amplifies ship bucket loss.")
+    parser.add_argument("--sample-weight-pair-scale", type=float, default=1.0, help="Scale how much per-row sample_weight amplifies target-pair auxiliary losses.")
+    parser.add_argument("--sample-weight-count-scale", type=float, default=1.0, help="Scale how much per-row sample_weight amplifies launch-count loss.")
+    parser.add_argument("--trainable-modules", choices=["all", "target_head", "source_head", "target_pair_head", "target_ranking", "target_pair_adapter"], default="all")
     parser.add_argument("--val-frac", type=float, default=0.08)
     parser.add_argument("--hidden", type=int, default=64)
     parser.add_argument("--heads", type=int, default=4)
     parser.add_argument("--layers", type=int, default=1)
     parser.add_argument("--source-target-summary", action="store_true", help="Let the launch/source head see a pooled summary of source-target edge features.")
+    parser.add_argument("--target-pair-head", action="store_true", help="Add a source-target pair head for direct target imitation.")
+    parser.add_argument("--target-pair-adapter", action="store_true", help="Use a separate edge MLP for target-pair logits so target-ranking updates do not perturb source/ship heads.")
+    parser.add_argument("--target-pair-owner-head", action="store_true", help="Add a zero-initialized target-owner bias head on target-pair logits.")
     parser.add_argument("--eval-interval", type=int, default=40)
+    parser.add_argument("--checkpoint-interval", type=int, default=10)
     parser.add_argument("--eval-games", type=int, default=64)
+    parser.add_argument(
+        "--eval-games-per-actor",
+        type=int,
+        default=0,
+        help="If >0, submit this many games to each eval actor and derive total eval games from the selected actors.",
+    )
     parser.add_argument("--max-pending-evals", type=int, default=2)
     parser.add_argument("--eval-min-launch-recall", type=float, default=0.0, help="Skip slow online eval until validation launch recall reaches this value.")
     parser.add_argument("--target-imitation-score", type=float, default=0.0, help="Stop BC once validation imitation score reaches this value; <=0 disables.")
@@ -673,15 +1209,29 @@ def main() -> None:
     parser.add_argument("--no-numba", action="store_true")
     args = parser.parse_args()
 
-    ray.init(address=args.ray_address, ignore_reinit_error=True)
+    ray.init(
+        address=args.ray_address,
+        ignore_reinit_error=True,
+        runtime_env={
+            "excludes": [
+                "swanlog/**",
+                "wandb/**",
+                "tinyPPO/data/*.pkl",
+                "tinyPPO/runs/**/*.pt",
+                "tinyPPO/runs/**/*.pkl",
+                "tinyPPO/runs/**/train.log",
+            ]
+        },
+    )
     swan = _init_swanlab(args)
-    rows, collect_metrics = collect_dataset(args)
+    rows, collect_metrics, sample_weights = collect_dataset(args)
     if not rows:
         raise RuntimeError("no rows collected")
     print(json.dumps({"collect": collect_metrics}, ensure_ascii=True), flush=True)
     _log_swanlab(swan, {"collect": collect_metrics}, 0)
 
     shards = [rows[i :: args.trainers] for i in range(args.trainers)]
+    weight_shards = [sample_weights[i :: args.trainers] if sample_weights is not None else None for i in range(args.trainers)]
     resume_state: dict[str, torch.Tensor] | None = None
     resume_update = 0
     resume_model_cfg: dict[str, int] | None = None
@@ -690,7 +1240,10 @@ def main() -> None:
         resume_state = {key: value.detach().cpu() for key, value in resume_payload["state_dict"].items()}
         resume_update = 0 if args.resume_compatible else int(resume_payload.get("update", 0))
         if isinstance(resume_payload.get("model"), dict) and not args.resume_compatible:
-            resume_model_cfg = {key: bool(value) if key == "source_target_summary" else int(value) for key, value in resume_payload["model"].items()}
+            resume_model_cfg = {
+                key: bool(value) if key in {"source_target_summary", "target_pair_head", "target_pair_adapter", "target_pair_owner_head"} else int(value)
+                for key, value in resume_payload["model"].items()
+            }
         print(
             json.dumps(
                 {"event": "resume_loaded", "path": args.resume, "resume_update": resume_update, "model": resume_model_cfg},
@@ -706,6 +1259,9 @@ def main() -> None:
         "ship_buckets": len(SHIP_BUCKET_MULTIPLIERS),
         "action_slots": ACTION_SLOTS,
         "source_target_summary": bool(args.source_target_summary),
+        "target_pair_head": bool(args.target_pair_head),
+        "target_pair_adapter": bool(args.target_pair_adapter),
+        "target_pair_owner_head": bool(args.target_pair_owner_head),
     }
     init_model = TinyPolicyValueNet(**model_cfg)
     state = _cpu_state_dict(init_model)
@@ -719,6 +1275,17 @@ def main() -> None:
                     loaded_keys.append(key)
                 else:
                     skipped_keys.append(key)
+            adapter_copied = []
+            if bool(model_cfg.get("target_pair_adapter", False)):
+                for key, value in list(state.items()):
+                    if not key.startswith("target_pair_edge."):
+                        continue
+                    if key in loaded_keys:
+                        continue
+                    edge_key = "edge." + key.removeprefix("target_pair_edge.")
+                    if edge_key in state and tuple(state[edge_key].shape) == tuple(value.shape):
+                        state[key] = state[edge_key].detach().clone()
+                        adapter_copied.append(key)
             print(
                 json.dumps(
                     {
@@ -726,6 +1293,7 @@ def main() -> None:
                         "path": args.resume,
                         "loaded_tensors": len(loaded_keys),
                         "skipped_tensors": skipped_keys,
+                        "adapter_copied_from_edge": adapter_copied,
                     },
                     ensure_ascii=True,
                 ),
@@ -733,9 +1301,24 @@ def main() -> None:
             )
         else:
             state = resume_state
+    trainer_gpu_ids = _int_list(args.trainer_gpu_ids)
+    eval_gpu_ids = _int_list(args.eval_gpu_ids_manual)
+    if trainer_gpu_ids or eval_gpu_ids:
+        print(
+            json.dumps(
+                {"event": "manual_gpu_ids", "trainer_gpu_ids": trainer_gpu_ids, "eval_gpu_ids": eval_gpu_ids},
+                ensure_ascii=True,
+            ),
+            flush=True,
+        )
+
     actors = [
-        BCTrainEvalActor.options(num_cpus=args.cpus_per_trainer, num_gpus=args.gpus_per_trainer).remote(
+        BCTrainEvalActor.options(
+            num_cpus=args.cpus_per_trainer,
+            num_gpus=0.0 if trainer_gpu_ids else args.gpus_per_trainer,
+        ).remote(
             shard,
+            weight_shards[i],
             model_cfg,
             args.batch_size,
             args.val_frac,
@@ -747,15 +1330,34 @@ def main() -> None:
             args.ship_loss_weight,
             args.critical_action_weight,
             args.target_loss_mask,
+            args.target_margin_loss_weight,
+            args.target_margin,
+            args.target_margin_top_k,
+            args.slot_set_loss,
+            args.target_binary_loss_weight,
+            args.target_binary_pos_weight,
+            args.target_pair_softmax_loss_weight,
+            args.target_pair_margin_loss_weight,
+            args.target_pair_owner_loss_weight,
+            args.launch_count_loss_weight,
+            args.sample_weight_launch_scale,
+            args.sample_weight_target_scale,
+            args.sample_weight_ship_scale,
+            args.sample_weight_pair_scale,
+            args.sample_weight_count_scale,
             args.trainable_modules,
             args.seed + i,
+            f"cuda:{trainer_gpu_ids[i % len(trainer_gpu_ids)]}" if trainer_gpu_ids else "",
         )
         for i, shard in enumerate(shards)
         if shard
     ]
     eval_actors = [
-        BCEvalActor.options(num_cpus=args.eval_cpus_per_actor, num_gpus=args.gpus_per_eval_actor).remote(model_cfg)
-        for _ in range(args.eval_actors)
+        BCEvalActor.options(
+            num_cpus=args.eval_cpus_per_actor,
+            num_gpus=0.0 if eval_gpu_ids else args.gpus_per_eval_actor,
+        ).remote(model_cfg, f"cuda:{eval_gpu_ids[i % len(eval_gpu_ids)]}" if eval_gpu_ids else "")
+        for i in range(args.eval_actors)
     ]
     best_nonloss = -1.0
     best_imitation_score = -1e9
@@ -805,7 +1407,6 @@ def main() -> None:
             print(json.dumps({"event": "online_target_reached", "epoch": eval_epoch, "metrics": eval_metrics}, ensure_ascii=True), flush=True)
 
     def drain_ready_evals() -> None:
-        nonlocal best_nonloss, best_metrics, eval_completion_count, stop_after_epoch
         if not pending_eval_refs:
             return
         ready, _not_ready = ray.wait(list(pending_eval_refs), num_returns=len(pending_eval_refs), timeout=0.0)
@@ -815,7 +1416,6 @@ def main() -> None:
             eval_parts_by_epoch.setdefault(eval_epoch, []).append(part)
             maybe_finish_eval(eval_epoch)
 
-    eval_actor_cursor = 0
     start_epoch = resume_update + 1 if resume_update > 0 else 1
     for epoch in range(start_epoch, args.epochs + 1):
         drain_ready_evals()
@@ -837,13 +1437,23 @@ def main() -> None:
                 epoch,
                 {"collect": collect_metrics, "epoch": epoch, "train": train_metrics, "best_imitation": True},
             )
+            if args.eval_interval > 0 and epoch % args.eval_interval == 0:
+                save_checkpoint(
+                    Path(args.out).with_name(f"regular_bc_ray_best_imitation_e{epoch:04d}.pt"),
+                    state,
+                    model_cfg,
+                    epoch,
+                    {"collect": collect_metrics, "epoch": epoch, "train": train_metrics, "best_imitation": True},
+                )
+        if args.checkpoint_interval > 0 and epoch % args.checkpoint_interval == 0:
             save_checkpoint(
-                Path(args.out).with_name(f"regular_bc_ray_best_imitation_e{epoch:04d}.pt") if epoch % args.eval_interval == 0 else Path(args.best_out),
+                Path(args.out).with_name(f"regular_bc_ray_e{epoch:04d}.pt"),
                 state,
                 model_cfg,
                 epoch,
-                {"collect": collect_metrics, "epoch": epoch, "train": train_metrics, "best_imitation": True},
+                {"collect": collect_metrics, "epoch": epoch, "train": train_metrics},
             )
+            save_checkpoint(Path(args.out), state, model_cfg, epoch, {"collect": collect_metrics, "epoch": epoch, "train": train_metrics})
         summary: dict[str, Any] = {"epoch": epoch, "train": train_metrics}
         if args.target_imitation_score > 0.0 and epoch >= args.min_epochs and imitation_score >= args.target_imitation_score:
             stop_after_epoch = epoch
@@ -864,44 +1474,52 @@ def main() -> None:
             }
 
         should_eval = (
-            epoch % args.eval_interval == 0
+            args.eval_interval > 0
+            and epoch % args.eval_interval == 0
             and float(train_metrics.get("val_launch_recall", 0.0)) >= args.eval_min_launch_recall
             and len(eval_expected_parts) < args.max_pending_evals
         )
         if should_eval:
-            actors_for_eval = min(len(eval_actors), max(1, args.eval_games))
+            actors_for_eval = len(eval_actors) if args.eval_games_per_actor > 0 else min(len(eval_actors), max(1, args.eval_games))
             selected_eval_actors = [eval_actors[(eval_actor_cursor + i) % len(eval_actors)] for i in range(actors_for_eval)]
             eval_actor_cursor = (eval_actor_cursor + actors_for_eval) % len(eval_actors)
-            games_parts = [args.eval_games // actors_for_eval] * actors_for_eval
-            for i in range(args.eval_games % actors_for_eval):
-                games_parts[i] += 1
+            if args.eval_games_per_actor > 0:
+                games_parts = [args.eval_games_per_actor] * actors_for_eval
+            else:
+                games_parts = [args.eval_games // actors_for_eval] * actors_for_eval
+                for i in range(args.eval_games % actors_for_eval):
+                    games_parts[i] += 1
+            total_eval_games = sum(games_parts)
             eval_state = {key: value.detach().cpu() for key, value in state.items()}
             eval_refs = []
             for i, (actor, games) in enumerate(zip(selected_eval_actors, games_parts, strict=True)):
                 if games <= 0:
                     continue
-                eval_refs.append(actor.eval_vs_regular.remote(
-                    state,
-                    games,
-                    args.seed + 10_000 + epoch * 1_000 + i * 100,
-                    args.eval_stochastic,
-                    args.launch_bias,
-                    args.ship_bias,
-                    args.launch_temperature,
-                ))
+                eval_refs.append(
+                    actor.eval_vs_regular.remote(
+                        state,
+                        games,
+                        args.seed + 10_000 + epoch * 1_000 + i * 100,
+                        args.eval_stochastic,
+                        args.launch_bias,
+                        args.ship_bias,
+                        args.launch_temperature,
+                    )
+                )
             pending_eval_states[epoch] = eval_state
             for ref in eval_refs:
                 pending_eval_refs[ref] = epoch
             eval_expected_parts[epoch] = len(eval_refs)
             summary["async_eval_submitted"] = {
                 "parts": float(len(eval_refs)),
-                "games": float(args.eval_games),
+                "games": float(total_eval_games),
+                "games_per_actor": float(args.eval_games_per_actor) if args.eval_games_per_actor > 0 else float(total_eval_games / max(1, len(eval_refs))),
                 "pending_evals": float(len(eval_expected_parts)),
             }
             print(json.dumps(summary, ensure_ascii=True), flush=True)
             _log_swanlab(swan, summary, epoch)
         else:
-            if epoch % args.eval_interval == 0:
+            if args.eval_interval > 0 and epoch % args.eval_interval == 0:
                 if float(train_metrics.get("val_launch_recall", 0.0)) < args.eval_min_launch_recall:
                     summary["eval_skipped"] = {
                         "reason": "val_launch_recall_below_threshold",
@@ -917,6 +1535,13 @@ def main() -> None:
             print(json.dumps(summary, ensure_ascii=True), flush=True)
             _log_swanlab(swan, summary, epoch)
         drain_ready_evals()
+
+    if pending_eval_refs:
+        for actor in actors:
+            try:
+                ray.kill(actor, no_restart=True)
+            except Exception:
+                pass
 
     while pending_eval_refs and stop_after_epoch is None:
         done, _not_ready = ray.wait(list(pending_eval_refs), num_returns=1, timeout=30.0)

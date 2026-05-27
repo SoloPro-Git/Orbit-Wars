@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import random
 from collections import Counter
 from dataclasses import dataclass
@@ -19,7 +18,7 @@ from training2.rulebase_bridge import make_rulebase_agent
 from tinyPPO.agents import TinyPPOAgent
 from tinyPPO.agents import ACTION_SLOTS, MAX_ACTIONS_PER_SOURCE_SAFETY, all_planets_target_mask, candidate_target_mask, safe_target_mask
 from tinyPPO.features import MAX_PLANETS, encode_obs
-from tinyPPO.imitation_regular import row_from_regular_action
+from tinyPPO.imitation_regular import _bucket_for_action, row_from_regular_action
 
 
 @dataclass
@@ -89,10 +88,12 @@ def collect_regular_states(
     return rows
 
 
-def action_keys(obs: dict[str, Any], action: list[list]) -> tuple[Counter, Counter, Counter]:
+def action_keys(obs: dict[str, Any], player: int, action: list[list]) -> tuple[Counter, Counter, Counter]:
     source_keys: Counter = Counter()
     source_target_keys: Counter = Counter()
     source_target_ship_keys: Counter = Counter()
+    planets = list(obs.get("planets", []))[:MAX_PLANETS]
+    id_to_planet = {int(planet[0]): planet for planet in planets}
     for move in action:
         if not isinstance(move, list) or len(move) < 3:
             continue
@@ -105,7 +106,11 @@ def action_keys(obs: dict[str, Any], action: list[list]) -> tuple[Counter, Count
         target_id = infer_target_planet_id(obs, source_id, angle, ships)
         if target_id is None:
             continue
-        ship_bucket = int(math.floor(math.log2(max(1, ships))))
+        source = id_to_planet.get(source_id)
+        target = id_to_planet.get(int(target_id))
+        if source is None or target is None:
+            continue
+        ship_bucket = _bucket_for_action(obs, player, source, target, ships)
         source_keys[source_id] += 1
         source_target_keys[(source_id, int(target_id))] += 1
         source_target_ship_keys[(source_id, int(target_id), ship_bucket)] += 1
@@ -144,6 +149,8 @@ def diagnose_policy_on_label(
     out = agent.model(**batch)
     source_logits = out["source_logits"][0]
     target_logits = out["target_logits"][0]
+    if "target_pair_logits" in out and abs(agent.target_pair_weight) > 1e-9:
+        target_logits = target_logits + agent.target_pair_weight * out["target_pair_logits"][0][:, None, :]
     train_mask = torch.tensor(bc_row.target_safety_mask, dtype=torch.bool, device=agent.device)
     if target_mask_mode == "candidate":
         runtime_mask_np = candidate_target_mask(obs, player, top_k=target_top_k, include_friendly=include_friendly_targets)
@@ -212,6 +219,7 @@ def evaluate_states(args: argparse.Namespace, states: list[RawDecision], launch_
         target_top_k=args.target_top_k,
         include_friendly_targets=args.include_friendly_targets,
         target_mask_mode=args.target_mask_mode,
+        target_pair_weight=args.target_pair_weight,
     )
 
     source_p = source_r = source_f1 = 0.0
@@ -230,6 +238,8 @@ def evaluate_states(args: argparse.Namespace, states: list[RawDecision], launch_
     skipped_rows = 0
     model_errors = 0
     diag_sums: dict[str, float] = {}
+    diag_action_sums: dict[str, float] = {}
+    diag_action_weight = 0.0
 
     iterator = states
     if args.progress:
@@ -256,15 +266,20 @@ def evaluate_states(args: argparse.Namespace, states: list[RawDecision], launch_
                 args.include_friendly_targets,
                 args.target_mask_mode,
             )
+            label_actions = float(diag.get("label_actions", 0.0))
             for key, value in diag.items():
-                diag_sums[key] = diag_sums.get(key, 0.0) + float(value)
+                if key.startswith("label_") and key != "label_actions":
+                    diag_action_sums[key] = diag_action_sums.get(key, 0.0) + float(value) * label_actions
+                else:
+                    diag_sums[key] = diag_sums.get(key, 0.0) + float(value)
+            diag_action_weight += label_actions
         try:
             model_action = agent(row.obs)
         except Exception:
             model_errors += 1
             model_action = []
-        true_source, true_target, true_action = action_keys(row.obs, row.regular_action)
-        pred_source, pred_target, pred_action = action_keys(row.obs, model_action)
+        true_source, true_target, true_action = action_keys(row.obs, row.player, row.regular_action)
+        pred_source, pred_target, pred_action = action_keys(row.obs, row.player, model_action)
         row_key = labelled_rows
         micro_pred_source.update({(row_key, key): value for key, value in pred_source.items()})
         micro_true_source.update({(row_key, key): value for key, value in true_source.items()})
@@ -325,6 +340,9 @@ def evaluate_states(args: argparse.Namespace, states: list[RawDecision], launch_
     if args.diagnose_policy:
         for key, value in diag_sums.items():
             result[f"diag_{key}"] = value / denom
+        action_denom = max(1.0, diag_action_weight)
+        for key, value in diag_action_sums.items():
+            result[f"diag_{key}"] = value / action_denom
     return result
 
 
@@ -385,6 +403,7 @@ def main() -> None:
     parser.add_argument("--target-top-k", type=int, default=6)
     parser.add_argument("--include-friendly-targets", action="store_true")
     parser.add_argument("--target-mask-mode", choices=["candidate", "safe", "all_planets"], default="candidate")
+    parser.add_argument("--target-pair-weight", type=float, default=1.0)
     parser.add_argument("--stochastic", action="store_true")
     parser.add_argument("--diagnose-policy", action="store_true", help="Also compare raw policy logits and runtime candidate masks against regular labels.")
     parser.add_argument("--no-numba", action="store_true")

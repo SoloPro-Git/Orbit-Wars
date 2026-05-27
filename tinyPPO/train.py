@@ -375,6 +375,7 @@ def save_checkpoint(path: Path, model: TinyPolicyValueNet, args: argparse.Namesp
                 "ship_buckets": int(getattr(args, "ship_buckets", 0)),
                 "action_slots": args.action_slots,
                 "source_target_summary": bool(getattr(args, "source_target_summary", False)),
+                "target_pair_head": bool(getattr(args, "target_pair_head", False)),
             },
             "update": update,
             "metrics": metrics,

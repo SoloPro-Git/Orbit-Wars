@@ -105,6 +105,7 @@ class ProposalTrainerActor:
         send_pos_weight: float,
         target_loss_weight: float,
         ship_loss_weight: float,
+        count_loss_weight: float,
         send_threshold: float,
         initial_state_dict: dict[str, torch.Tensor] | None = None,
         initial_info: dict[str, Any] | None = None,
@@ -138,6 +139,7 @@ class ProposalTrainerActor:
         self.send_pos_weight = float(send_pos_weight)
         self.target_loss_weight = float(target_loss_weight)
         self.ship_loss_weight = float(ship_loss_weight)
+        self.count_loss_weight = float(count_loss_weight)
         self.send_threshold = float(send_threshold)
 
     def train_steps(self, steps: int, batch_size: int, active_row_frac: float) -> dict[str, float]:
@@ -154,6 +156,7 @@ class ProposalTrainerActor:
                 send_pos_weight=self.send_pos_weight,
                 target_loss_weight=self.target_loss_weight,
                 ship_loss_weight=self.ship_loss_weight,
+                count_loss_weight=self.count_loss_weight,
                 send_threshold=self.send_threshold,
             )
             for key, value in metrics.items():
@@ -220,6 +223,7 @@ def main() -> None:
     parser.add_argument("--send-pos-weight", type=float, default=1.0)
     parser.add_argument("--target-loss-weight", type=float, default=1.0)
     parser.add_argument("--ship-loss-weight", type=float, default=1.0)
+    parser.add_argument("--count-loss-weight", type=float, default=0.0)
     parser.add_argument("--send-threshold", type=float, default=0.5)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
@@ -292,6 +296,7 @@ def main() -> None:
             args.send_pos_weight,
             args.target_loss_weight,
             args.ship_loss_weight,
+            args.count_loss_weight,
             args.send_threshold,
             initial_state_ref,
             initial_info,

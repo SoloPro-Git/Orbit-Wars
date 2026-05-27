@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 from pathlib import Path
 from typing import Iterable
 
@@ -53,6 +54,7 @@ def train_batch(
     device: torch.device | str = "cpu",
     value_weight: float = 1.0,
     entropy_weight: float = 0.01,
+    proposal_weight: float = 0.25,
 ) -> dict[str, float]:
     (
         planets,
@@ -71,6 +73,10 @@ def train_batch(
     value_loss = F.mse_loss(value, value_target)
     probs = torch.softmax(logits, dim=-1)
     entropy = -(probs * logp).sum(dim=-1).mean()
+    target_entropy = -(policy_target * torch.log(policy_target.clamp_min(1e-8))).sum(dim=-1).mean()
+    target_max = policy_target.max(dim=-1).values.mean()
+    policy_max = probs.max(dim=-1).values.mean()
+    candidate_count = candidate_mask.sum(dim=-1).mean()
     proposal_loss = torch.tensor(0.0, device=device)
     proposal_send_acc = torch.tensor(0.0, device=device)
     if any("proposal_valid" in row for row in rows):
@@ -124,7 +130,7 @@ def train_batch(
         proposal_loss = send_loss + target_loss + ship_loss
         proposal_send_acc = (((proposal["send_logits"].sigmoid() >= 0.5).float() == prop_send).float() * prop_valid).sum() / valid_denom
 
-    loss = policy_loss + value_weight * value_loss + 0.25 * proposal_loss - entropy_weight * entropy
+    loss = policy_loss + value_weight * value_loss + proposal_weight * proposal_loss - entropy_weight * entropy
 
     opt.zero_grad()
     loss.backward()
@@ -135,8 +141,15 @@ def train_batch(
         "policy_loss": float(policy_loss.item()),
         "value_loss": float(value_loss.item()),
         "proposal_loss": float(proposal_loss.item()),
+        "proposal_weight": float(proposal_weight),
         "proposal_send_acc": float(proposal_send_acc.item()),
         "entropy": float(entropy.item()),
+        "target_entropy": float(target_entropy.item()),
+        "target_max": float(target_max.item()),
+        "policy_max": float(policy_max.item()),
+        "candidate_count": float(candidate_count.item()),
+        "value_pred_mean": float(value.mean().item()),
+        "value_target_mean": float(value_target.mean().item()),
     }
 
 
@@ -149,12 +162,16 @@ def iter_jsonl(path: str | Path) -> Iterable[dict]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", required=True)
+    parser.add_argument("--data", required=True, nargs="+")
     parser.add_argument("--out", default="alphaZeroLike/checkpoints/latest.pt")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--lr", type=float, default=2e-4)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--value-weight", type=float, default=1.0)
+    parser.add_argument("--entropy-weight", type=float, default=0.01)
+    parser.add_argument("--proposal-weight", type=float, default=0.25)
     parser.add_argument("--resume", help="Optional alphaZeroLike checkpoint to continue training.")
     parser.add_argument(
         "--init-from-training2",
@@ -162,7 +179,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    rows = list(iter_jsonl(args.data))
+    rows = [row for path in args.data for row in iter_jsonl(path)]
     model = AlphaZeroLikeNet().to(args.device)
     if args.resume:
         ckpt = torch.load(args.resume, map_location=args.device, weights_only=False)
@@ -179,9 +196,19 @@ def main() -> None:
             }
         )
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    rng = random.Random(args.seed)
     for epoch in range(args.epochs):
+        rng.shuffle(rows)
         for start in range(0, len(rows), args.batch_size):
-            metrics = train_batch(model, opt, rows[start : start + args.batch_size], device=args.device)
+            metrics = train_batch(
+                model,
+                opt,
+                rows[start : start + args.batch_size],
+                device=args.device,
+                value_weight=args.value_weight,
+                entropy_weight=args.entropy_weight,
+                proposal_weight=args.proposal_weight,
+            )
         print({"epoch": epoch, **metrics})
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

@@ -44,11 +44,26 @@ def result_value(obs: dict[str, Any], player: int) -> float:
     players = sorted({int(p[1]) for p in obs.get("planets", []) if int(p[1]) >= 0})
     players = sorted(set(players) | {0, 1})
     scores = [(pid, _score(obs, pid)) for pid in players]
-    scores.sort(key=lambda row: row[1], reverse=True)
-    rank = next((i for i, (pid, _) in enumerate(scores) if pid == player), len(scores) - 1)
     if len(scores) <= 1:
         return 0.0
+    score_by_player = dict(scores)
+    player_score = score_by_player.get(player, 0.0)
+    ranks = [rank for rank, (_, score) in enumerate(sorted(scores, key=lambda row: row[1], reverse=True)) if score == player_score]
+    if not ranks:
+        return -1.0
+    rank = float(sum(ranks) / len(ranks))
     return 1.0 - 2.0 * rank / (len(scores) - 1)
+
+
+def margin_value(obs: dict[str, Any], player: int, scale: float = 50.0) -> float:
+    players = sorted({int(p[1]) for p in obs.get("planets", []) if int(p[1]) >= 0})
+    players = sorted(set(players) | {0, 1})
+    own = _score(obs, player)
+    opponents = [_score(obs, pid) for pid in players if pid != player]
+    if not opponents:
+        return 0.0
+    margin = own - max(opponents)
+    return float(math.tanh(margin / max(float(scale), 1e-6)))
 
 
 @dataclass(frozen=True)

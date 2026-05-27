@@ -1,5 +1,17 @@
 # Codex Project Notes
 
+## RL Experiment Rulebook
+
+Before making RL architecture, reward, candidate-generation, self-play, or
+training-loop changes, read and apply:
+
+- `docs/rl_lessons_so_far_20260521.md`
+
+In particular: keep the fast simulator path first, change one delta at a time,
+look for rollout signs of life rather than loss-only progress, preserve a
+working baseline's stabilizing constraints unless a test proves otherwise, and
+be explicit about stop criteria before spending GPU time.
+
 ## Local Orbit Wars Environment
 
 For local development, tests, data generation, and training smoke checks, prefer

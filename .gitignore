@@ -25,3 +25,12 @@ training2/.ray_temp/*
 kaggle_ipynb/
 *.log
 training2/.ray_*
+
+# Local experiment outputs and model/data artifacts
+alphaZeroLike/logs/*
+alphaZeroLike/checkpoints/*
+*.pt
+*.pkl
+tinyPPO/data/*
+tinyPPO/runs/*
+swanlog/*

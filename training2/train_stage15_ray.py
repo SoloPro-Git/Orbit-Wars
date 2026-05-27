@@ -40,6 +40,14 @@ from training2.proposal import ProposalConfig, proposals_from_model
 from training2.rulebase_bridge import make_rulebase_agent
 
 
+def _make_proposal_config(config: dict | None) -> ProposalConfig:
+    fields = getattr(ProposalConfig, "__dataclass_fields__", {})
+    if not fields:
+        return ProposalConfig(**(config or {}))
+    filtered = {key: value for key, value in (config or {}).items() if key in fields}
+    return ProposalConfig(**filtered)
+
+
 def _load_yaml(path: str) -> dict[str, Any]:
     p = Path(path)
     if not p.exists():
@@ -59,6 +67,36 @@ def _resolve_project_path(path: str | None) -> str | None:
 
 def _raw_obs(env, player: int) -> dict:
     return env.steps[-1][player]["observation"]
+
+
+def _make_training_env(
+    configuration: dict,
+    *,
+    backend: str,
+    debug: bool = True,
+    keep_history: bool = True,
+    copy_observations: bool = True,
+    use_numba: bool = False,
+):
+    try:
+        return make_orbit_wars_env(
+            configuration,
+            backend=backend,
+            debug=debug,
+            keep_history=keep_history,
+            copy_observations=copy_observations,
+            use_numba=use_numba,
+        )
+    except TypeError as exc:
+        if "copy_observations" not in str(exc):
+            raise
+        return make_orbit_wars_env(
+            configuration,
+            backend=backend,
+            debug=debug,
+            keep_history=keep_history,
+            use_numba=use_numba,
+        )
 
 
 def _score(obs: dict, player: int) -> float:
@@ -254,7 +292,11 @@ class Stage15RolloutActor:
         device: str,
         env_backend: str = "kaggle",
         env_use_numba: bool = False,
+        env_keep_history: bool = True,
+        env_copy_observations: bool = True,
+        episode_steps: int = 500,
         torch_threads: int | None = None,
+        include_heuristics: bool = True,
     ) -> None:
         self.worker_id = worker_id
         self.device = device
@@ -266,21 +308,27 @@ class Stage15RolloutActor:
         self.oracle = oracle
         self.rulebase = make_rulebase_agent(oracle)
         self.max_candidates = max_candidates
-        self.proposal_cfg = ProposalConfig(**proposal_cfg)
+        self.proposal_cfg = _make_proposal_config(proposal_cfg)
         self.env_backend = env_backend
         self.env_use_numba = env_use_numba
+        self.env_keep_history = env_keep_history
+        self.env_copy_observations = env_copy_observations
+        self.episode_steps = episode_steps
         self.torch_threads = torch.get_num_threads()
+        self.include_heuristics = include_heuristics
 
     def _rulebase_margin(self, seed: int, players: int, model_pid: int) -> tuple[float, float]:
-        env = make_orbit_wars_env(
-            {"episodeSteps": 500, "seed": seed},
+        env = _make_training_env(
+            {"episodeSteps": self.episode_steps, "seed": seed},
             backend=self.env_backend,
             debug=True,
+            keep_history=self.env_keep_history,
+            copy_observations=self.env_copy_observations,
             use_numba=self.env_use_numba,
         )
         env.reset(players)
         agents = {pid: make_rulebase_agent(self.oracle) for pid in range(players)}
-        for _ in range(500):
+        for _ in range(self.episode_steps):
             actions = [agents[pid](_raw_obs(env, pid)) or [] for pid in range(players)]
             env.step(actions)
             if all(state.get("status") != "ACTIVE" for state in env.steps[-1]):
@@ -308,6 +356,7 @@ class Stage15RolloutActor:
         training_mode: str,
         gamma: float,
         gae_lambda: float,
+        baseline_sample_prob: float = 1.0,
     ) -> dict:
         self.model.load_state_dict(state_dict, strict=False)
         self.model.eval()
@@ -329,6 +378,7 @@ class Stage15RolloutActor:
         model_forward_sec = 0.0
         env_step_sec = 0.0
         baseline_sec = 0.0
+        baseline_games = 0
 
         for game in range(games):
             t_model_game = time.time()
@@ -337,10 +387,12 @@ class Stage15RolloutActor:
             players = 4 if rng.random() < four_player_prob else 2
             games_4p += int(players == 4)
             games_2p += int(players == 2)
-            env = make_orbit_wars_env(
-                {"episodeSteps": 500, "seed": seed},
+            env = _make_training_env(
+                {"episodeSteps": self.episode_steps, "seed": seed},
                 backend=self.env_backend,
                 debug=True,
+                keep_history=self.env_keep_history,
+                copy_observations=self.env_copy_observations,
                 use_numba=self.env_use_numba,
             )
             env.reset(players)
@@ -350,7 +402,7 @@ class Stage15RolloutActor:
             pending: list[dict] = []
             steps = 0
 
-            for steps in range(500):
+            for steps in range(self.episode_steps):
                 actions = []
                 for pid in range(players):
                     obs = _raw_obs(env, pid)
@@ -368,6 +420,7 @@ class Stage15RolloutActor:
                         candidate_rulebase,
                         max_candidates=self.max_candidates,
                         extra_candidates=extra,
+                        include_heuristics=self.include_heuristics,
                     )
                     candidate_sec += time.time() - t_candidate
                     if not candidates:
@@ -429,10 +482,16 @@ class Stage15RolloutActor:
             opp_best = max(_score(final_obs, pid) for pid in range(players) if pid != model_pid)
             margin = my_score - opp_best
             if reward_mode == "paired_margin_advantage":
-                t_baseline = time.time()
-                baseline_margin, _ = self._rulebase_margin(seed, players, model_pid)
-                baseline_sec += time.time() - t_baseline
-                advantage = margin - baseline_margin
+                sample_prob = min(max(float(baseline_sample_prob), 0.0), 1.0)
+                if sample_prob > 0.0 and rng.random() < sample_prob:
+                    t_baseline = time.time()
+                    baseline_margin, _ = self._rulebase_margin(seed, players, model_pid)
+                    baseline_sec += time.time() - t_baseline
+                    baseline_games += 1
+                    advantage = margin - baseline_margin
+                else:
+                    baseline_margin = 0.0
+                    advantage = margin
                 value = float(np.tanh(advantage / max(advantage_value_scale, 1e-6)))
                 positive_advantage = advantage >= advantage_margin_threshold
             else:
@@ -504,6 +563,7 @@ class Stage15RolloutActor:
             "fallback_targets": fallback_targets,
             "model_game_sec": model_game_sec,
             "baseline_sec": baseline_sec,
+            "baseline_games": baseline_games,
             "opponent_rulebase_sec": opponent_rulebase_sec,
             "candidate_sec": candidate_sec,
             "encode_sec": encode_sec,
@@ -605,14 +665,20 @@ class Stage15EvalActor:
         proposal_cfg: dict,
         env_backend: str = "kaggle",
         env_use_numba: bool = False,
+        env_keep_history: bool = True,
+        env_copy_observations: bool = True,
+        episode_steps: int = 500,
     ) -> None:
         self.worker_id = worker_id
         self.model_cfg = model_cfg
         self.oracle = oracle
         self.max_candidates = max_candidates
-        self.proposal_cfg = ProposalConfig(**proposal_cfg)
+        self.proposal_cfg = _make_proposal_config(proposal_cfg)
         self.env_backend = env_backend
         self.env_use_numba = env_use_numba
+        self.env_keep_history = env_keep_history
+        self.env_copy_observations = env_copy_observations
+        self.episode_steps = episode_steps
 
     def evaluate(self, state_dict: dict, games: int, seed_offset: int, four_player_prob: float, device: str) -> dict:
         model = _make_model(self.model_cfg, device)
@@ -627,16 +693,18 @@ class Stage15EvalActor:
             players = 4 if rng.random() < four_player_prob else 2
             games_4p += int(players == 4)
             games_2p += int(players == 2)
-            env = make_orbit_wars_env(
-                {"episodeSteps": 500, "seed": seed},
+            env = _make_training_env(
+                {"episodeSteps": self.episode_steps, "seed": seed},
                 backend=self.env_backend,
                 debug=True,
+                keep_history=self.env_keep_history,
+                copy_observations=self.env_copy_observations,
                 use_numba=self.env_use_numba,
             )
             env.reset(players)
             model_pid = game % players
             rulebases = {pid: make_rulebase_agent(self.oracle) for pid in range(players)}
-            for _ in range(500):
+            for _ in range(self.episode_steps):
                 actions = []
                 for pid in range(players):
                     obs = _raw_obs(env, pid)
@@ -713,6 +781,9 @@ def main() -> None:
     env_cfg = cfg.get("env", {})
     env_backend = str(stage.get("env_backend", env_cfg.get("backend", "kaggle")))
     env_use_numba = bool(stage.get("env_use_numba", env_cfg.get("use_numba", False)))
+    env_keep_history = bool(stage.get("env_keep_history", env_cfg.get("keep_history", True)))
+    env_copy_observations = bool(stage.get("env_copy_observations", env_cfg.get("copy_observations", True)))
+    rollout_episode_steps = int(stage.get("rollout_episode_steps", env_cfg.get("episode_steps", 500)))
     rollout_workers = int(stage.get("num_rollout_workers", ray_cfg.get("num_data_workers", 16)))
     trainer_workers = int(stage.get("num_trainer_workers", ray_cfg.get("num_trainer_workers", 1)))
     eval_workers = int(stage.get("num_eval_workers", ray_cfg.get("num_eval_workers", 4)))
@@ -745,6 +816,8 @@ def main() -> None:
     ppo_gae_lambda = float(stage.get("ppo_gae_lambda", 0.95))
     bc_anchor_weight = float(stage.get("bc_anchor_weight", 0.0))
     reward_mode = str(stage.get("reward_mode", "paired_margin_advantage"))
+    baseline_sample_prob = float(stage.get("baseline_sample_prob", 1.0))
+    rollout_include_heuristics = bool(stage.get("rollout_include_heuristics", True))
     advantage_margin_threshold = float(stage.get("advantage_margin_threshold", 0.0))
     advantage_value_scale = float(stage.get("advantage_value_scale", 2000.0))
     min_policy_weight = float(stage.get("min_policy_weight", 0.25))
@@ -794,7 +867,11 @@ def main() -> None:
             rollout_device,
             env_backend,
             env_use_numba,
+            env_keep_history,
+            env_copy_observations,
+            rollout_episode_steps,
             rollout_torch_threads,
+            rollout_include_heuristics,
         )
         for i in range(rollout_workers)
     ]
@@ -807,6 +884,9 @@ def main() -> None:
             proposal_cfg,
             env_backend,
             env_use_numba,
+            env_keep_history,
+            env_copy_observations,
+            rollout_episode_steps,
         )
         for i in range(eval_workers)
     ]
@@ -843,6 +923,8 @@ def main() -> None:
                 "ppo_gae_lambda": ppo_gae_lambda,
                 "bc_anchor_weight": bc_anchor_weight,
                 "reward_mode": reward_mode,
+                "baseline_sample_prob": baseline_sample_prob,
+                "rollout_include_heuristics": rollout_include_heuristics,
                 "advantage_margin_threshold": advantage_margin_threshold,
                 "advantage_value_scale": advantage_value_scale,
                 "proposal_enabled": proposal_cfg.get("enabled", True),
@@ -850,6 +932,9 @@ def main() -> None:
                 "proposal_send_threshold": proposal_cfg.get("send_threshold"),
                 "env_backend": env_backend,
                 "env_use_numba": env_use_numba,
+                "env_keep_history": env_keep_history,
+                "env_copy_observations": env_copy_observations,
+                "rollout_episode_steps": rollout_episode_steps,
             },
             ensure_ascii=False,
         ),
@@ -900,6 +985,7 @@ def main() -> None:
                     training_mode=training_mode,
                     gamma=ppo_gamma,
                     gae_lambda=ppo_gae_lambda,
+                    baseline_sample_prob=baseline_sample_prob,
                 )
                 in_flight[ref] = actor_idx
 
@@ -994,6 +1080,7 @@ def main() -> None:
                 "rollout/avg_advantage_margin": float(np.mean([p["avg_advantage_margin"] for p in parts])) if parts else 0.0,
                 "rollout/positive_advantage_rate": sum(p["positive_advantage_games"] for p in parts)
                 / max(sum(p["games"] for p in parts), 1),
+                "rollout/baseline_games": sum(p.get("baseline_games", 0) for p in parts),
                 "rollout/selected_proposal": sum(p["selected_proposal"] for p in parts),
                 "rollout/selected_oracle": sum(p["selected_oracle"] for p in parts),
                 "rollout/fallback_targets": sum(p["fallback_targets"] for p in parts),
@@ -1078,7 +1165,7 @@ def main() -> None:
 
             ray.get(trainers[0].save.remote(str(output_dir / "latest.pt"), iteration, cfg, best_win_rate))
             if swan:
-                swan.log(log, step=iteration)
+                swan.log({key: value for key, value in log.items() if isinstance(value, (int, float))}, step=iteration)
             print(json.dumps(log, ensure_ascii=False), flush=True)
             progress.set_postfix(
                 wr=f"{log.get('rollout/win_rate', 0.0):.3f}",

@@ -12,7 +12,7 @@ import torch
 
 from alphaZeroLike.candidates import CandidateGenerator
 from alphaZeroLike.env_clone import clone_fast_env
-from alphaZeroLike.features import encode_search_position, result_value
+from alphaZeroLike.features import encode_search_position, margin_value, result_value
 from alphaZeroLike.proposal import ProposalConfig, proposals_from_model
 
 
@@ -26,6 +26,10 @@ class MCTSConfig:
     rollout_depth: int = 8
     max_candidates: int = 64
     max_moves: int = 16
+    value_mode: str = "rank"
+    margin_scale: float = 50.0
+    root_eval_mode: str = "puct"
+    max_root_evals: int = 0
 
 
 @dataclass
@@ -133,6 +137,27 @@ class ShallowPUCTSearch:
             priors = (1.0 - self.cfg.dirichlet_frac) * priors + self.cfg.dirichlet_frac * noise
         priors /= max(float(priors.sum()), 1e-12)
 
+        if self.cfg.root_eval_mode == "exhaustive":
+            opponents = {
+                pid: self.opponent_factory()
+                for pid in range(getattr(env, "num_agents", 0))
+                if pid != player and self.opponent_factory is not None
+            }
+            eval_count = len(candidates)
+            if self.cfg.max_root_evals > 0:
+                eval_count = min(eval_count, int(self.cfg.max_root_evals))
+            order = sorted(range(len(candidates)), key=lambda i: float(priors[i]), reverse=True)[:eval_count]
+            visits = np.zeros(len(candidates), dtype=np.float64)
+            values = np.zeros(len(candidates), dtype=np.float64)
+            for idx in order:
+                values[idx] = self._rollout_value(env, player, candidates[idx], opponents)
+                visits[idx] = 1.0
+            q_values = np.divide(values, np.maximum(visits, 1.0))
+            selected = max(order, key=lambda i: (float(q_values[i]), float(priors[i]))) if order else int(np.argmax(priors))
+            policy = np.zeros(len(candidates), dtype=np.float64)
+            policy[selected] = 1.0
+            return SearchResult(candidates, priors, visits, q_values, policy, int(selected), root_value)
+
         visits = np.zeros(len(candidates), dtype=np.float64)
         values = np.zeros(len(candidates), dtype=np.float64)
         opponents = {
@@ -162,6 +187,30 @@ class ShallowPUCTSearch:
             policy /= max(float(policy.sum()), 1e-12)
             selected = int(rng.choices(range(len(candidates)), weights=policy.tolist(), k=1)[0])
         return SearchResult(candidates, priors, visits, q_values, policy, selected, root_value)
+
+    def policy_action(self, env, player: int, *, rng: random.Random | None = None) -> SearchResult:
+        rng = rng or random.Random()
+        obs = _raw_obs(env, player)
+        extra = proposals_from_model(obs, player, self.model, self.device, self.proposal_cfg)
+        candidates, _ = self.candidate_generator(obs, extra_candidates=extra)
+        if not candidates:
+            empty = np.zeros(0, dtype=np.float64)
+            return SearchResult([], empty, empty, empty, empty, 0, 0.0)
+
+        priors, root_value = evaluate_candidates(
+            self.model,
+            obs,
+            player,
+            candidates,
+            device=self.device,
+            max_candidates=self.cfg.max_candidates,
+            max_moves=self.cfg.max_moves,
+        )
+        priors = priors[: len(candidates)]
+        priors /= max(float(priors.sum()), 1e-12)
+        selected = int(rng.choices(range(len(candidates)), weights=priors.tolist(), k=1)[0])
+        zeros = np.zeros(len(candidates), dtype=np.float64)
+        return SearchResult(candidates, priors, zeros, zeros, priors.copy(), selected, root_value)
 
     def _rollout_value(
         self,
@@ -200,4 +249,6 @@ class ShallowPUCTSearch:
             if all(state.get("status") != "ACTIVE" for state in sim.steps[-1]):
                 break
         final_obs = _raw_obs(sim, player)
+        if self.cfg.value_mode == "margin_tanh":
+            return margin_value(final_obs, player, self.cfg.margin_scale)
         return result_value(final_obs, player)

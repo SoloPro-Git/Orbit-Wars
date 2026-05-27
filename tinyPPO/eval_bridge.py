@@ -8,7 +8,7 @@ from training2 import make_fast_orbit_wars
 from training2.rulebase_bridge import make_rulebase_agent
 
 from tinyPPO.agents import TinyPPOAgent
-from tinyPPO.bridge_agents import RegularSourceBridgeAgent, aggregate_bridge_stats, parse_float_list, parse_int_list
+from tinyPPO.bridge_agents import RegularSourceBridgeAgent, RegularSourceDropGateAgent, aggregate_bridge_stats, parse_float_list, parse_int_list
 from tinyPPO.features import score
 
 
@@ -23,13 +23,13 @@ def _run_agent_pair(agent_factory, opponent_factory, games: int, seed: int, epis
             pass
 
     wins = losses = draws = 0
-    agents_seen: list[RegularSourceBridgeAgent] = []
+    agents_seen: list[RegularSourceBridgeAgent | RegularSourceDropGateAgent] = []
     rewards: list[float] = []
     for i in iterator:
         model_seat = i % 2
         agents = [opponent_factory(), opponent_factory()]
         model_agent = agent_factory()
-        if isinstance(model_agent, RegularSourceBridgeAgent):
+        if isinstance(model_agent, (RegularSourceBridgeAgent, RegularSourceDropGateAgent)):
             agents_seen.append(model_agent)
         agents[model_seat] = model_agent
         env = make_fast_orbit_wars({"episodeSteps": episode_steps, "seed": seed + i}, keep_history=False, use_numba=use_numba)
@@ -79,6 +79,9 @@ def main() -> None:
     parser.add_argument("--launch-temperature", type=float, default=1.0)
     parser.add_argument("--reduce", choices=["noisy_or", "max", "mean"], default="noisy_or")
     parser.add_argument("--include-pure", action="store_true")
+    parser.add_argument("--include-drop-gate", action="store_true")
+    parser.add_argument("--drop-gate-biases", default="2.0")
+    parser.add_argument("--drop-gate-deterministic", action="store_true")
     parser.add_argument("--no-numba", action="store_true")
     parser.add_argument("--progress", action="store_true")
     args = parser.parse_args()
@@ -149,6 +152,28 @@ def main() -> None:
                 )
                 rows.append(result)
                 print(json.dumps(result, sort_keys=True), flush=True)
+
+    if args.include_drop_gate:
+        for bias in parse_float_list(args.drop_gate_biases):
+            result = _run_agent_pair(
+                lambda b=bias: RegularSourceDropGateAgent(
+                    ckpt,
+                    device=args.device,
+                    no_drop_bias=b,
+                    min_anchor_actions_to_filter=args.min_anchor_actions_to_filter,
+                    deterministic=args.drop_gate_deterministic,
+                ),
+                opponent_factory,
+                games=args.games,
+                seed=args.seed,
+                episode_steps=args.episode_steps,
+                use_numba=not args.no_numba,
+                progress=args.progress,
+                desc=f"drop_gate_b{bias:g}",
+            )
+            result.update({"variant": "regular_source_drop_gate", "threshold": None, "apply_prob": 1.0, "max_source_drops": 1, "no_drop_bias": bias})
+            rows.append(result)
+            print(json.dumps(result, sort_keys=True), flush=True)
 
     rows.sort(key=lambda row: (float(row["nonloss"]), float(row["winrate"]), float(row["mean_reward"])), reverse=True)
     print("\nTop variants:")

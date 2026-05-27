@@ -351,6 +351,7 @@ class TinyPPOAgent:
         target_top_k: int = 6,
         include_friendly_targets: bool = False,
         target_mask_mode: str = "candidate",
+        target_pair_weight: float = 1.0,
     ):
         payload = torch.load(checkpoint, map_location=device, weights_only=True)
         cfg = payload.get("model", {})
@@ -365,6 +366,7 @@ class TinyPPOAgent:
         self.launch_temperature = max(1e-4, float(launch_temperature))
         self.target_top_k = max(1, int(target_top_k))
         self.include_friendly_targets = bool(include_friendly_targets)
+        self.target_pair_weight = float(target_pair_weight)
         if target_mask_mode not in {"candidate", "safe", "all_planets"}:
             raise ValueError(f"unsupported target_mask_mode: {target_mask_mode!r}")
         self.target_mask_mode = target_mask_mode
@@ -386,6 +388,8 @@ class TinyPPOAgent:
             source_logits = source_logits.clone()
             source_logits[..., 1] += self.launch_bias
         target_logits = out["target_logits"][0]
+        if "target_pair_logits" in out and abs(self.target_pair_weight) > 1e-9:
+            target_logits = target_logits + self.target_pair_weight * out["target_pair_logits"][0][:, None, :]
         if self.ship_mode == "required_bucket" and self.target_mask_mode == "candidate":
             target_mask = candidate_target_mask(obs, player, top_k=self.target_top_k, include_friendly=self.include_friendly_targets)
         elif self.target_mask_mode == "all_planets":
