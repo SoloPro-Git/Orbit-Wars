@@ -2321,3 +2321,34 @@ collection/training is not blocked by eval.
   parallel work on action construction/factorization so candidate-safe target
   choices, source choice, ship amount, and action count are decoded as a
   coherent regular action set.
+
+## 2026-05-27 layers=3 capacity check
+
+- Ran a controlled capacity check:
+  `tinyPPO/runs/regular_bc_dagger_broad5ckpt_modelseat_w03_layers3_e1300_e80_noeval_20260527`.
+  The data, DAgger weight, resume checkpoint, optimizer settings, and all-heads
+  training setup matched the previous all-heads run; the intended architecture
+  delta was `layers=2 -> 3` with `hidden=128`. `resume-compatible` loaded `41`
+  tensors and skipped none, so this was a warm-started continuation rather than
+  a random restart.
+- Loader metrics did not indicate a capacity breakthrough. Best validation
+  imitation score was `0.64204`, slightly below the layers=2 all-heads run
+  (`0.64267`), and final validation loss rose to `1.8460`. Train loss kept
+  falling, so the pattern remains train-distribution fitting without a matching
+  validation/deployment gain.
+- Same-state Phase1 gate versus sourcehead `e1300` did not pass:
+  - all-planets decoding: candidate `selected_score=0.1862` versus baseline
+    `0.1805`, `density_ratio=0.724`, `action_f1=0.268`,
+    `source_target_f1=0.276`; the small score lift did not clear the required
+    `+0.02` margin and F1 thresholds.
+  - candidate-mask decoding: candidate `selected_score=0.1344` versus baseline
+    `0.1295`, but `density_ratio=0.573`, `action_f1=0.243`, and
+    `source_target_f1=0.255`; it is still strongly under-launching.
+- Online candidate-mask eval remained in the bad regime: `1/64` versus regular
+  (`nonloss=0.0156`) at `launch_bias=-0.05`, `ship_bias=0.0`,
+  `target_pair_weight=1.0`, `target_top_k=6`.
+- Decision: do not promote this checkpoint. The evidence argues against
+  "slightly deeper model" as the main blocker. A larger model may still be worth
+  testing later, but the next aligned work should prioritize the action decoder:
+  candidate-safe target factorization, action-count calibration, and ship
+  amount/source-target coupling under the regular-labelled DAgger distribution.
