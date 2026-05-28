@@ -461,6 +461,7 @@ def bc_loss(
     launch_pos_weight: float,
     target_loss_weight: float = 1.0,
     ship_loss_weight: float = 0.5,
+    target_ship_joint_loss_weight: float = 0.0,
     critical_action_weight: float = 0.0,
     target_loss_mask: str = "dataset",
     target_margin_loss_weight: float = 0.0,
@@ -522,9 +523,11 @@ def bc_loss(
     active = batch["launch_mask"] & own_slots
     target_loss = torch.tensor(0.0, device=launch_logits.device)
     ship_loss = torch.tensor(0.0, device=launch_logits.device)
+    target_ship_joint_loss = torch.tensor(0.0, device=launch_logits.device)
     target_acc = torch.tensor(0.0, device=launch_logits.device)
     target_margin_loss = torch.tensor(0.0, device=launch_logits.device)
     ship_acc = torch.tensor(0.0, device=launch_logits.device)
+    target_ship_joint_acc = torch.tensor(0.0, device=launch_logits.device)
     action_weight_mean = torch.tensor(0.0, device=launch_logits.device)
     target_binary_loss = torch.tensor(0.0, device=launch_logits.device)
     target_pair_softmax_loss = torch.tensor(0.0, device=launch_logits.device)
@@ -580,6 +583,14 @@ def bc_loss(
             ship_logits = ship_logits_all[b, s, slot, t]
             ship_loss = _weighted_cross_entropy(ship_logits, batch["ship_actions"][active], ship_active_weights)
             ship_acc = (ship_logits.argmax(dim=-1) == batch["ship_actions"][active]).float().mean()
+            if target_ship_joint_loss_weight > 0.0:
+                active_target_logits = target_logits[b, s, slot]
+                active_ship_logits = ship_logits_all[b, s, slot]
+                joint_logits = active_target_logits[:, :, None] + active_ship_logits
+                joint_logits = joint_logits.reshape(joint_logits.shape[0], -1)
+                joint_targets = t * active_ship_logits.shape[-1] + batch["ship_actions"][active]
+                target_ship_joint_loss = _weighted_cross_entropy(joint_logits, joint_targets, ship_active_weights)
+                target_ship_joint_acc = (joint_logits.argmax(dim=-1) == joint_targets).float().mean()
 
     if target_binary_loss_weight > 0.0:
         pair_valid = _valid_pair_mask(batch)
@@ -643,6 +654,7 @@ def bc_loss(
             + target_pair_owner_loss_weight * target_pair_owner_loss
             + target_pair_within_owner_loss_weight * target_pair_within_owner_loss
             + launch_count_loss_weight * launch_count_loss
+            + target_ship_joint_loss_weight * target_ship_joint_loss
         )
         target_loss = set_parts["target_loss"]
         ship_loss = set_parts["ship_loss"]
@@ -660,6 +672,7 @@ def bc_loss(
             + target_pair_owner_loss_weight * target_pair_owner_loss
             + target_pair_within_owner_loss_weight * target_pair_within_owner_loss
             + launch_count_loss_weight * launch_count_loss
+            + target_ship_joint_loss_weight * target_ship_joint_loss
         )
     launch_pred = out["source_logits"][own_slots].argmax(dim=-1)
     launch_acc = (launch_pred == launch_targets).float().mean()
@@ -689,6 +702,7 @@ def bc_loss(
         "target_pair_owner_loss": float(target_pair_owner_loss.detach().cpu()),
         "target_pair_within_owner_loss": float(target_pair_within_owner_loss.detach().cpu()),
         "ship_loss": float(ship_loss.detach().cpu()),
+        "target_ship_joint_loss": float(target_ship_joint_loss.detach().cpu()),
         "launch_acc": float(launch_acc.detach().cpu()),
         "launch_precision": float(launch_precision.detach().cpu()),
         "launch_recall": float(launch_recall.detach().cpu()),
@@ -702,6 +716,7 @@ def bc_loss(
         "target_pair_owner_acc": float(target_pair_owner_acc.detach().cpu()),
         "target_pair_within_owner_acc": float(target_pair_within_owner_acc.detach().cpu()),
         "ship_acc": float(ship_acc.detach().cpu()),
+        "target_ship_joint_acc": float(target_ship_joint_acc.detach().cpu()),
         "action_weight_mean": float(action_weight_mean.detach().cpu()),
         "sample_weight_mean": float(row_weights.mean().detach().cpu()),
         "launch_sample_weight_mean": float(launch_row_weights.mean().detach().cpu()),
@@ -720,6 +735,7 @@ def evaluate_loader(
     launch_pos_weight: float,
     target_loss_weight: float = 1.0,
     ship_loss_weight: float = 0.5,
+    target_ship_joint_loss_weight: float = 0.0,
     critical_action_weight: float = 0.0,
     target_loss_mask: str = "dataset",
     target_margin_loss_weight: float = 0.0,
@@ -749,6 +765,7 @@ def evaluate_loader(
             launch_pos_weight,
             target_loss_weight,
             ship_loss_weight,
+            target_ship_joint_loss_weight,
             critical_action_weight,
             target_loss_mask,
             target_margin_loss_weight,
@@ -869,6 +886,7 @@ def train_bc(args: argparse.Namespace, dataset: TensorDataset) -> tuple[TinyPoli
                 args.launch_pos_weight,
                 args.target_loss_weight,
                 args.ship_loss_weight,
+                args.target_ship_joint_loss_weight,
                 args.critical_action_weight,
                 args.target_loss_mask,
                 args.target_margin_loss_weight,
@@ -909,6 +927,7 @@ def train_bc(args: argparse.Namespace, dataset: TensorDataset) -> tuple[TinyPoli
                 args.launch_pos_weight,
                 args.target_loss_weight,
                 args.ship_loss_weight,
+                args.target_ship_joint_loss_weight,
                 args.critical_action_weight,
                 args.target_loss_mask,
                 args.target_margin_loss_weight,
@@ -985,6 +1004,7 @@ def main() -> None:
     parser.add_argument("--launch-pos-weight", type=float, default=8.0)
     parser.add_argument("--target-loss-weight", type=float, default=1.0)
     parser.add_argument("--ship-loss-weight", type=float, default=0.5)
+    parser.add_argument("--target-ship-joint-loss-weight", type=float, default=0.0, help="Auxiliary CE over the joint target x ship-bucket choice for each labelled launch.")
     parser.add_argument("--critical-action-weight", type=float, default=0.0)
     parser.add_argument("--target-loss-mask", choices=["dataset", "all_planets"], default="dataset")
     parser.add_argument("--target-margin-loss-weight", type=float, default=0.0)

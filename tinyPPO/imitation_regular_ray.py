@@ -325,6 +325,7 @@ class BCTrainEvalActor:
         launch_pos_weight: float,
         target_loss_weight: float,
         ship_loss_weight: float,
+        target_ship_joint_loss_weight: float,
         critical_action_weight: float,
         target_loss_mask: str,
         target_margin_loss_weight: float,
@@ -412,6 +413,7 @@ class BCTrainEvalActor:
         self.launch_pos_weight = float(launch_pos_weight)
         self.target_loss_weight = float(target_loss_weight)
         self.ship_loss_weight = float(ship_loss_weight)
+        self.target_ship_joint_loss_weight = float(target_ship_joint_loss_weight)
         self.critical_action_weight = float(critical_action_weight)
         self.target_loss_mask = str(target_loss_mask)
         self.target_margin_loss_weight = float(target_margin_loss_weight)
@@ -455,6 +457,7 @@ class BCTrainEvalActor:
                 self.launch_pos_weight,
                 self.target_loss_weight,
                 self.ship_loss_weight,
+                self.target_ship_joint_loss_weight,
                 self.critical_action_weight,
                 self.target_loss_mask,
                 self.target_margin_loss_weight,
@@ -502,6 +505,7 @@ class BCTrainEvalActor:
                 self.launch_pos_weight,
                 self.target_loss_weight,
                 self.ship_loss_weight,
+                self.target_ship_joint_loss_weight,
                 self.critical_action_weight,
                 self.target_loss_mask,
                 self.target_margin_loss_weight,
@@ -1188,6 +1192,7 @@ def main() -> None:
     parser.add_argument("--launch-pos-weight", type=float, default=4.0)
     parser.add_argument("--target-loss-weight", type=float, default=1.0)
     parser.add_argument("--ship-loss-weight", type=float, default=0.5)
+    parser.add_argument("--target-ship-joint-loss-weight", type=float, default=0.0, help="Auxiliary CE over the joint target x ship-bucket choice for each labelled launch.")
     parser.add_argument("--critical-action-weight", type=float, default=0.0)
     parser.add_argument("--target-loss-mask", choices=["dataset", "all_planets"], default="dataset")
     parser.add_argument("--target-margin-loss-weight", type=float, default=0.0)
@@ -1364,6 +1369,7 @@ def main() -> None:
             args.launch_pos_weight,
             args.target_loss_weight,
             args.ship_loss_weight,
+            args.target_ship_joint_loss_weight,
             args.critical_action_weight,
             args.target_loss_mask,
             args.target_margin_loss_weight,
