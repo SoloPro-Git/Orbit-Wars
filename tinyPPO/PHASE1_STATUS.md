@@ -2584,3 +2584,37 @@ collection/training is not blocked by eval.
   in `imitation_regular_ray.py` (`--dagger-min-abs-action-gap`,
   `--dagger-min-actions-per-row`, outcome/turn filters), but choose the filter
   only after running the cheap DAgger diagnostics on the corrected iter2 cache.
+
+## 2026-05-28 corrected iter2 hard-gap data-selection probe
+
+- Tested one data-quality delta on top of the corrected safe DAgger semantics:
+  keep the previous safe-online `e0120` checkpoint, layers `2`, hidden `128`,
+  all loss/mask/decode settings fixed, but train only on corrected iter2 DAgger
+  rows where the regular teacher's labelled action count differed from the
+  model action count by at least `2` (`--dagger-min-abs-action-gap 2`).
+  `dagger_loss_weight=2.5` was used only to keep the retained hard-state action
+  mass near the intended 20-30% range.
+- Data diagnostics: the corrected iter2 cache had `32168` total DAgger rows and
+  `69261` labelled actions before filtering. The hard-gap filter retained
+  `10320` rows (`0.321` keep fraction) and `42103` labelled actions, for about
+  `105257.5` weighted DAgger labelled actions versus `352925` pure-regular
+  labelled actions.
+- Run:
+  `tinyPPO/runs/regular_bc_dagger_iter2_e0120_safedecode_m005_gap2_w25_layers2_e0120_e360_noeval_20260528`.
+  Training was stopped after the `e0220` checkpoint / `e0229` current state
+  because same-state validation had already degraded: train target/pair metrics
+  kept improving while pure-regular validation target/pair softened. Best
+  imitation was only about `0.505`, far below the previous safe baseline.
+- Online safe probe:
+  - 64-game sweep on `e0160` showed an apparent high point at `launch_bias=0.0`:
+    `18W/46L/0D`, nonloss `0.281`.
+  - 256-game confirmation of that exact setting did not hold:
+    `57W/199L/0D`, nonloss `0.223`.
+  This is below the previous best safe online confirmation (`e0120`,
+  `launch_bias=-0.05`: `62W/194L/0D`, nonloss `0.242`).
+- Decision: hard-gap filtering alone over-concentrates on shifted/hard states
+  and does not produce a better rollout policy. Together with the layers-3
+  capacity probe, this makes "just increase model complexity" a low-priority
+  next step. Capacity may still matter if paired with a better objective, but
+  the current bottleneck looks more like action coherence and distribution
+  handling than raw parameter count.
