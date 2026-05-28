@@ -2618,3 +2618,46 @@ collection/training is not blocked by eval.
   next step. Capacity may still matter if paired with a better objective, but
   the current bottleneck looks more like action coherence and distribution
   handling than raw parameter count.
+
+## 2026-05-28 target-ship joint BC objective probe
+
+- Added a disabled-by-default auxiliary objective:
+  `--target-ship-joint-loss-weight`. For each regular-labelled launch, it
+  treats `(target, ship_bucket)` as one joint class and applies CE to
+  `target_logits + ship_logits`, so the model is directly penalized when the
+  target and ship heads are individually plausible but incoherent as a pair.
+  Commit: `c3ecce8 Add target ship joint BC loss`.
+- Tested it as one training delta, not as a model-size change:
+  `tinyPPO/runs/regular_bc_dagger_iter2_e0120_safedecode_m005_jointts02_layers2_e0120_e360_noeval_20260528`.
+  It resumed the previous safe-online `e0120` checkpoint, used the safe pure
+  regular cache plus the corrected iter2 DAgger shards, kept
+  `dagger_loss_weight=1.0`, layers `2`, hidden `128`, all existing loss/mask
+  settings fixed, and changed only
+  `--target-ship-joint-loss-weight 0.2`.
+- Training was allowed to run from resume epoch `120` through epoch `183`, with
+  saved checkpoints at `e0160` and `e0180`, then stopped because the validation
+  curve had clearly plateaued below prior baselines. The joint metric improved
+  substantially (`val_target_ship_joint_acc` rose to about `0.54`), but this
+  did not improve the same-state Phase1 gate:
+  - Around `e0160`: `val_target_acc=0.6216`,
+    `val_target_pair_acc=0.5664`, `val_imitation_score=0.5235`.
+  - Around `e0180`: `val_target_acc=0.6214`,
+    `val_target_pair_acc=0.5624`, `val_imitation_score=0.5221`.
+  - Best observed imitation during the run was only about `0.5266`, below the
+    corrected iter2 `w1` run (`0.53246`) and well below the previous broad safe
+    DAgger baseline (`0.54904`).
+- Online safe 64-game probe on `e0160`:
+  - `launch_bias=-0.15`: `14W/50L/0D`, nonloss `0.219`.
+  - `launch_bias=-0.35`: `13W/51L/0D`, nonloss `0.203`.
+  - `launch_bias=-0.25`: `13W/51L/0D`, nonloss `0.203`.
+  - `launch_bias=-0.05`: `11W/53L/0D`, nonloss `0.172`.
+  - `launch_bias=0.0`: `11W/53L/0D`, nonloss `0.172`.
+  No variant reached a 64-game high point worth 256-game confirmation. The
+  `e0180` sweep was stopped after the `e0160` result and the weaker offline
+  curve.
+- Decision: the current failure is not fixed by a simple target-ship coupling
+  loss. The objective did what it was designed to do locally, but rollout and
+  same-state gate did not improve. The next architecture-level attempt should
+  be more structural than another scalar auxiliary loss, for example decoding
+  whole actions or selecting a bounded set of source-target pairs first, while
+  keeping the corrected DAgger semantics and pure-regular gate intact.
