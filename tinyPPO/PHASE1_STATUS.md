@@ -2549,3 +2549,38 @@ collection/training is not blocked by eval.
   and toward better action factorization / hard-state data: the model is not
   consistently binding source, target, ship amount, and action count under
   model-induced states.
+
+## 2026-05-28 corrected iter2 DAgger weight probe
+
+- Tested the "maybe the corrected DAgger rows are underweighted" hypothesis as
+  a single data-weight delta. The corrected iter2 cache has only `32168`
+  DAgger rows versus `192122` safe pure-regular rows, so `dagger_loss_weight=1`
+  gave only about `14%` row mass. This run kept the layers-2 architecture,
+  resume checkpoint, losses, masks, decoder, and no-eval training cadence fixed,
+  and changed only `--dagger-loss-weight` from `1.0` to `2.0`.
+- Run:
+  `tinyPPO/runs/regular_bc_dagger_iter2_e0120_safedecode_m005_w2_layers2_e0120_e260_noeval_20260528`.
+  Effective action mass was approximately `352925` pure-regular labelled
+  actions versus `138522` weighted DAgger labelled actions, i.e. about `28%`
+  DAgger exposure. This matches the intended `70-80%` pure regular /
+  `20-30%` DAgger mix better than the previous `w1` run.
+- Offline result: best imitation was only `0.52425`, worse than both the `w1`
+  corrected iter2 layers-2 run (`0.53246`) and layers-3 probe (`0.53012`).
+  This confirms that simply increasing corrected DAgger pressure hurts
+  same-state generalization rather than repairing it.
+- Online safe probe:
+  - 64-game sweep on `e0140` showed an apparent high point at
+    `launch_bias=-0.15`: `18W/46L/0D`, nonloss `0.281`.
+  - 256-game confirmation of that exact setting did not hold:
+    `49W/207L/0D`, nonloss `0.191`.
+  This is below the previous best safe online confirmation (`e0120`,
+  `launch_bias=-0.05`: `62W/194L/0D`, nonloss `0.242`) and below the layers-3
+  confirmation (`55W/201L/0D`, nonloss `0.215`).
+- Decision: do not continue later `w2` checkpoints unless explicitly requested.
+  The failure mode is not just "too little DAgger weight". The next useful
+  single delta should be data selection / hard-state quality, using the
+  corrected safe DAgger semantics but filtering for states where the regular
+  teacher has a clear, meaningful correction. Candidate filters already exist
+  in `imitation_regular_ray.py` (`--dagger-min-abs-action-gap`,
+  `--dagger-min-actions-per-row`, outcome/turn filters), but choose the filter
+  only after running the cheap DAgger diagnostics on the corrected iter2 cache.
