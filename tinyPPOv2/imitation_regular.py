@@ -17,6 +17,10 @@ from tinyPPO.imitation_regular import BCRow
 from tinyPPOv2.model import AutoregressivePolicyNet
 
 
+def unwrap_model(model: torch.nn.Module) -> torch.nn.Module:
+    return model.module if isinstance(model, torch.nn.DataParallel) else model
+
+
 def load_rows(path: Path, max_rows: int = 0, seed: int = 0) -> list[BCRow]:
     with path.open("rb") as handle:
         payload = pickle.load(handle)
@@ -110,15 +114,17 @@ def _teacher_inputs(batch: dict[str, torch.Tensor], max_actions: int, ship_bucke
 
 
 def bc_loss_v2(
-    model: AutoregressivePolicyNet,
+    model: torch.nn.Module,
     batch: dict[str, torch.Tensor],
     stop_loss_weight: float = 1.0,
     source_loss_weight: float = 1.0,
     target_loss_weight: float = 1.0,
     ship_loss_weight: float = 0.5,
 ) -> tuple[torch.Tensor, dict[str, float]]:
-    max_actions = int(model.max_actions)
-    prev_source, prev_target, prev_ship = _teacher_inputs(batch, max_actions, int(model.ship_buckets))
+    net = unwrap_model(model)
+    max_actions = int(net.max_actions)
+    ship_buckets = int(net.ship_buckets)
+    prev_source, prev_target, prev_ship = _teacher_inputs(batch, max_actions, ship_buckets)
     out = model(
         batch["planets"],
         batch["pair_features"],
@@ -143,7 +149,7 @@ def bc_loss_v2(
         ship_logits = out["ship_logits"][:, :max_actions][b, t]
         source_targets = batch["source_actions"][b, t]
         target_targets = batch["target_actions"][b, t]
-        ship_targets = batch["ship_actions"][b, t].clamp(0, int(model.ship_buckets) - 1)
+        ship_targets = batch["ship_actions"][b, t].clamp(0, ship_buckets - 1)
         source_loss = F.cross_entropy(source_logits, source_targets)
         target_loss = F.cross_entropy(target_logits, target_targets)
         ship_loss = F.cross_entropy(ship_logits, ship_targets)
@@ -233,6 +239,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         "max_actions": args.max_actions,
     }
     model = AutoregressivePolicyNet(**model_cfg).to(device)
+    if args.data_parallel and device.type == "cuda" and torch.cuda.device_count() > 1:
+        model = torch.nn.DataParallel(model)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     best_val = float("inf")
     best_metrics: dict[str, float] = {}
@@ -266,7 +274,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         if val_metrics["loss"] < best_val:
             best_val = float(val_metrics["loss"])
             best_metrics = dict(val_metrics)
-            torch.save({"model": model_cfg, "state_dict": model.state_dict(), "epoch": epoch}, out_path)
+            torch.save({"model": model_cfg, "state_dict": unwrap_model(model).state_dict(), "epoch": epoch}, out_path)
         if epoch == 1 or epoch % args.eval_interval == 0 or epoch == args.epochs:
             print(
                 json.dumps(
@@ -297,6 +305,7 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--loader-workers", type=int, default=2)
+    parser.add_argument("--data-parallel", action="store_true")
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
