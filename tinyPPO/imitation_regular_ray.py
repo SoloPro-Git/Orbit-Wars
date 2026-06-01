@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
 import os
@@ -13,6 +14,7 @@ from typing import Any
 import numpy as np
 import ray
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset, random_split
 
 from training2 import make_fast_orbit_wars
@@ -169,12 +171,13 @@ class DaggerCollectActor:
                         if "step" in obs:
                             step_box["current"] = int(obs["step"])
                         turn_index = int(obs.get("step", step_box["current"]))
-                        action = self.model_agent(obs) or []
-                        label = label_agent(obs) or []
+                        row_obs = copy.deepcopy(obs)
+                        action = self.model_agent(copy.deepcopy(row_obs)) or []
+                        label = label_agent(copy.deepcopy(row_obs)) or []
                         if label or random.random() < keep_noop_prob:
                             raw_rows.append(
                                 {
-                                    "obs": obs,
+                                    "obs": row_obs,
                                     "player": pid,
                                     "label_action": label,
                                     "model_action_count": len(action),
@@ -202,7 +205,7 @@ class DaggerCollectActor:
                         if not self.collect_model_seat_only and (action or random.random() < keep_noop_prob):
                             raw_rows.append(
                                 {
-                                    "obs": obs,
+                                    "obs": copy.deepcopy(obs),
                                     "player": pid,
                                     "label_action": action,
                                     "model_action_count": 0,
@@ -259,7 +262,7 @@ class DaggerCollectActor:
                 skipped_actions += int(getattr(row, "skipped", 0))
                 regular_label_actions += len(label_action)
                 if player == model_seat:
-                    model_actions += len(label_action)
+                    model_actions += int(raw["model_action_count"])
             if job_index % 10 == 0 or job_index == len(jobs):
                 print(
                     json.dumps(
@@ -310,6 +313,129 @@ def _resolve_actor_device(device_override: str) -> torch.device:
     return torch.device(device_override if device_override else ("cuda" if torch.cuda.is_available() else "cpu"))
 
 
+def _regular_anchor_loss(
+    model: TinyPolicyValueNet,
+    anchor_model: TinyPolicyValueNet | None,
+    batch: dict[str, torch.Tensor],
+    source_weight: float,
+    pair_weight: float,
+    count_weight: float,
+    target_weight: float,
+    min_sample_weight: float,
+) -> tuple[torch.Tensor, dict[str, float]]:
+    zero = torch.tensor(0.0, device=batch["planets"].device)
+    if anchor_model is None or (
+        source_weight <= 0.0 and pair_weight <= 0.0 and count_weight <= 0.0 and target_weight <= 0.0
+    ):
+        return zero, {
+            "anchor_loss": 0.0,
+            "anchor_source_loss": 0.0,
+            "anchor_pair_loss": 0.0,
+            "anchor_count_loss": 0.0,
+            "anchor_target_loss": 0.0,
+            "anchor_rows": 0.0,
+        }
+
+    row_weights = batch.get("sample_weight")
+    if row_weights is None:
+        row_mask = torch.ones(batch["planets"].shape[0], dtype=torch.bool, device=batch["planets"].device)
+    else:
+        row_mask = row_weights.float() >= float(min_sample_weight)
+    anchor_rows = float(row_mask.float().sum().detach().cpu())
+    if not bool(row_mask.any()):
+        return zero, {
+            "anchor_loss": 0.0,
+            "anchor_source_loss": 0.0,
+            "anchor_pair_loss": 0.0,
+            "anchor_count_loss": 0.0,
+            "anchor_target_loss": 0.0,
+            "anchor_rows": 0.0,
+        }
+
+    out = model(batch["planets"], batch["pair_features"], batch["global_features"], batch["planet_mask"], batch["own_mask"])
+    with torch.no_grad():
+        target = anchor_model(batch["planets"], batch["pair_features"], batch["global_features"], batch["planet_mask"], batch["own_mask"])
+
+    source_loss = zero
+    own_slots = batch["own_mask"][:, :, None].expand_as(batch["launch_actions"]) & row_mask[:, None, None]
+    if source_weight > 0.0 and bool(own_slots.any()):
+        source_loss_parts = F.kl_div(
+            F.log_softmax(out["source_logits"], dim=-1),
+            F.softmax(target["source_logits"], dim=-1),
+            reduction="none",
+        ).sum(dim=-1)
+        source_loss = source_loss_parts.masked_select(own_slots).mean()
+
+    pair_loss = zero
+    if pair_weight > 0.0:
+        pair_logits = out.get("target_pair_logits")
+        target_pair_logits = target.get("target_pair_logits")
+        if pair_logits is None:
+            pair_logits = out["target_logits"].max(dim=2).values
+        if target_pair_logits is None:
+            target_pair_logits = target["target_logits"].max(dim=2).values
+        pair_valid = batch["own_mask"][:, :, None] & batch["planet_mask"][:, None, :] & row_mask[:, None, None]
+        eye = torch.eye(pair_valid.shape[1], dtype=torch.bool, device=pair_valid.device)[None, :, :]
+        pair_valid = pair_valid & ~eye
+        source_valid = pair_valid.any(dim=-1)
+        if bool(source_valid.any()):
+            masked_logits = pair_logits.masked_fill(~pair_valid, -1e9)
+            masked_target_logits = target_pair_logits.masked_fill(~pair_valid, -1e9)
+            pair_parts = F.kl_div(
+                F.log_softmax(masked_logits, dim=-1),
+                F.softmax(masked_target_logits, dim=-1),
+                reduction="none",
+            ).sum(dim=-1)
+            pair_loss = pair_parts.masked_select(source_valid).mean()
+
+    count_loss = zero
+    if count_weight > 0.0:
+        slot_valid = batch["own_mask"][:, :, None].expand_as(batch["launch_actions"])
+        launch_prob = F.softmax(out["source_logits"], dim=-1)[..., 1].masked_fill(~slot_valid, 0.0)
+        target_launch_prob = F.softmax(target["source_logits"], dim=-1)[..., 1].masked_fill(~slot_valid, 0.0)
+        pred_count = launch_prob.sum(dim=(1, 2))
+        target_count = target_launch_prob.sum(dim=(1, 2))
+        count_parts = F.smooth_l1_loss(pred_count, target_count, reduction="none")
+        count_loss = count_parts.masked_select(row_mask).mean()
+
+    target_loss = zero
+    if target_weight > 0.0:
+        source_count = int(batch["own_mask"].shape[1])
+        target_valid = (
+            batch["own_mask"][:, :, None, None]
+            & batch["planet_mask"][:, None, None, :]
+            & row_mask[:, None, None, None]
+        )
+        eye = torch.eye(source_count, dtype=torch.bool, device=target_valid.device)[None, :, None, :]
+        target_valid = target_valid & ~eye
+        target_valid = target_valid.expand_as(out["target_logits"])
+        slot_valid = target_valid.any(dim=-1)
+        if bool(slot_valid.any()):
+            masked_logits = out["target_logits"].masked_fill(~target_valid, -1e9)
+            masked_target_logits = target["target_logits"].masked_fill(~target_valid, -1e9)
+            target_parts = F.kl_div(
+                F.log_softmax(masked_logits, dim=-1),
+                F.softmax(masked_target_logits, dim=-1),
+                reduction="none",
+            ).sum(dim=-1)
+            target_loss = target_parts.masked_select(slot_valid).mean()
+
+    loss = (
+        float(source_weight) * source_loss
+        + float(pair_weight) * pair_loss
+        + float(count_weight) * count_loss
+        + float(target_weight) * target_loss
+    )
+    return loss, {
+        "anchor_loss": float(loss.detach().cpu()),
+        "anchor_source_loss": float(source_loss.detach().cpu()),
+        "anchor_pair_loss": float(pair_loss.detach().cpu()),
+        "anchor_count_loss": float(count_loss.detach().cpu()),
+        "anchor_target_loss": float(target_loss.detach().cpu()),
+        "anchor_rows": anchor_rows,
+    }
+
+
 @ray.remote
 class BCTrainEvalActor:
     def __init__(
@@ -326,6 +452,7 @@ class BCTrainEvalActor:
         target_loss_weight: float,
         ship_loss_weight: float,
         target_ship_joint_loss_weight: float,
+        target_ship_joint_dagger_only: bool,
         critical_action_weight: float,
         target_loss_mask: str,
         target_margin_loss_weight: float,
@@ -344,6 +471,14 @@ class BCTrainEvalActor:
         sample_weight_ship_scale: float,
         sample_weight_pair_scale: float,
         sample_weight_count_scale: float,
+        dagger_launch_negative_weight_scale: float,
+        dagger_launch_positive_weight_scale: float,
+        regular_anchor_state: dict[str, torch.Tensor] | None,
+        regular_anchor_source_weight: float,
+        regular_anchor_pair_weight: float,
+        regular_anchor_count_weight: float,
+        regular_anchor_target_weight: float,
+        regular_anchor_min_sample_weight: float,
         trainable_modules: str,
         seed: int,
         device_override: str = "",
@@ -352,6 +487,18 @@ class BCTrainEvalActor:
         self.device = _resolve_actor_device(device_override)
         self.model_cfg = dict(model_cfg)
         self.model = TinyPolicyValueNet(**self.model_cfg).to(self.device)
+        self.anchor_model: TinyPolicyValueNet | None = None
+        if regular_anchor_state is not None and (
+            regular_anchor_source_weight > 0.0
+            or regular_anchor_pair_weight > 0.0
+            or regular_anchor_count_weight > 0.0
+            or regular_anchor_target_weight > 0.0
+        ):
+            self.anchor_model = TinyPolicyValueNet(**self.model_cfg).to(self.device)
+            self.anchor_model.load_state_dict({key: value.to(self.device) for key, value in regular_anchor_state.items()})
+            self.anchor_model.eval()
+            for param in self.anchor_model.parameters():
+                param.requires_grad_(False)
         trainable_params = list(self.model.parameters())
         if trainable_modules == "target_head":
             for param in self.model.parameters():
@@ -359,6 +506,34 @@ class BCTrainEvalActor:
             for param in self.model.target_head.parameters():
                 param.requires_grad_(True)
             trainable_params = list(self.model.target_head.parameters())
+        elif trainable_modules == "source_target_heads_no_slot":
+            for param in self.model.parameters():
+                param.requires_grad_(False)
+            for param in self.model.source_head.parameters():
+                param.requires_grad_(True)
+            for param in self.model.target_head.parameters():
+                param.requires_grad_(True)
+            trainable_params = list(self.model.source_head.parameters()) + list(self.model.target_head.parameters())
+        elif trainable_modules == "source_target_pair_heads_no_slot":
+            if self.model.target_pair_head is None:
+                raise ValueError("--trainable-modules source_target_pair_heads_no_slot requires --target-pair-head")
+            for param in self.model.parameters():
+                param.requires_grad_(False)
+            for param in self.model.source_head.parameters():
+                param.requires_grad_(True)
+            for param in self.model.target_head.parameters():
+                param.requires_grad_(True)
+            for param in self.model.target_pair_head.parameters():
+                param.requires_grad_(True)
+            trainable_params = (
+                list(self.model.source_head.parameters())
+                + list(self.model.target_head.parameters())
+                + list(self.model.target_pair_head.parameters())
+            )
+            if self.model.target_pair_owner_head is not None:
+                for param in self.model.target_pair_owner_head.parameters():
+                    param.requires_grad_(True)
+                trainable_params += list(self.model.target_pair_owner_head.parameters())
         elif trainable_modules == "source_head":
             for param in self.model.parameters():
                 param.requires_grad_(False)
@@ -366,6 +541,12 @@ class BCTrainEvalActor:
                 param.requires_grad_(True)
             self.model.slot_embed.requires_grad_(True)
             trainable_params = list(self.model.source_head.parameters()) + [self.model.slot_embed]
+        elif trainable_modules == "source_head_no_slot":
+            for param in self.model.parameters():
+                param.requires_grad_(False)
+            for param in self.model.source_head.parameters():
+                param.requires_grad_(True)
+            trainable_params = list(self.model.source_head.parameters())
         elif trainable_modules == "target_pair_head":
             if self.model.target_pair_head is None:
                 raise ValueError("--trainable-modules target_pair_head requires --target-pair-head")
@@ -414,6 +595,7 @@ class BCTrainEvalActor:
         self.target_loss_weight = float(target_loss_weight)
         self.ship_loss_weight = float(ship_loss_weight)
         self.target_ship_joint_loss_weight = float(target_ship_joint_loss_weight)
+        self.target_ship_joint_dagger_only = bool(target_ship_joint_dagger_only)
         self.critical_action_weight = float(critical_action_weight)
         self.target_loss_mask = str(target_loss_mask)
         self.target_margin_loss_weight = float(target_margin_loss_weight)
@@ -432,6 +614,13 @@ class BCTrainEvalActor:
         self.sample_weight_ship_scale = float(sample_weight_ship_scale)
         self.sample_weight_pair_scale = float(sample_weight_pair_scale)
         self.sample_weight_count_scale = float(sample_weight_count_scale)
+        self.dagger_launch_negative_weight_scale = float(dagger_launch_negative_weight_scale)
+        self.dagger_launch_positive_weight_scale = float(dagger_launch_positive_weight_scale)
+        self.regular_anchor_source_weight = float(regular_anchor_source_weight)
+        self.regular_anchor_pair_weight = float(regular_anchor_pair_weight)
+        self.regular_anchor_count_weight = float(regular_anchor_count_weight)
+        self.regular_anchor_target_weight = float(regular_anchor_target_weight)
+        self.regular_anchor_min_sample_weight = float(regular_anchor_min_sample_weight)
         dataset = stack_rows(rows, sample_weights)
         generator = torch.Generator().manual_seed(seed)
         val_size = max(1, int(len(dataset) * val_frac))
@@ -458,6 +647,7 @@ class BCTrainEvalActor:
                 self.target_loss_weight,
                 self.ship_loss_weight,
                 self.target_ship_joint_loss_weight,
+                self.target_ship_joint_dagger_only,
                 self.critical_action_weight,
                 self.target_loss_mask,
                 self.target_margin_loss_weight,
@@ -476,7 +666,21 @@ class BCTrainEvalActor:
                 self.sample_weight_ship_scale,
                 self.sample_weight_pair_scale,
                 self.sample_weight_count_scale,
+                self.dagger_launch_negative_weight_scale,
+                self.dagger_launch_positive_weight_scale,
             )
+            anchor_loss, anchor_metrics = _regular_anchor_loss(
+                self.model,
+                self.anchor_model,
+                unpack(batch, self.device),
+                self.regular_anchor_source_weight,
+                self.regular_anchor_pair_weight,
+                self.regular_anchor_count_weight,
+                self.regular_anchor_target_weight,
+                self.regular_anchor_min_sample_weight,
+            )
+            loss = loss + anchor_loss
+            metrics.update(anchor_metrics)
             n = int(batch[0].shape[0])
             for key, value in metrics.items():
                 sums[key] = sums.get(key, 0.0) + float(value) * n
@@ -506,6 +710,7 @@ class BCTrainEvalActor:
                 self.target_loss_weight,
                 self.ship_loss_weight,
                 self.target_ship_joint_loss_weight,
+                self.target_ship_joint_dagger_only,
                 self.critical_action_weight,
                 self.target_loss_mask,
                 self.target_margin_loss_weight,
@@ -524,7 +729,21 @@ class BCTrainEvalActor:
                 self.sample_weight_ship_scale,
                 self.sample_weight_pair_scale,
                 self.sample_weight_count_scale,
+                self.dagger_launch_negative_weight_scale,
+                self.dagger_launch_positive_weight_scale,
             )
+            anchor_loss, anchor_metrics = _regular_anchor_loss(
+                self.model,
+                self.anchor_model,
+                unpack(batch, self.device),
+                self.regular_anchor_source_weight,
+                self.regular_anchor_pair_weight,
+                self.regular_anchor_count_weight,
+                self.regular_anchor_target_weight,
+                self.regular_anchor_min_sample_weight,
+            )
+            del anchor_loss
+            metrics.update(anchor_metrics)
             n = int(batch[0].shape[0])
             for key, value in metrics.items():
                 sums[key] = sums.get(key, 0.0) + float(value) * n
@@ -540,6 +759,7 @@ class BCTrainEvalActor:
         launch_bias: float,
         ship_bias: float,
         launch_temperature: float,
+        target_mask_mode: str,
     ) -> dict[str, float]:
         self.model.load_state_dict({key: value.to(self.device) for key, value in state.items()})
         fd, path = tempfile.mkstemp(prefix="regular_bc_ray_eval_", suffix=".pt")
@@ -554,6 +774,7 @@ class BCTrainEvalActor:
                     launch_bias=launch_bias,
                     ship_bias=ship_bias,
                     launch_temperature=launch_temperature,
+                    target_mask_mode=target_mask_mode,
                 ),
                 lambda: make_rulebase_agent("regular"),
                 games=games,
@@ -586,6 +807,7 @@ class BCEvalActor:
         launch_bias: float,
         ship_bias: float,
         launch_temperature: float,
+        target_mask_mode: str,
     ) -> dict[str, float]:
         self.model.load_state_dict({key: value.to(self.device) for key, value in state.items()})
         fd, path = tempfile.mkstemp(prefix="regular_bc_ray_eval_", suffix=".pt")
@@ -600,6 +822,7 @@ class BCEvalActor:
                     launch_bias=launch_bias,
                     ship_bias=ship_bias,
                     launch_temperature=launch_temperature,
+                    target_mask_mode=target_mask_mode,
                 ),
                 lambda: make_rulebase_agent("regular"),
                 games=games,
@@ -738,20 +961,57 @@ def collect_dataset(args: argparse.Namespace) -> tuple[list[Any], dict[str, floa
         metrics["cache_path"] = str(cache_path)
     else:
         rows, metrics = collect_regular_dataset(args, cache_path)
+    rows, metrics = _subsample_regular_rows(rows, metrics, args)
     sample_weights: list[float] | None = None
     if args.dagger_checkpoint or args.dagger_checkpoints or args.dagger_cache:
         regular_count = len(rows)
+        regular_labelled_actions = float(sum(_row_action_count(row) for row in rows))
         dagger_rows, dagger_metrics = collect_dagger_dataset(args)
-        rows.extend(dagger_rows)
         dagger_weights, dagger_weight_metrics = _dagger_sample_weights(dagger_rows, args)
+        dagger_rows, dagger_weights, dagger_repeat_metrics = _repeat_dagger_rows(dagger_rows, dagger_weights, args)
+        dagger_labelled_actions = float(sum(_row_action_count(row) for row in dagger_rows))
+        rows.extend(dagger_rows)
         if dagger_weights is not None:
             sample_weights = [1.0] * regular_count + dagger_weights
+        total_labelled_actions = regular_labelled_actions + dagger_labelled_actions
         metrics = {
             **metrics,
             "samples": float(len(rows)),
-            "dagger": {**dagger_metrics, **dagger_weight_metrics},
+            "labelled_actions": total_labelled_actions,
+            "regular_samples": float(regular_count),
+            "regular_labelled_actions": regular_labelled_actions,
+            "dagger_samples": float(len(dagger_rows)),
+            "dagger_labelled_actions": dagger_labelled_actions,
+            "dagger_action_fraction": (
+                float(dagger_labelled_actions / total_labelled_actions) if total_labelled_actions > 0 else 0.0
+            ),
+            "regular_action_fraction": (
+                float(regular_labelled_actions / total_labelled_actions) if total_labelled_actions > 0 else 0.0
+            ),
+            "dagger": {**dagger_metrics, **dagger_weight_metrics, **dagger_repeat_metrics},
         }
     return rows, metrics, sample_weights
+
+
+def _subsample_regular_rows(rows: list[Any], metrics: dict[str, float], args: argparse.Namespace) -> tuple[list[Any], dict[str, float]]:
+    max_rows = int(getattr(args, "regular_max_rows", 0))
+    if max_rows <= 0 or len(rows) <= max_rows:
+        return rows, metrics
+    rng = random.Random(int(args.seed) + 27_182_818)
+    indices = sorted(rng.sample(range(len(rows)), max_rows))
+    sampled_rows = [rows[index] for index in indices]
+    before_actions = float(sum(_row_action_count(row) for row in rows))
+    sampled_actions = float(sum(_row_action_count(row) for row in sampled_rows))
+    sampled_metrics = dict(metrics)
+    sampled_metrics["regular_samples_before_subsample"] = float(len(rows))
+    sampled_metrics["regular_labelled_actions_before_subsample"] = before_actions
+    sampled_metrics["samples"] = float(len(sampled_rows))
+    sampled_metrics["labelled_actions"] = sampled_actions
+    sampled_metrics["regular_subsampled"] = 1.0
+    sampled_metrics["regular_max_rows"] = float(max_rows)
+    sampled_metrics["regular_subsample_keep_frac"] = float(len(sampled_rows) / len(rows))
+    sampled_metrics["regular_action_keep_frac"] = float(sampled_actions / before_actions) if before_actions > 0 else 0.0
+    return sampled_rows, sampled_metrics
 
 
 def _dagger_sample_weights(rows: list[Any], args: argparse.Namespace) -> tuple[list[float] | None, dict[str, float]]:
@@ -785,6 +1045,52 @@ def _dagger_sample_weights(rows: list[Any], args: argparse.Namespace) -> tuple[l
         "dagger_weight_max": float(max(weights)) if weights else 0.0,
         "dagger_unweighted_labelled_actions": raw_actions,
         "dagger_weighted_labelled_actions": weighted_actions,
+    }
+
+
+def _repeat_dagger_rows(
+    rows: list[Any], weights: list[float] | None, args: argparse.Namespace
+) -> tuple[list[Any], list[float] | None, dict[str, float]]:
+    repeat = float(getattr(args, "dagger_repeat", 1.0))
+    if repeat <= 0.0:
+        return [], [] if weights is not None else None, {
+            "dagger_repeat": repeat,
+            "dagger_repeat_base_rows": float(len(rows)),
+            "dagger_repeat_rows": 0.0,
+        }
+    if not rows or abs(repeat - 1.0) <= 1e-9:
+        return rows, weights, {
+            "dagger_repeat": repeat,
+            "dagger_repeat_base_rows": float(len(rows)),
+            "dagger_repeat_rows": float(len(rows)),
+        }
+
+    full = int(math.floor(repeat))
+    frac = repeat - float(full)
+    repeated_rows: list[Any] = []
+    repeated_weights: list[float] | None = [] if weights is not None else None
+    for _ in range(full):
+        repeated_rows.extend(rows)
+        if repeated_weights is not None and weights is not None:
+            repeated_weights.extend(weights)
+
+    fractional_count = int(round(frac * len(rows)))
+    if fractional_count > 0:
+        rng = random.Random(int(args.seed) + 87_654_321)
+        indices = sorted(rng.sample(range(len(rows)), min(fractional_count, len(rows))))
+        repeated_rows.extend(rows[index] for index in indices)
+        if repeated_weights is not None and weights is not None:
+            repeated_weights.extend(weights[index] for index in indices)
+
+    raw_actions = float(sum(_row_action_count(row) for row in rows))
+    repeated_actions = float(sum(_row_action_count(row) for row in repeated_rows))
+    return repeated_rows, repeated_weights, {
+        "dagger_repeat": repeat,
+        "dagger_repeat_base_rows": float(len(rows)),
+        "dagger_repeat_rows": float(len(repeated_rows)),
+        "dagger_repeat_base_labelled_actions": raw_actions,
+        "dagger_repeat_labelled_actions": repeated_actions,
+        "dagger_repeat_action_mult": float(repeated_actions / raw_actions) if raw_actions > 0 else 0.0,
     }
 
 
@@ -1119,25 +1425,35 @@ def _subsample_dagger_rows(rows: list[Any], metrics: dict[str, float], args: arg
     rng = random.Random(int(args.seed) + 31_415_927)
     indices = sorted(rng.sample(range(len(rows)), max_rows))
     sampled_rows = [rows[index] for index in indices]
+    before_actions = float(sum(_row_action_count(row) for row in rows))
+    sampled_actions = float(sum(_row_action_count(row) for row in sampled_rows))
     sampled_metrics = dict(metrics)
     sampled_metrics["samples_before_subsample"] = float(len(rows))
+    sampled_metrics["labelled_actions_before_subsample"] = before_actions
     sampled_metrics["samples"] = float(len(sampled_rows))
+    sampled_metrics["labelled_actions"] = sampled_actions
     sampled_metrics["subsampled"] = 1.0
     sampled_metrics["max_rows"] = float(max_rows)
+    sampled_metrics["subsample_keep_frac"] = float(len(sampled_rows) / len(rows))
+    sampled_metrics["subsample_action_keep_frac"] = float(sampled_actions / before_actions) if before_actions > 0 else 0.0
     return sampled_rows, sampled_metrics
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ray-address", default="auto")
+    parser.add_argument("--ray-temp-dir", default="", help="Optional Ray temp/session directory, useful when /tmp is low on space.")
+    parser.add_argument("--ray-no-runtime-env", action="store_true", help="Start Ray workers in the current environment without packaging a runtime_env.")
     parser.add_argument("--out", default="tinyPPO/regular_bc_ray.pt")
     parser.add_argument("--best-out", default="tinyPPO/regular_bc.pt")
+    parser.add_argument("--best-gate-out", default="", help="Optional checkpoint path for the best same-state Phase1 gate result.")
     parser.add_argument("--best-online-out", default="", help="Optional checkpoint path for the best online vs-regular nonloss result.")
     parser.add_argument("--resume", default="", help="Resume model weights from a regular BC checkpoint. Epoch numbering continues from checkpoint update.")
     parser.add_argument("--resume-compatible", action="store_true", help="Warm-start only checkpoint tensors whose names and shapes match the requested model config.")
     parser.add_argument("--players-list", default="2")
     parser.add_argument("--games-per-players", type=int, default=2000)
     parser.add_argument("--dataset-cache", default="", help="Pickle cache for collected BC rows. Existing cache is reused unless --refresh-dataset is set.")
+    parser.add_argument("--regular-max-rows", type=int, default=0, help="Deterministically subsample original regular BC rows after cache load/collection. 0 keeps all regular rows.")
     parser.add_argument("--refresh-dataset", action="store_true")
     parser.add_argument("--partial-cache-interval", type=int, default=0, help="Save partial regular BC dataset caches every N completed games.")
     parser.add_argument("--partial-cache-keep", type=int, default=1, help="Keep only the newest N partial regular BC caches. Final cache save removes all partials first.")
@@ -1155,6 +1471,7 @@ def main() -> None:
     parser.add_argument("--dagger-max-final-reward", type=float, default=999.0, help="Keep only metadata DAgger rows whose model rollout final reward is at most this value. Use 0 or -1 to focus losing rollouts.")
     parser.add_argument("--dagger-keep-outcomes", default="", help="Comma list of score-based DAgger outcomes to keep, e.g. loss,draw. Requires rows with dagger_model_outcome metadata.")
     parser.add_argument("--dagger-min-abs-action-gap", type=int, default=-1, help="Keep only metadata DAgger rows where abs(regular_label_actions - model_actions) is at least this value.")
+    parser.add_argument("--dagger-repeat", type=float, default=1.0, help="Repeat/oversample DAgger rows after filtering without dropping regular rows. 2.0 roughly doubles DAgger row exposure.")
     parser.add_argument("--dagger-loss-weight", type=float, default=1.0, help="Per-row loss weight for DAgger rows. Use <1 to expose model-rollout states while keeping original regular cadence dominant.")
     parser.add_argument("--dagger-action-weight-cap", type=float, default=0.0, help="If >0, scale DAgger rows with more labelled actions than this by cap/action_count. Keeps high-action states while capping their active-action loss mass.")
     parser.add_argument("--dagger-actors", type=int, default=8)
@@ -1193,6 +1510,7 @@ def main() -> None:
     parser.add_argument("--target-loss-weight", type=float, default=1.0)
     parser.add_argument("--ship-loss-weight", type=float, default=0.5)
     parser.add_argument("--target-ship-joint-loss-weight", type=float, default=0.0, help="Auxiliary CE over the joint target x ship-bucket choice for each labelled launch.")
+    parser.add_argument("--target-ship-joint-dagger-only", action="store_true", help="Apply target-ship joint auxiliary loss only to DAgger-like rows (sample_weight < 1).")
     parser.add_argument("--critical-action-weight", type=float, default=0.0)
     parser.add_argument("--target-loss-mask", choices=["dataset", "all_planets"], default="dataset")
     parser.add_argument("--target-margin-loss-weight", type=float, default=0.0)
@@ -1211,7 +1529,28 @@ def main() -> None:
     parser.add_argument("--sample-weight-ship-scale", type=float, default=1.0, help="Scale how much per-row sample_weight amplifies ship bucket loss.")
     parser.add_argument("--sample-weight-pair-scale", type=float, default=1.0, help="Scale how much per-row sample_weight amplifies target-pair auxiliary losses.")
     parser.add_argument("--sample-weight-count-scale", type=float, default=1.0, help="Scale how much per-row sample_weight amplifies launch-count loss.")
-    parser.add_argument("--trainable-modules", choices=["all", "target_head", "source_head", "target_pair_head", "target_ranking", "target_pair_adapter"], default="all")
+    parser.add_argument("--dagger-launch-negative-weight-scale", type=float, default=1.0, help="Extra multiplier for no-launch CE slots on DAgger-like rows (sample_weight < 1). Regular rows are unchanged.")
+    parser.add_argument("--dagger-launch-positive-weight-scale", type=float, default=1.0, help="Extra multiplier for launch CE slots on DAgger-like rows (sample_weight < 1). Regular rows are unchanged.")
+    parser.add_argument("--regular-anchor-source-weight", type=float, default=0.0, help="KL anchor against --resume source logits on regular rows (sample_weight above threshold).")
+    parser.add_argument("--regular-anchor-pair-weight", type=float, default=0.0, help="KL anchor against --resume source-target pair logits on regular rows (sample_weight above threshold).")
+    parser.add_argument("--regular-anchor-count-weight", type=float, default=0.0, help="SmoothL1 anchor against --resume soft launch-count on regular rows.")
+    parser.add_argument("--regular-anchor-target-weight", type=float, default=0.0, help="KL anchor against --resume slot target logits on regular rows.")
+    parser.add_argument("--regular-anchor-min-sample-weight", type=float, default=0.999, help="Rows with sample_weight >= this value receive regular-anchor loss; use DAgger loss weights below this to leave DAgger rows unanchored.")
+    parser.add_argument(
+        "--trainable-modules",
+        choices=[
+            "all",
+            "target_head",
+            "source_target_heads_no_slot",
+            "source_target_pair_heads_no_slot",
+            "source_head",
+            "source_head_no_slot",
+            "target_pair_head",
+            "target_ranking",
+            "target_pair_adapter",
+        ],
+        default="all",
+    )
     parser.add_argument("--val-frac", type=float, default=0.08)
     parser.add_argument("--hidden", type=int, default=64)
     parser.add_argument("--heads", type=int, default=4)
@@ -1234,6 +1573,9 @@ def main() -> None:
     parser.add_argument("--target-imitation-score", type=float, default=0.0, help="Stop BC once validation imitation score reaches this value; <=0 disables.")
     parser.add_argument("--imitation-patience", type=int, default=0, help="Stop BC after this many epochs without a validation imitation-score improvement; <=0 disables.")
     parser.add_argument("--min-epochs", type=int, default=0, help="Minimum epochs before imitation-score early stopping can trigger.")
+    parser.add_argument("--gate-min-launch-f1", type=float, default=0.0, help="If >0, require this validation launch F1 for same-state gate checkpointing.")
+    parser.add_argument("--gate-min-target-acc", type=float, default=0.0, help="If >0, require this validation target accuracy for same-state gate checkpointing.")
+    parser.add_argument("--gate-min-target-pair-acc", type=float, default=0.0, help="If >0, require this validation target-pair accuracy for same-state gate checkpointing.")
     parser.add_argument("--enable-online-stop", action="store_true", help="Allow online vs-regular eval metrics to stop BC. Disabled by default because BC phase is imitation-only.")
     parser.add_argument("--target-nonloss", type=float, default=0.50)
     parser.add_argument("--target-winrate", type=float, default=0.20)
@@ -1241,6 +1583,7 @@ def main() -> None:
     parser.add_argument("--launch-bias", type=float, default=0.0)
     parser.add_argument("--ship-bias", type=float, default=0.0)
     parser.add_argument("--launch-temperature", type=float, default=1.0)
+    parser.add_argument("--eval-target-mask-mode", choices=["candidate", "safe", "all_planets"], default="candidate")
     parser.add_argument("--swanlab-project", default="orbit-wars")
     parser.add_argument("--swanlab-experiment", default="tinyppo-regular-bc-ray")
     parser.add_argument("--swanlab-mode", default="cloud")
@@ -1249,11 +1592,17 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=260525)
     parser.add_argument("--no-numba", action="store_true")
     args = parser.parse_args()
+    if (
+        args.regular_anchor_source_weight > 0.0
+        or args.regular_anchor_pair_weight > 0.0
+        or args.regular_anchor_count_weight > 0.0
+        or args.regular_anchor_target_weight > 0.0
+    ) and not args.resume:
+        raise ValueError("regular anchor requires --resume so the anchor teacher is well-defined")
 
-    ray.init(
-        address=args.ray_address,
-        ignore_reinit_error=True,
-        runtime_env={
+    runtime_env = None
+    if not args.ray_no_runtime_env:
+        runtime_env = {
             "excludes": [
                 "swanlog/**",
                 "wandb/**",
@@ -1262,8 +1611,15 @@ def main() -> None:
                 "tinyPPO/runs/**/*.pkl",
                 "tinyPPO/runs/**/train.log",
             ]
-        },
-    )
+        }
+    ray_init_kwargs = {
+        "address": args.ray_address,
+        "ignore_reinit_error": True,
+        "runtime_env": runtime_env,
+    }
+    if args.ray_temp_dir:
+        ray_init_kwargs["_temp_dir"] = args.ray_temp_dir
+    ray.init(**ray_init_kwargs)
     swan = _init_swanlab(args)
     rows, collect_metrics, sample_weights = collect_dataset(args)
     if not rows:
@@ -1370,6 +1726,7 @@ def main() -> None:
             args.target_loss_weight,
             args.ship_loss_weight,
             args.target_ship_joint_loss_weight,
+            args.target_ship_joint_dagger_only,
             args.critical_action_weight,
             args.target_loss_mask,
             args.target_margin_loss_weight,
@@ -1388,6 +1745,21 @@ def main() -> None:
             args.sample_weight_ship_scale,
             args.sample_weight_pair_scale,
             args.sample_weight_count_scale,
+            args.dagger_launch_negative_weight_scale,
+            args.dagger_launch_positive_weight_scale,
+            state
+            if (
+                args.regular_anchor_source_weight > 0.0
+                or args.regular_anchor_pair_weight > 0.0
+                or args.regular_anchor_count_weight > 0.0
+                or args.regular_anchor_target_weight > 0.0
+            )
+            else None,
+            args.regular_anchor_source_weight,
+            args.regular_anchor_pair_weight,
+            args.regular_anchor_count_weight,
+            args.regular_anchor_target_weight,
+            args.regular_anchor_min_sample_weight,
             args.trainable_modules,
             args.seed + i,
             f"cuda:{trainer_gpu_ids[i % len(trainer_gpu_ids)]}" if trainer_gpu_ids else "",
@@ -1405,6 +1777,8 @@ def main() -> None:
     best_nonloss = -1.0
     best_imitation_score = -1e9
     best_imitation_epoch = 0
+    best_gate_score = (-1e9, -1e9, -1e9)
+    best_gate_epoch = 0
     best_metrics: dict[str, Any] = {}
     pending_eval_refs: dict[Any, int] = {}
     pending_eval_states: dict[int, dict[str, torch.Tensor]] = {}
@@ -1470,6 +1844,20 @@ def main() -> None:
         train_metrics = _weighted_mean([item[1] for item in results])
         imitation_score = _imitation_score(train_metrics)
         train_metrics["val_imitation_score"] = imitation_score
+        gate_enabled = bool(args.best_gate_out) or any(
+            threshold > 0.0
+            for threshold in (args.gate_min_launch_f1, args.gate_min_target_acc, args.gate_min_target_pair_acc)
+        )
+        gate_passed = (
+            float(train_metrics.get("val_launch_f1", 0.0)) >= float(args.gate_min_launch_f1)
+            and float(train_metrics.get("val_target_acc", 0.0)) >= float(args.gate_min_target_acc)
+            and float(train_metrics.get("val_target_pair_acc", 0.0)) >= float(args.gate_min_target_pair_acc)
+        )
+        gate_score = (
+            float(train_metrics.get("val_target_pair_acc", 0.0)),
+            float(train_metrics.get("val_target_acc", 0.0)),
+            float(train_metrics.get("val_launch_f1", 0.0)),
+        )
         if imitation_score > best_imitation_score:
             best_imitation_score = imitation_score
             best_imitation_epoch = epoch
@@ -1488,6 +1876,32 @@ def main() -> None:
                     epoch,
                     {"collect": collect_metrics, "epoch": epoch, "train": train_metrics, "best_imitation": True},
                 )
+        if gate_enabled and gate_passed and gate_score > best_gate_score:
+            best_gate_score = gate_score
+            best_gate_epoch = epoch
+            gate_path = Path(args.best_gate_out) if args.best_gate_out else Path(args.out).with_name("regular_bc_gate_best.pt")
+            save_checkpoint(
+                gate_path,
+                state,
+                model_cfg,
+                epoch,
+                {
+                    "collect": collect_metrics,
+                    "epoch": epoch,
+                    "train": train_metrics,
+                    "best_gate": True,
+                    "gate_score": {
+                        "val_target_pair_acc": gate_score[0],
+                        "val_target_acc": gate_score[1],
+                        "val_launch_f1": gate_score[2],
+                    },
+                    "gate_thresholds": {
+                        "val_launch_f1": float(args.gate_min_launch_f1),
+                        "val_target_acc": float(args.gate_min_target_acc),
+                        "val_target_pair_acc": float(args.gate_min_target_pair_acc),
+                    },
+                },
+            )
         if args.checkpoint_interval > 0 and epoch % args.checkpoint_interval == 0:
             save_checkpoint(
                 Path(args.out).with_name(f"regular_bc_ray_e{epoch:04d}.pt"),
@@ -1498,6 +1912,15 @@ def main() -> None:
             )
             save_checkpoint(Path(args.out), state, model_cfg, epoch, {"collect": collect_metrics, "epoch": epoch, "train": train_metrics})
         summary: dict[str, Any] = {"epoch": epoch, "train": train_metrics}
+        if gate_enabled and gate_passed and best_gate_epoch == epoch:
+            summary["best_gate"] = {
+                "epoch": float(epoch),
+                "score": {
+                    "val_target_pair_acc": gate_score[0],
+                    "val_target_acc": gate_score[1],
+                    "val_launch_f1": gate_score[2],
+                },
+            }
         if args.target_imitation_score > 0.0 and epoch >= args.min_epochs and imitation_score >= args.target_imitation_score:
             stop_after_epoch = epoch
             summary["imitation_stop"] = {
@@ -1540,13 +1963,14 @@ def main() -> None:
                     continue
                 eval_refs.append(
                     actor.eval_vs_regular.remote(
-                        state,
+                        eval_state,
                         games,
                         args.seed + 10_000 + epoch * 1_000 + i * 100,
                         args.eval_stochastic,
                         args.launch_bias,
                         args.ship_bias,
                         args.launch_temperature,
+                        args.eval_target_mask_mode,
                     )
                 )
             pending_eval_states[epoch] = eval_state

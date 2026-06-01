@@ -462,6 +462,7 @@ def bc_loss(
     target_loss_weight: float = 1.0,
     ship_loss_weight: float = 0.5,
     target_ship_joint_loss_weight: float = 0.0,
+    target_ship_joint_dagger_only: bool = False,
     critical_action_weight: float = 0.0,
     target_loss_mask: str = "dataset",
     target_margin_loss_weight: float = 0.0,
@@ -480,6 +481,8 @@ def bc_loss(
     sample_weight_ship_scale: float = 1.0,
     sample_weight_pair_scale: float = 1.0,
     sample_weight_count_scale: float = 1.0,
+    dagger_launch_negative_weight_scale: float = 1.0,
+    dagger_launch_positive_weight_scale: float = 1.0,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     out = model(batch["planets"], batch["pair_features"], batch["global_features"], batch["planet_mask"], batch["own_mask"])
     own_slots = batch["own_mask"][:, :, None].expand_as(batch["launch_actions"])
@@ -515,6 +518,22 @@ def bc_loss(
         weight=torch.tensor([1.0, launch_pos_weight], dtype=torch.float32, device=launch_logits.device),
     ).reshape_as(batch["launch_actions"])
     launch_weights = row_slot_weights.masked_fill(~own_slots, 0.0)
+    if dagger_launch_negative_weight_scale != 1.0:
+        dagger_like_rows = (row_weights < 0.999).to(dtype=torch.bool)[:, None, None]
+        dagger_negative_slots = dagger_like_rows & (batch["launch_actions"] == 0) & own_slots
+        launch_weights = torch.where(
+            dagger_negative_slots,
+            launch_weights * float(dagger_launch_negative_weight_scale),
+            launch_weights,
+        )
+    if dagger_launch_positive_weight_scale != 1.0:
+        dagger_like_rows = (row_weights < 0.999).to(dtype=torch.bool)[:, None, None]
+        dagger_positive_slots = dagger_like_rows & (batch["launch_actions"] == 1) & own_slots
+        launch_weights = torch.where(
+            dagger_positive_slots,
+            launch_weights * float(dagger_launch_positive_weight_scale),
+            launch_weights,
+        )
     launch_loss = set_parts.get(
         "launch_loss",
         (launch_parts * launch_weights).sum() / launch_weights.sum().clamp_min(1.0),
@@ -589,8 +608,12 @@ def bc_loss(
                 joint_logits = active_target_logits[:, :, None] + active_ship_logits
                 joint_logits = joint_logits.reshape(joint_logits.shape[0], -1)
                 joint_targets = t * active_ship_logits.shape[-1] + batch["ship_actions"][active]
-                target_ship_joint_loss = _weighted_cross_entropy(joint_logits, joint_targets, ship_active_weights)
-                target_ship_joint_acc = (joint_logits.argmax(dim=-1) == joint_targets).float().mean()
+                joint_weights = ship_active_weights
+                if target_ship_joint_dagger_only:
+                    joint_weights = joint_weights * row_weights[b].lt(0.999).float()
+                if joint_weights.sum() > 0.0:
+                    target_ship_joint_loss = _weighted_cross_entropy(joint_logits, joint_targets, joint_weights)
+                    target_ship_joint_acc = (joint_logits.argmax(dim=-1) == joint_targets).float().mean()
 
     if target_binary_loss_weight > 0.0:
         pair_valid = _valid_pair_mask(batch)
@@ -736,6 +759,7 @@ def evaluate_loader(
     target_loss_weight: float = 1.0,
     ship_loss_weight: float = 0.5,
     target_ship_joint_loss_weight: float = 0.0,
+    target_ship_joint_dagger_only: bool = False,
     critical_action_weight: float = 0.0,
     target_loss_mask: str = "dataset",
     target_margin_loss_weight: float = 0.0,
@@ -754,6 +778,8 @@ def evaluate_loader(
     sample_weight_ship_scale: float = 1.0,
     sample_weight_pair_scale: float = 1.0,
     sample_weight_count_scale: float = 1.0,
+    dagger_launch_negative_weight_scale: float = 1.0,
+    dagger_launch_positive_weight_scale: float = 1.0,
 ) -> dict[str, float]:
     model.eval()
     sums: dict[str, float] = {}
@@ -766,6 +792,7 @@ def evaluate_loader(
             target_loss_weight,
             ship_loss_weight,
             target_ship_joint_loss_weight,
+            target_ship_joint_dagger_only,
             critical_action_weight,
             target_loss_mask,
             target_margin_loss_weight,
@@ -784,6 +811,8 @@ def evaluate_loader(
             sample_weight_ship_scale,
             sample_weight_pair_scale,
             sample_weight_count_scale,
+            dagger_launch_negative_weight_scale,
+            dagger_launch_positive_weight_scale,
         )
         n = int(batch[0].shape[0])
         for key, value in metrics.items():
@@ -820,6 +849,34 @@ def train_bc(args: argparse.Namespace, dataset: TensorDataset) -> tuple[TinyPoli
         for param in model.target_head.parameters():
             param.requires_grad_(True)
         trainable_params = list(model.target_head.parameters())
+    elif args.trainable_modules == "source_target_heads_no_slot":
+        for param in model.parameters():
+            param.requires_grad_(False)
+        for param in model.source_head.parameters():
+            param.requires_grad_(True)
+        for param in model.target_head.parameters():
+            param.requires_grad_(True)
+        trainable_params = list(model.source_head.parameters()) + list(model.target_head.parameters())
+    elif args.trainable_modules == "source_target_pair_heads_no_slot":
+        if model.target_pair_head is None:
+            raise ValueError("--trainable-modules source_target_pair_heads_no_slot requires --target-pair-head")
+        for param in model.parameters():
+            param.requires_grad_(False)
+        for param in model.source_head.parameters():
+            param.requires_grad_(True)
+        for param in model.target_head.parameters():
+            param.requires_grad_(True)
+        for param in model.target_pair_head.parameters():
+            param.requires_grad_(True)
+        trainable_params = (
+            list(model.source_head.parameters())
+            + list(model.target_head.parameters())
+            + list(model.target_pair_head.parameters())
+        )
+        if model.target_pair_owner_head is not None:
+            for param in model.target_pair_owner_head.parameters():
+                param.requires_grad_(True)
+            trainable_params += list(model.target_pair_owner_head.parameters())
     elif args.trainable_modules == "source_head":
         for param in model.parameters():
             param.requires_grad_(False)
@@ -887,6 +944,7 @@ def train_bc(args: argparse.Namespace, dataset: TensorDataset) -> tuple[TinyPoli
                 args.target_loss_weight,
                 args.ship_loss_weight,
                 args.target_ship_joint_loss_weight,
+                args.target_ship_joint_dagger_only,
                 args.critical_action_weight,
                 args.target_loss_mask,
                 args.target_margin_loss_weight,
@@ -905,6 +963,8 @@ def train_bc(args: argparse.Namespace, dataset: TensorDataset) -> tuple[TinyPoli
                 args.sample_weight_ship_scale,
                 args.sample_weight_pair_scale,
                 args.sample_weight_count_scale,
+                args.dagger_launch_negative_weight_scale,
+                args.dagger_launch_positive_weight_scale,
             )
             n = int(batch[0].shape[0])
             for key, value in metrics.items():
@@ -928,6 +988,7 @@ def train_bc(args: argparse.Namespace, dataset: TensorDataset) -> tuple[TinyPoli
                 args.target_loss_weight,
                 args.ship_loss_weight,
                 args.target_ship_joint_loss_weight,
+                args.target_ship_joint_dagger_only,
                 args.critical_action_weight,
                 args.target_loss_mask,
                 args.target_margin_loss_weight,
@@ -946,6 +1007,8 @@ def train_bc(args: argparse.Namespace, dataset: TensorDataset) -> tuple[TinyPoli
                 args.sample_weight_ship_scale,
                 args.sample_weight_pair_scale,
                 args.sample_weight_count_scale,
+                args.dagger_launch_negative_weight_scale,
+                args.dagger_launch_positive_weight_scale,
             ).items()
         }
         merged = {"epoch": float(epoch), **train_metrics, **val_metrics}
@@ -1005,6 +1068,7 @@ def main() -> None:
     parser.add_argument("--target-loss-weight", type=float, default=1.0)
     parser.add_argument("--ship-loss-weight", type=float, default=0.5)
     parser.add_argument("--target-ship-joint-loss-weight", type=float, default=0.0, help="Auxiliary CE over the joint target x ship-bucket choice for each labelled launch.")
+    parser.add_argument("--target-ship-joint-dagger-only", action="store_true", help="Apply target-ship joint auxiliary loss only to DAgger-like rows (sample_weight < 1).")
     parser.add_argument("--critical-action-weight", type=float, default=0.0)
     parser.add_argument("--target-loss-mask", choices=["dataset", "all_planets"], default="dataset")
     parser.add_argument("--target-margin-loss-weight", type=float, default=0.0)
@@ -1023,7 +1087,22 @@ def main() -> None:
     parser.add_argument("--sample-weight-ship-scale", type=float, default=1.0, help="Scale how much per-row sample_weight amplifies ship bucket loss.")
     parser.add_argument("--sample-weight-pair-scale", type=float, default=1.0, help="Scale how much per-row sample_weight amplifies target-pair auxiliary losses.")
     parser.add_argument("--sample-weight-count-scale", type=float, default=1.0, help="Scale how much per-row sample_weight amplifies launch-count loss.")
-    parser.add_argument("--trainable-modules", choices=["all", "target_head", "source_head", "target_pair_head", "target_ranking", "target_pair_adapter"], default="all")
+    parser.add_argument("--dagger-launch-negative-weight-scale", type=float, default=1.0, help="Extra multiplier for no-launch CE slots on DAgger-like rows (sample_weight < 1). Regular rows are unchanged.")
+    parser.add_argument("--dagger-launch-positive-weight-scale", type=float, default=1.0, help="Extra multiplier for launch CE slots on DAgger-like rows (sample_weight < 1). Regular rows are unchanged.")
+    parser.add_argument(
+        "--trainable-modules",
+        choices=[
+            "all",
+            "target_head",
+            "source_target_heads_no_slot",
+            "source_target_pair_heads_no_slot",
+            "source_head",
+            "target_pair_head",
+            "target_ranking",
+            "target_pair_adapter",
+        ],
+        default="all",
+    )
     parser.add_argument("--val-frac", type=float, default=0.12)
     parser.add_argument("--loader-workers", type=int, default=0)
     parser.add_argument("--hidden", type=int, default=64)

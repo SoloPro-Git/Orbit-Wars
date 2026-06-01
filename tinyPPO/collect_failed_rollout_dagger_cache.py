@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import pickle
 import random
@@ -79,6 +80,9 @@ class FailedRolloutDaggerActor:
         launch_bias: float,
         ship_bias: float,
         launch_temperature: float,
+        target_top_k: int,
+        target_mask_mode: str,
+        target_pair_weight: float,
     ):
         if device.startswith("cuda:"):
             import os
@@ -93,8 +97,10 @@ class FailedRolloutDaggerActor:
             launch_bias=launch_bias,
             ship_bias=ship_bias,
             launch_temperature=launch_temperature,
+            target_top_k=target_top_k,
+            target_mask_mode=target_mask_mode,
+            target_pair_weight=target_pair_weight,
         )
-        self.regular_agent = make_rulebase_agent("regular")
 
     def collect_games(
         self,
@@ -136,6 +142,8 @@ class FailedRolloutDaggerActor:
             random.seed(seed)
             np.random.seed(seed)
             raw_rows: list[dict[str, Any]] = []
+            label_agent = make_rulebase_agent("regular")
+            regular_agents = [make_rulebase_agent("regular") for _ in range(players)]
             agents = []
             for pid in range(players):
                 if pid == model_seat:
@@ -143,14 +151,15 @@ class FailedRolloutDaggerActor:
                     def model_logged(obs: dict[str, Any], configuration=None, pid: int = pid) -> list[list]:
                         del configuration
                         model_action = self.model_agent(obs) or []
-                        regular_label = self.regular_agent(obs) or []
+                        row_obs = copy.deepcopy(obs)
+                        regular_label = label_agent(copy.deepcopy(obs)) or []
                         if regular_label or random.random() < keep_noop_prob:
                             owned_planets = _owned_planets(obs, pid)
                             owned_ships = _owned_ships(obs, pid)
                             score_gap = _score_gap(obs, pid, players)
                             raw_rows.append(
                                 {
-                                    "obs": obs,
+                                    "obs": row_obs,
                                     "player": pid,
                                     "label_action": regular_label,
                                     "turn": int(obs.get("step", len(raw_rows))),
@@ -166,10 +175,11 @@ class FailedRolloutDaggerActor:
 
                     agents.append(model_logged)
                 else:
+                    regular_agent = regular_agents[pid]
 
-                    def regular(obs: dict[str, Any], configuration=None) -> list[list]:
+                    def regular(obs: dict[str, Any], configuration=None, regular_agent=regular_agent) -> list[list]:
                         del configuration
-                        return self.regular_agent(obs) or []
+                        return regular_agent(obs) or []
 
                     agents.append(regular)
 
@@ -265,6 +275,12 @@ class FailedRolloutDaggerActor:
 
 def _build_jobs(args: argparse.Namespace) -> list[tuple[int, int, int]]:
     players = int(args.players)
+    if args.eval_aligned_jobs:
+        games_per_task = max(1, int(args.eval_games_per_task))
+        return [
+            (int(args.seed) + game, players, (game % games_per_task) % players)
+            for game in range(args.games)
+        ]
     if args.seed_base_count > 0:
         jobs: list[tuple[int, int, int]] = []
         for base_idx in range(args.seed_base_count):
@@ -297,6 +313,9 @@ def collect(args: argparse.Namespace) -> tuple[list[Any], dict[str, Any]]:
             args.launch_bias,
             args.ship_bias,
             args.launch_temperature,
+            args.target_top_k,
+            args.model_target_mask_mode,
+            args.target_pair_weight,
         )
         for i in range(actor_count)
     ]
@@ -346,6 +365,11 @@ def collect(args: argparse.Namespace) -> tuple[list[Any], dict[str, Any]]:
         "min_owned_ships": float(args.min_owned_ships),
         "min_score_gap": float(args.min_score_gap),
         "row_target_mask_mode": args.row_target_mask_mode,
+        "model_target_mask_mode": args.model_target_mask_mode,
+        "target_top_k": float(args.target_top_k),
+        "target_pair_weight": float(args.target_pair_weight),
+        "eval_aligned_jobs": float(bool(args.eval_aligned_jobs)),
+        "eval_games_per_task": float(args.eval_games_per_task),
     }
     bucket_totals: dict[str, Counter] = {"turn": Counter(), "reward": Counter(), "action_gap": Counter()}
     progress = tqdm(total=len(refs), desc="collect failed rollout DAgger", dynamic_ncols=True) if tqdm is not None else None
@@ -387,6 +411,7 @@ def collect(args: argparse.Namespace) -> tuple[list[Any], dict[str, Any]]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ray-address", default="auto")
+    parser.add_argument("--ray-temp-dir", default="", help="Optional Ray temp/session directory, useful when /tmp is low on space.")
     parser.add_argument("--out", required=True)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--players", type=int, default=2)
@@ -395,6 +420,8 @@ def main() -> None:
     parser.add_argument("--seed-base-count", type=int, default=0)
     parser.add_argument("--seed-base-stride", type=int, default=100)
     parser.add_argument("--games-per-seed-base", type=int, default=4)
+    parser.add_argument("--eval-aligned-jobs", action="store_true", help="Use the same seed/model-seat expansion as eval_policy_sweep_ray for one variant.")
+    parser.add_argument("--eval-games-per-task", type=int, default=4, help="games-per-task used by eval_policy_sweep_ray; only affects --eval-aligned-jobs seat assignment.")
     parser.add_argument("--actors", type=int, default=16)
     parser.add_argument("--cpus-per-actor", type=float, default=1.0)
     parser.add_argument("--gpus-per-actor", type=float, default=0.0)
@@ -424,14 +451,17 @@ def main() -> None:
     parser.add_argument("--launch-bias", type=float, default=0.0)
     parser.add_argument("--ship-bias", type=float, default=0.0)
     parser.add_argument("--launch-temperature", type=float, default=1.0)
+    parser.add_argument("--target-top-k", type=int, default=6)
+    parser.add_argument("--model-target-mask-mode", choices=["candidate", "safe", "all_planets"], default="candidate")
+    parser.add_argument("--target-pair-weight", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=260527)
     parser.add_argument("--no-numba", action="store_true")
     args = parser.parse_args()
 
-    ray.init(
-        address=args.ray_address,
-        ignore_reinit_error=True,
-        runtime_env={
+    ray_init_kwargs = {
+        "address": args.ray_address,
+        "ignore_reinit_error": True,
+        "runtime_env": {
             "excludes": [
                 "swanlog/**",
                 "wandb/**",
@@ -441,7 +471,10 @@ def main() -> None:
                 "tinyPPO/runs/**/train.log",
             ]
         },
-    )
+    }
+    if args.ray_temp_dir:
+        ray_init_kwargs["_temp_dir"] = args.ray_temp_dir
+    ray.init(**ray_init_kwargs)
     rows, metrics = collect(args)
     metrics["cache_path"] = args.out
     out = Path(args.out)

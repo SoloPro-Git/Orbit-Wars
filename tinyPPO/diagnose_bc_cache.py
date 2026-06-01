@@ -199,6 +199,7 @@ def evaluate_cache(args: argparse.Namespace) -> dict[str, Any]:
         "launch_tp": 0.0,
         "launch_correct": 0.0,
         "target_correct": 0.0,
+        "target_pair_correct": 0.0,
         "ship_correct": 0.0,
         "label_target_covered": 0.0,
     }
@@ -245,6 +246,15 @@ def evaluate_cache(args: argparse.Namespace) -> dict[str, Any]:
             active_target_logits = target_logits[b_idx, src_idx, slot_idx]
             pred_targets = active_target_logits.argmax(dim=-1)
             sums["target_correct"] += float((pred_targets == label_targets).sum().item())
+            pair_logits = out.get("target_pair_logits")
+            if pair_logits is None:
+                pair_logits = out["target_logits"].max(dim=2).values
+            pair_valid = batch["own_mask"][:, :, None] & batch["planet_mask"][:, None, :]
+            eye = torch.eye(pair_valid.shape[1], dtype=torch.bool, device=pair_valid.device)[None, :, :]
+            pair_valid = pair_valid & ~eye
+            masked_pair_logits = pair_logits.masked_fill(~pair_valid, -1e9)
+            pred_pair_targets = masked_pair_logits[b_idx, src_idx].argmax(dim=-1)
+            sums["target_pair_correct"] += float((pred_pair_targets == label_targets).sum().item())
             sums["label_target_covered"] += float(mask[b_idx, src_idx, label_targets].sum().item())
             for k in args.target_topk:
                 top = active_target_logits.topk(min(int(k), active_target_logits.shape[-1]), dim=-1).indices
@@ -281,6 +291,7 @@ def evaluate_cache(args: argparse.Namespace) -> dict[str, Any]:
         "launch_recall": launch_recall,
         "launch_f1": launch_f1,
         "target_acc": sums["target_correct"] / label_actions,
+        "target_pair_acc": sums["target_pair_correct"] / label_actions,
         "ship_acc": sums["ship_correct"] / label_actions if sums["ship_correct"] > 0 else 0.0,
         "label_target_covered": sums["label_target_covered"] / label_actions,
     }

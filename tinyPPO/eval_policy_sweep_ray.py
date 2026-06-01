@@ -76,6 +76,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--ray-address", default="auto")
+    parser.add_argument("--ray-temp-dir", default="", help="Optional Ray temp/session directory, useful when /tmp is low on space.")
     parser.add_argument("--games", type=int, default=64)
     parser.add_argument("--games-per-task", type=int, default=2)
     parser.add_argument("--workers", type=int, default=32)
@@ -96,7 +97,15 @@ def main() -> None:
     parser.add_argument("--no-numba", action="store_true")
     args = parser.parse_args()
 
-    ray.init(address=None if args.ray_address == "local" else args.ray_address, ignore_reinit_error=True)
+    ray_init_kwargs: dict[str, Any] = {"ignore_reinit_error": True}
+    if args.ray_address == "local":
+        ray_init_kwargs["address"] = None
+        ray_init_kwargs["num_cpus"] = args.workers
+    else:
+        ray_init_kwargs["address"] = args.ray_address
+    if args.ray_temp_dir:
+        ray_init_kwargs["_temp_dir"] = args.ray_temp_dir
+    ray.init(**ray_init_kwargs)
     base: dict[str, Any] = {
         "checkpoint": args.checkpoint,
         "device": args.device,
