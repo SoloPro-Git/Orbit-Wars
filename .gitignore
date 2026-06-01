@@ -34,4 +34,5 @@ alphaZeroLike/checkpoints/*
 *.pkl
 tinyPPO/data/*
 tinyPPO/runs/*
+tinyPPOv2/runs/*
 swanlog/*
