@@ -239,6 +239,13 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         "max_actions": args.max_actions,
     }
     model = AutoregressivePolicyNet(**model_cfg).to(device)
+    if args.init_checkpoint:
+        payload = torch.load(args.init_checkpoint, map_location=device, weights_only=True)
+        checkpoint_cfg = dict(payload.get("model", {}))
+        mismatched = {key: (checkpoint_cfg.get(key), value) for key, value in model_cfg.items() if checkpoint_cfg.get(key) != value}
+        if mismatched:
+            raise ValueError(f"init checkpoint model config mismatch: {mismatched}")
+        model.load_state_dict(payload["state_dict"])
     if args.data_parallel and device.type == "cuda" and torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
@@ -295,6 +302,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Train AlphaStar-lite autoregressive BC policy on regular-labelled rows.")
     parser.add_argument("--dataset-cache", required=True)
     parser.add_argument("--out", required=True)
+    parser.add_argument("--init-checkpoint", default="")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--max-rows", type=int, default=0)
     parser.add_argument("--max-actions", type=int, default=24)
