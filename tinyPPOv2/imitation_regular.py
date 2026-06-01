@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader, TensorDataset, random_split
 
 from tinyPPO.features import MAX_PLANETS
 from tinyPPO.imitation_regular import BCRow
-from tinyPPO.model_v2 import AutoregressivePolicyNet
+from tinyPPOv2.model import AutoregressivePolicyNet
 
 
 def load_rows(path: Path, max_rows: int = 0, seed: int = 0) -> list[BCRow]:
@@ -30,8 +30,6 @@ def load_rows(path: Path, max_rows: int = 0, seed: int = 0) -> list[BCRow]:
 
 def _row_actions(row: Any, max_actions: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, int, int]:
     active = np.argwhere(np.asarray(row.launch_mask, dtype=np.bool_))
-    # Existing rows have no true temporal order. Source/slot order is the least
-    # surprising deterministic teacher order until trajectory-order labels exist.
     active = active[np.lexsort((active[:, 1], active[:, 0]))] if active.size else active
     truncated = max(0, int(active.shape[0]) - int(max_actions))
     active = active[:max_actions]
@@ -131,7 +129,6 @@ def bc_loss_v2(
         prev_target=prev_target,
         prev_ship=prev_ship,
     )
-    bsz = batch["source_actions"].shape[0]
     device = batch["source_actions"].device
     step_idx = torch.arange(max_actions + 1, device=device)[None, :]
     lengths = batch["action_lengths"].clamp(0, max_actions)

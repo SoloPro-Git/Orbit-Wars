@@ -123,7 +123,6 @@ class AutoregressivePolicyNet(nn.Module):
         ship_logits: list[torch.Tensor] = []
 
         none_source = torch.full((bsz,), MAX_PLANETS, dtype=torch.long, device=planets.device)
-        none_ship = torch.full((bsz,), self.ship_buckets, dtype=torch.long, device=planets.device)
 
         for step in range(steps):
             step_input = prev_input + self.step_embed[min(step, self.max_actions)][None, :]
